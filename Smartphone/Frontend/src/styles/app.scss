@@ -1,0 +1,8 @@
+// The web interface of a smartphone. What every node shows alike - the frame,
+// the forms, sign-in, logs, DNS, NTS, pins, the certificate store, a commit on
+// the Configuration page - is WWCP_Node's, in the smartphone's colour; a
+// smartphone has no page of its own yet that needs more.
+@use '@node/styles/node' as * with (
+    $color-accent:       #0e7c86,
+    $color-accent-dark:  #0a5f67
+);
