@@ -29,18 +29,32 @@ namespace cloud.charging.open.Smartphone
 
     /// <summary>
     /// The JSON API the browser talks to, registered at "/api": what every
-    /// node has - see <see cref="NodeHTTPAPI"/> - and nothing of a
-    /// smartphone's own yet.
+    /// node has - see <see cref="NodeHTTPAPI"/> - and the smartphone's map and
+    /// charging sessions.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The sign-in, the status and the clock, the configuration, name
     /// resolution and the time servers, the certificate store, the log and the
-    /// event stream are the node's, as they are every other kind's. What a
-    /// smartphone adds - its account at an e-mobility provider, its charging
-    /// tickets, the session it watches - will be registered here, below
-    /// "v1/...", as the PKI registers its certificates below "v1/pki".
+    /// event stream are the node's, as they are every other kind's.
+    /// </para>
+    /// <para>
+    /// | | |
+    /// |---|---|
+    /// | <c>GET v1/map</c> | the charging stations, OCPI locations with the status of each EVSE now |
+    /// | <c>GET v1/configuration/map</c>, <c>PUT</c> | where the map takes its stations from: <c>{ "stationsURL" }</c> |
+    /// | <c>GET v1/charging/sessions</c> | every session, the newest first; <c>?active=true</c> for those still charging |
+    /// | <c>POST v1/charging/sessions</c> | <c>{ "locationId", "evseUid" }</c>: start one, 201 and the session |
+    /// | <c>GET v1/charging/sessions/{id}</c> | one session, as it is now |
+    /// | <c>POST v1/charging/sessions/{id}/stop</c> | stop one that is still charging |
+    /// </para>
+    /// <para>
+    /// No event of its own on the node's stream: that stream is for whoever
+    /// may read the log, and a driver need not. The pages ask again instead,
+    /// every few seconds while a session is open.
+    /// </para>
     /// </remarks>
-    public class SmartphoneHTTPAPI : NodeHTTPAPI
+    public partial class SmartphoneHTTPAPI : NodeHTTPAPI
     {
 
         #region Properties
@@ -80,6 +94,30 @@ namespace cloud.charging.open.Smartphone
         {
 
             this.Smartphone = Smartphone;
+
+            RegisterURLTemplates();
+
+        }
+
+        #endregion
+
+
+        #region (private) RegisterURLTemplates()
+
+        /// <summary>
+        /// What only a smartphone has.
+        /// </summary>
+        private void RegisterURLTemplates()
+        {
+
+            AddHandler(HTTPPath.Root + "v1/map",                              GetMap,                    HTTPMethod.GET);
+            AddHandler(HTTPPath.Root + "v1/configuration/map",                GetMapConfiguration,       HTTPMethod.GET);
+            AddHandler(HTTPPath.Root + "v1/configuration/map",                PutMapConfiguration,       HTTPMethod.PUT);
+
+            AddHandler(HTTPPath.Root + "v1/charging/sessions",                GetChargingSessions,       HTTPMethod.GET);
+            AddHandler(HTTPPath.Root + "v1/charging/sessions",                PostChargingSession,       HTTPMethod.POST);
+            AddHandler(HTTPPath.Root + "v1/charging/sessions/{id}",           GetChargingSession,        HTTPMethod.GET);
+            AddHandler(HTTPPath.Root + "v1/charging/sessions/{id}/stop",      PostStopChargingSession,   HTTPMethod.POST);
 
         }
 

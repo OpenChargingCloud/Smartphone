@@ -5,23 +5,38 @@ import './styles/app.scss';
 import '@fortawesome/fontawesome-free/css/fontawesome.css';
 import '@fortawesome/fontawesome-free/css/solid.css';
 
+// Leaflet's own stylesheet, for the map: extracted with the rest, its images
+// hashed assets as well - nothing of it is loaded from elsewhere.
+import 'leaflet/dist/leaflet.css';
+
 import { html } from '@node/view';
 import { nodeMenu, startNode } from '@node/start';
 
+import { chargingPage } from './pages/charging';
 import { configurationPage } from './pages/configuration';
+import { historyPage } from './pages/history';
+import { mapPage } from './pages/map';
+import { mapSettingsPage } from './pages/mapSettings';
+import { sessionPage } from './pages/session';
 
-// A smartphone has no page of its own yet - its account at an e-mobility
-// provider, its charging tickets and the session it watches come later.
-// Everything here is what every node has: its configuration, name resolution,
-// the time, the SSH server, the certificates it believes, who it is as a
-// client and the log - see WWCP_Node's start.ts.
+// What a smartphone has pages for of its own: the map of charging stations,
+// and charging - what charges now, every session there was, and one of them
+// in full - with where the map takes its stations from below the
+// configuration. Everything else is what every node has: name resolution, the
+// time, the SSH server, the certificates it believes, who it is as a client
+// and the log - see WWCP_Node's start.ts.
 startNode({
 
     name:  'Smartphone',
     icon:  'fa-mobile-screen-button',
 
     menu: [
+        { path: '/map',       label: 'Map',       icon: 'fa-map-location-dot', permission: [ 'map:read' ] },
+        { path: '/charging',  label: 'Charging',  icon: 'fa-bolt',             permission: [ 'charging:read' ], children: [
+            { path: '/charging/history', label: 'History', icon: 'fa-clock-rotate-left', permission: [ 'charging:read' ] }
+        ] },
         nodeMenu.configuration([
+            { path: '/configuration/map', label: 'Map', icon: 'fa-map', permission: [ 'map:read' ] },
             nodeMenu.dns,
             nodeMenu.nts,
             nodeMenu.ssh,
@@ -50,10 +65,17 @@ startNode({
     },
 
     // "/" is every node's: the first page of the menu the person signed in may
-    // open - the configuration for whoever may read it.
+    // open - the map, for whoever may look at it.
     pages: {
 
-        '/configuration':  configurationPage
+        '/map':                     mapPage,
+
+        '/charging':                chargingPage,
+        '/charging/history':        historyPage,
+        '/charging/sessions/:id':   sessionPage,
+
+        '/configuration':           configurationPage,
+        '/configuration/map':       mapSettingsPage
 
     }
 

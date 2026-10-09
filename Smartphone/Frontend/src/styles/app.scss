@@ -1,8 +1,341 @@
 // The web interface of a smartphone. What every node shows alike - the frame,
 // the forms, sign-in, logs, DNS, NTS, pins, the certificate store, a commit on
-// the Configuration page - is WWCP_Node's, in the smartphone's colour; a
-// smartphone has no page of its own yet that needs more.
+// the Configuration page - is WWCP_Node's, in the smartphone's colour; what
+// follows is what the map and the charging pages need.
+@use 'sass:map';
 @use '@node/styles/node' as * with (
     $color-accent:       #0e7c86,
     $color-accent-dark:  #0a5f67
 );
+
+
+// The colours of a charge point's status: on a pin, a dot, a word.
+$status-colours: (
+    available:    #1e7f4f,
+    charging:     #1f5fbf,
+    reserved:     #c98a1b,
+    blocked:      #c98a1b,
+    inoperative:  #b42318,
+    outoforder:   #b42318,
+    planned:      #8a94a3,
+    removed:      #8a94a3,
+    unknown:      #8a94a3
+);
+
+
+// --- The map ----------------------------------------------------------------
+
+.map-page {
+    display:         flex;
+    flex-direction:  column;
+    gap:             0.75rem;
+}
+
+.map-toolbar {
+
+    display:      flex;
+    flex-wrap:    wrap;
+    gap:          0.6rem;
+    align-items:  center;
+
+    .map-search {
+
+        flex:           1 1 18rem;
+        display:        flex;
+        align-items:    center;
+        gap:            0.5rem;
+        min-width:      0;
+        background:     $color-surface;
+        border:         1px solid $color-border;
+        border-radius:  $radius;
+        padding:        0 0.6rem;
+
+        i { color: $color-muted; }
+
+        input {
+            flex:        1 1 auto;
+            min-width:   0;
+            border:      none;
+            outline:     none;
+            padding:     0.55rem 0;
+            background:  transparent;
+            font:        inherit;
+        }
+
+    }
+
+    .map-search:focus-within {
+        border-color:  $color-accent;
+    }
+
+}
+
+.map-results {
+
+    list-style:     none;
+    margin:         0;
+    padding:        0.25rem;
+    background:     $color-surface;
+    border:         1px solid $color-border;
+    border-radius:  $radius;
+
+    li.muted { padding: 0.5rem; }
+
+    .map-result {
+
+        display:                grid;
+        grid-template-columns:  auto 1fr;
+        column-gap:             0.5rem;
+        align-items:            center;
+        width:                  100%;
+        text-align:             left;
+        background:             none;
+        border:                 none;
+        border-radius:          $radius;
+        padding:                0.45rem 0.5rem;
+        font:                   inherit;
+        cursor:                 pointer;
+
+        .muted { grid-column: 2; }
+
+        &:hover, &:focus-visible { background: $color-bg; }
+
+    }
+
+    .map-result-name { font-weight: 600; }
+
+}
+
+.map-canvas {
+
+    height:         clamp(22rem, calc(100vh - 16rem), 48rem);
+    width:          100%;
+    border:         1px solid $color-border;
+    border-radius:  $radius;
+    overflow:       hidden;
+    // Leaflet's panes stack above the page; the menu that folds over the page
+    // on a phone has to stay above them.
+    z-index:        0;
+    position:       relative;
+
+}
+
+.map-legend {
+    display:      flex;
+    flex-wrap:    wrap;
+    gap:          0.4rem 1rem;
+    align-items:  center;
+}
+
+.legend-entry {
+    display:      inline-flex;
+    align-items:  center;
+    gap:          0.35rem;
+}
+
+.station-dot {
+    display:        inline-block;
+    width:          0.75rem;
+    height:         0.75rem;
+    border-radius:  50%;
+    background:     map.get($status-colours, unknown);
+}
+
+// A pin: a round badge in the colour of the station's best status, with a
+// point below it where the station is. Nothing of it is turned or moved by a
+// transform: Leaflet places a pin by a transform of its own.
+.leaflet-marker-icon.station-marker {
+
+    display:          flex;
+    align-items:      center;
+    justify-content:  center;
+    border-radius:    50%;
+    background:       map.get($status-colours, unknown);
+    border:           2px solid #ffffff;
+    box-shadow:       0 1px 4px rgba(0, 0, 0, 0.35);
+    color:            #ffffff;
+    font-size:        0.95rem;
+
+    &::after {
+        content:       "";
+        position:      absolute;
+        left:          50%;
+        bottom:        -7px;
+        margin-left:   -6px;
+        border-left:   6px solid transparent;
+        border-right:  6px solid transparent;
+        border-top:    7px solid map.get($status-colours, unknown);
+    }
+
+}
+
+@each $status, $colour in $status-colours {
+
+    .station-dot.status-#{$status},
+    .leaflet-marker-icon.station-marker.status-#{$status} {
+        background: $colour;
+    }
+
+    .leaflet-marker-icon.station-marker.status-#{$status}::after {
+        border-top-color: $colour;
+    }
+
+    .evse-status.status-#{$status} {
+        color:         $colour;
+        border-color:  $colour;
+    }
+
+}
+
+.you-are-here {
+    fill:          #1f5fbf;
+    fill-opacity:  0.9;
+    stroke:        #ffffff;
+    stroke-width:  3;
+}
+
+.you-are-here-accuracy {
+    fill:          #1f5fbf;
+    fill-opacity:  0.12;
+    stroke:        #1f5fbf;
+    stroke-width:  1;
+}
+
+// What a pin opens.
+.station-popup {
+
+    display:         flex;
+    flex-direction:  column;
+    gap:             0.35rem;
+
+    h3 { margin: 0 0 0.15rem 0; font-size: 1rem; }
+
+    // The points scroll, and not the whole of it: a station with four
+    // of them is taller than a map on a phone, and "Charge now!" below them
+    // has to stay in sight.
+    .evse-list {
+        list-style:  none;
+        margin:      0.35rem 0;
+        padding:     0;
+        max-height:  9.5rem;
+        overflow-y:  auto;
+    }
+
+    .evse-choice {
+
+        display:      flex;
+        flex-wrap:    wrap;
+        align-items:  center;
+        gap:          0.2rem 0.45rem;
+        padding:      0.2rem 0;
+        cursor:       pointer;
+
+        &.unavailable {
+            cursor:   default;
+            opacity:  0.75;
+        }
+
+    }
+
+    .evse-id {
+        font-family:  $font-mono;
+        font-size:    0.8rem;
+    }
+
+    .charge-now {
+        align-self:  stretch;
+        margin-top:  0.2rem;
+    }
+
+}
+
+.evse-status {
+    display:         inline-block;
+    border:          1px solid $color-border;
+    border-radius:   999px;
+    padding:         0 0.45rem;
+    font-size:       0.75rem;
+    line-height:     1.4;
+    white-space:     nowrap;
+}
+
+
+// --- Charging ---------------------------------------------------------------
+
+.session-status {
+
+    display:         inline-block;
+    margin-left:     0.4rem;
+    border-radius:   999px;
+    padding:         0 0.5rem;
+    font-size:       0.75rem;
+    font-weight:     600;
+    vertical-align:  middle;
+    border:          1px solid currentColor;
+
+    &.session-charging  { color: map.get($status-colours, charging); }
+    &.session-stopped   { color: $color-muted; }
+    &.session-finished  { color: map.get($status-colours, available); }
+
+}
+
+.session-card.just-started {
+    border-color:  $color-accent;
+    box-shadow:    0 0 0 2px rgba($color-accent, 0.25);
+}
+
+.session-figures {
+
+    display:                grid;
+    grid-template-columns:  repeat(auto-fit, minmax(7.5rem, 1fr));
+    gap:                    0.75rem;
+    margin:                 0.9rem 0 0.6rem 0;
+
+    > div {
+        display:         flex;
+        flex-direction:  column;
+    }
+
+    .figure {
+        font-size:              1.35rem;
+        font-weight:            600;
+        font-variant-numeric:   tabular-nums;
+    }
+
+}
+
+progress.session-progress {
+
+    width:          100%;
+    height:         0.6rem;
+    margin:         0.35rem 0;
+    appearance:     none;
+    border:         none;
+    border-radius:  999px;
+    background:     $color-bg;
+    overflow:       hidden;
+
+    &::-webkit-progress-bar    { background: $color-bg; border-radius: 999px; }
+    &::-webkit-progress-value  { background: $color-accent; border-radius: 999px; }
+    &::-moz-progress-bar       { background: $color-accent; border-radius: 999px; }
+
+}
+
+table.records.session-table {
+
+    tbody tr.clickable { cursor: pointer; }
+    tbody tr.clickable:hover td { background: $color-bg; }
+
+    th.number, td.number {
+        text-align:            right;
+        white-space:           nowrap;
+        font-variant-numeric:  tabular-nums;
+    }
+
+    .mono { font-family: $font-mono; }
+
+}
+
+.mono {
+    font-family: $font-mono;
+}

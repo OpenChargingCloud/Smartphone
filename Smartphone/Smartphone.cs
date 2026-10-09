@@ -30,6 +30,9 @@ using cloud.charging.open.protocols.WWCP.Node.Certificates;
 using cloud.charging.open.protocols.WWCP.Node.Configuration;
 using cloud.charging.open.protocols.WWCP.Node.SecureShell;
 
+using cloud.charging.open.Smartphone.Charging;
+using cloud.charging.open.Smartphone.Map;
+
 #endregion
 
 namespace cloud.charging.open.Smartphone
@@ -49,13 +52,14 @@ namespace cloud.charging.open.Smartphone
     /// Server-Sent Events stream; nothing is rendered on the server.
     /// </para>
     /// <para>
-    /// For now a smartphone is what every program of this family has - the
-    /// sign-in, the name servers, the time servers, the certificates it holds
-    /// them to, the SSH server and the log - and the node below brings all of
-    /// it. Its accounts are the people who carry it: "root", made at the first
-    /// start, is the driver. What makes it a driver's phone comes on top later:
-    /// an account at an e-mobility provider, the charging tickets it issues,
-    /// and a charging session watched while it happens.
+    /// What every program of this family has - the sign-in, the name servers,
+    /// the time servers, the certificates it holds them to, the SSH server and
+    /// the log - the node below brings. Its accounts are the people who carry
+    /// it: "root", made at the first start, is the driver. What makes it a
+    /// driver's phone is on top: a map of charging stations, and charging
+    /// sessions started from it and watched while they happen - simulated,
+    /// until there is an account at an e-mobility provider to start real ones
+    /// with.
     /// </para>
     /// <para>
     /// What it believes is the important part already. An app talks to its
@@ -66,7 +70,7 @@ namespace cloud.charging.open.Smartphone
     /// is the vehicle's.
     /// </para>
     /// </remarks>
-    public class Smartphone : WWCPNode
+    public partial class Smartphone : WWCPNode
     {
 
         #region Data
@@ -125,6 +129,28 @@ namespace cloud.charging.open.Smartphone
                                                                                           CertificateKind.TLSIdentity
                                                                                       ];
 
+        /// <summary>
+        /// Where the tiles of the map come from.
+        /// </summary>
+        /// <remarks>
+        /// OpenStreetMap's own tile server, which asks of an application to say
+        /// where its tiles are from - the map does, in its corner - and to stay
+        /// light: one phone and its driver are.
+        /// </remarks>
+        public const                String    MapTileServer    = "https://tile.openstreetmap.org";
+
+        /// <summary>
+        /// The security headers the web interface is served with: the node's
+        /// strict ones, and on top what the map needs - images from
+        /// <see cref="MapTileServer"/>, and the browser's position for "where
+        /// am I", asked by this page only.
+        /// </summary>
+        public static readonly      SecurityHeaderOptions  FrontendSecurityHeaders  = SecurityHeaderOptions.Default with {
+                                                                                          ContentSecurityPolicy  = SecurityHeaderOptions.DefaultContentSecurityPolicy.
+                                                                                                                       Replace("img-src 'self' data:", $"img-src 'self' data: {MapTileServer}"),
+                                                                                          PermissionsPolicy      = "camera=(), microphone=(), geolocation=(self)"
+                                                                                      };
+
         #endregion
 
         #region Properties
@@ -132,7 +158,12 @@ namespace cloud.charging.open.Smartphone
         /// <summary>
         /// The JSON API the browser talks to.
         /// </summary>
-        public SmartphoneHTTPAPI  API  { get; }
+        public SmartphoneHTTPAPI  API       { get; }
+
+        /// <summary>
+        /// Every charging session of this phone, running and past.
+        /// </summary>
+        public ChargingSessions   Sessions  { get; }
 
         #endregion
 
@@ -160,6 +191,7 @@ namespace cloud.charging.open.Smartphone
         /// <param name="BridgeDebugLog">Whether what the libraries below write with DebugX is picked up.</param>
         /// <param name="TimeProvider">The clock, or null for the system one.</param>
         /// <param name="SSH">What the program says about serving the command line over SSH; nothing by default - see SSHSettings.</param>
+        /// <param name="ChargingSessionsPath">The file the charging sessions are kept in; "charging-sessions.json" beside the configuration file by default.</param>
         public Smartphone(IIPAddress?            HTTPHostname       = null,
                           IPPort?                HTTPPort           = null,
                           HTTPServer?            HTTPServer         = null,
@@ -178,7 +210,8 @@ namespace cloud.charging.open.Smartphone
                           String?                LogPath            = null,
                           Boolean                BridgeDebugLog     = true,
                           TimeProvider?          TimeProvider       = null,
-                          SSHSettings?           SSH                = null)
+                          SSHSettings?           SSH                = null,
+                          String?                ChargingSessionsPath  = null)
 
             : base(Kind:               SmartphoneKind,
                    Version:            typeof(Smartphone).Assembly.GetName().Version?.ToString(3) ?? "0.0.0",
@@ -193,6 +226,8 @@ namespace cloud.charging.open.Smartphone
                    DNSClient:          DNSClient,
                    NTSClient:          NTSClient,
                    Frontend:           Frontend ?? new EmbeddedContentSource(HTTPRoot, typeof(Smartphone).Assembly),
+                   Resources:          SmartphoneAccess.Resources,
+                   RoleDefinitions:    SmartphoneAccess.Roles,
                    CertificatesPath:   CertificatesPath,
                    CertificateKinds:   CertificateKinds,
                    Log:                Log,
@@ -201,9 +236,38 @@ namespace cloud.charging.open.Smartphone
                    LogPath:            LogPath,
                    BridgeDebugLog:     BridgeDebugLog,
                    TimeProvider:       TimeProvider,
-                   SSH:                SSH)
+                   SSH:                SSH,
+                   FrontendSecurityHeaders:  FrontendSecurityHeaders)
 
         {
+
+            #region The map and the charging sessions
+
+            this.map       = LoadMapConfiguration();
+
+            // Beside the configuration file rather than below the working
+            // directory, for the reason the certificate store is: a phone that
+            // forgot its sessions because "dotnet run" was typed somewhere else
+            // would be a different phone.
+            this.Sessions  = new ChargingSessions(
+                                 ChargingSessionsPath ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(this.ConfigFile.Path)) ?? ".", ChargingSessions.DefaultFileName),
+                                 this.TimeProvider
+                             );
+
+            foreach (var problem in Sessions.ReadProblems)
+                this.Log.Warning(problem, "charging");
+
+            this.Log.Info($"The map shows {DemoLocations.All.Count} demo charging stations" +
+                          (map.StationsURL.Length > 0
+                               ? $"; its data source is set to '{map.StationsURL}', which is not asked yet."
+                               : ", as no data source is set."),
+                          "map");
+
+            this.Log.Info($"{Sessions.All().Count} charging session(s) are kept in '{Sessions.FilePath}'. " +
+                           "Charging is simulated: there is no e-mobility provider to start a real session at yet.",
+                          "charging");
+
+            #endregion
 
             #region The JSON API
 
