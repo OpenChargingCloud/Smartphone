@@ -41,7 +41,7 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #region Data
 
-        private const String  NoTimeServers  = """{ "nts": { "enabled": false } }""";
+        private const String  NoTimeServers  = """{ "nts": { "groups": { "legal": { "enabled": false } } } }""";
 
         private String       directory   = "";
         private Smartphone?  smartphone;

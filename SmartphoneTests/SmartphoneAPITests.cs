@@ -51,7 +51,7 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #region Data
 
-        private const String  NoTimeServers  = """{ "nts": { "enabled": false } }""";
+        private const String  NoTimeServers  = """{ "nts": { "groups": { "legal": { "enabled": false } } } }""";
 
         private String       directory  = "";
         private Smartphone?  smartphone;
@@ -363,7 +363,7 @@ namespace cloud.charging.open.Smartphone.Tests
             var file = JObject.Parse(File.ReadAllText(Path.Combine(directory, WWCPConfigFile.DefaultFileName)));
 
             Assert.That(file["map"]?["stationsURL"]?.Value<String>(), Is.EqualTo("https://emsp.example.org/locations"), "it was not written into the configuration file");
-            Assert.That(file["nts"]?["enabled"]?.Value<Boolean>(),    Is.False, "the rest of the configuration file was not kept");
+            Assert.That(file["nts"]?["groups"]?["legal"]?["enabled"]?.Value<Boolean>(), Is.False, "the rest of the configuration file was not kept");
 
             (status, var map) = await Send(driver, HttpMethod.Get, "api/v1/map");
 
