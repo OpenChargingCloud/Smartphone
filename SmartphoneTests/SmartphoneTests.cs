@@ -151,8 +151,8 @@ namespace cloud.charging.open.Smartphone.Tests
 
         /// <summary>
         /// The roots it believes, the server certificates it holds a server
-        /// to and who it is as a client - and neither a root of clients nor
-        /// anything of ISO 15118.
+        /// to, who it is as a client and who its web interface is over HTTPS -
+        /// and neither a root of clients nor anything of ISO 15118.
         /// </summary>
         [Test]
         public void WhatItKeeps()
@@ -165,7 +165,8 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(store.Kinds, Is.EqualTo(new[] {
                                                         CertificateKind.TLSRoot,
                                                         CertificateKind.TLSServer,
-                                                        CertificateKind.TLSIdentity
+                                                        CertificateKind.TLSIdentity,
+                                                        CertificateKind.TLSServerIdentity
                                                     }));
 
                 Assert.That(store.Kinds, Does.Not.Contain(CertificateKind.ClientRoot));

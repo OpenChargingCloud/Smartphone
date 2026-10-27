@@ -114,19 +114,22 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// The kinds of certificate the smartphone's store keeps: the roots it
-        /// believes, the server certificates it holds a server to, and who it
-        /// is as a client.
+        /// believes, the server certificates it holds a server to, who it is
+        /// as a client, and who its web interface is over HTTPS.
         /// </summary>
         /// <remarks>
-        /// Three of the four kinds of TLS, as a local controller's: a
-        /// smartphone connects and is connected to by nobody, so there is no
-        /// root of clients to keep. None of the seven of ISO 15118, which are a
-        /// vehicle's.
+        /// Four of the five kinds of TLS: nobody connects to a smartphone with
+        /// a certificate of their own, so there is no root of clients to keep.
+        /// The server identity is for "web.tls.certificate": "store" - a
+        /// browser tells a page where this device is only over HTTPS or from
+        /// the machine itself, and Locate me asks it. None of the seven of
+        /// ISO 15118, which are a vehicle's.
         /// </remarks>
         public static readonly      IReadOnlyList<CertificateKind>  CertificateKinds  = [
                                                                                           CertificateKind.TLSRoot,
                                                                                           CertificateKind.TLSServer,
-                                                                                          CertificateKind.TLSIdentity
+                                                                                          CertificateKind.TLSIdentity,
+                                                                                          CertificateKind.TLSServerIdentity
                                                                                       ];
 
         /// <summary>
@@ -191,6 +194,7 @@ namespace cloud.charging.open.Smartphone
         /// <param name="BridgeDebugLog">Whether what the libraries below write with DebugX is picked up.</param>
         /// <param name="TimeProvider">The clock, or null for the system one.</param>
         /// <param name="SSH">What the program says about serving the command line over SSH; nothing by default - see SSHSettings.</param>
+        /// <param name="Web">What the program says of HTTPS and of the reverse proxies in front - from --https, --https-cert, --redirect-port and --trusted-proxy - over the "web" section of the configuration file; nothing by default, and then only the file says it.</param>
         /// <param name="ChargingSessionsPath">The file the charging sessions are kept in; "charging-sessions.json" beside the configuration file by default.</param>
         public Smartphone(IIPAddress?            HTTPHostname       = null,
                           IPPort?                HTTPPort           = null,
@@ -211,6 +215,7 @@ namespace cloud.charging.open.Smartphone
                           Boolean                BridgeDebugLog     = true,
                           TimeProvider?          TimeProvider       = null,
                           SSHSettings?           SSH                = null,
+                          WebConfiguration?      Web                = null,
                           String?                ChargingSessionsPath  = null)
 
             : base(Kind:               SmartphoneKind,
@@ -237,7 +242,8 @@ namespace cloud.charging.open.Smartphone
                    BridgeDebugLog:     BridgeDebugLog,
                    TimeProvider:       TimeProvider,
                    SSH:                SSH,
-                   FrontendSecurityHeaders:  FrontendSecurityHeaders)
+                   FrontendSecurityHeaders:  FrontendSecurityHeaders,
+                   Web:                Web)
 
         {
 
