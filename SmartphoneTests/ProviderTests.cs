@@ -1,0 +1,473 @@
+/*
+ * Copyright (c) 2014-2026 GraphDefined GmbH <achim.friedland@graphdefined.com>
+ * This file is part of Smartphone <https://github.com/OpenChargingCloud/Smartphone>
+ *
+ * Licensed under the Affero GPL license, Version 3.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.gnu.org/licenses/agpl.html
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#region Usings
+
+using System.Net;
+using System.Net.Http.Headers;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+
+using Newtonsoft.Json.Linq;
+
+using NUnit.Framework;
+
+using org.GraphDefined.Vanaheimr.Illias;
+using org.GraphDefined.Vanaheimr.Hermod;
+using org.GraphDefined.Vanaheimr.Hermod.HTTP;
+using org.GraphDefined.Vanaheimr.Hermod.Mail;
+
+using cloud.charging.open.protocols.WWCP.Node.Configuration;
+using cloud.charging.open.protocols.WWCP.Node.TestKit;
+
+using cloud.charging.open.Smartphone.Map;
+using cloud.charging.open.Smartphone.Provider;
+
+#endregion
+
+namespace cloud.charging.open.Smartphone.Tests
+{
+
+    /// <summary>
+    /// The account of a smartphone at an e-mobility provider, against a
+    /// provider on the loopback: made by an administrator - with a password the
+    /// phone keeps, and an account key the provider certifies from a request
+    /// made on the phone - and a charging ticket of its own for every start,
+    /// which comes back without the account's signature in it, or is refused;
+    /// signed in with a session, as the provider's web interface is, and anew
+    /// where it is over.
+    /// </summary>
+    public class ProviderTests
+    {
+
+        #region Data
+
+        private const String  NoTimeServers  = """{ "nts": { "groups": { "legal": { "enabled": false } } } }""";
+
+        private String       directory  = "";
+        private Smartphone?  smartphone;
+        private Uri?         address;
+        private TestEMSP?    emsp;
+
+        #endregion
+
+        #region Setup / TearDown
+
+        [SetUp]
+        public async Task Setup()
+        {
+
+            directory  = Path.Combine(Path.GetTempPath(), "smartphone-provider-" + Guid.NewGuid().ToString("N")[..12]);
+            Directory.CreateDirectory(directory);
+
+            emsp       = await TestEMSP.Start();
+
+            await TestPorts.StartedOnFreshPorts(SmartphoneFrom);
+
+        }
+
+        [TearDown]
+        public async Task TearDown()
+        {
+
+            if (smartphone is not null)
+                await smartphone.DisposeAsync();
+
+            if (emsp is not null)
+                await emsp.DisposeAsync();
+
+            // One instance runs every test of the fixture.
+            smartphone  = null;
+            emsp        = null;
+
+            try
+            {
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory, recursive: true);
+            }
+            catch (Exception)
+            {
+                // A temporary directory that outlives one test run is not worth
+                // failing the run over.
+            }
+
+        }
+
+        #endregion
+
+
+        #region (helpers)
+
+        private Smartphone SmartphoneFrom()
+        {
+
+            var port  = TestPorts.Free();
+            var file  = Path.Combine(directory, WWCPConfigFile.DefaultFileName);
+
+            File.WriteAllText(file, NoTimeServers);
+
+            smartphone  = new Smartphone(
+                              HTTPPort:          IPPort.Parse(port),
+                              AccountsPath:      Path.Combine(directory, "accounts"),
+                              ConfigFile:        new WWCPConfigFile(file),
+                              CertificatesPath:  Path.Combine(directory, "certificates"),
+                              LogToConsole:      false,
+                              BridgeDebugLog:    false
+                          );
+
+            address     = new Uri($"http://127.0.0.1:{port}/");
+
+            return smartphone;
+
+        }
+
+        private async Task<HttpClient> SignedInAs(String Name, String Role)
+        {
+
+            var password = "correct-horse-battery-" + Guid.NewGuid().ToString("N")[..8];
+
+            Assert.That(smartphone!.ExtAPI.TryGetOrganization(Organization_Id.Parse("Smartphone"), out var organization) &&
+                        organization is Organization, Is.True, "the smartphone's organization is not there");
+
+            await smartphone.ExtAPI.CreateUser(User_Id.Parse(Name),
+                                               I18NString.Create(Languages.en, Name),
+                                               SimpleEMailAddress.Parse($"{Name}@localhost"),
+                                               User2OrganizationEdgeLabel.IsMember,
+                                               (Organization) organization!,
+                                               Password:                  password,
+                                               SkipDefaultNotifications:  true,
+                                               SkipNewUserEMail:          true,
+                                               SkipNewUserNotifications:  true,
+                                               AcceptedEULA:              DateTimeOffset.UtcNow.AddSeconds(-1),
+                                               IsAuthenticated:           true);
+
+            Assert.That(smartphone.ExtAPI.TryGetUser(User_Id.Parse(Name), out var stored), Is.True);
+            Assert.That(smartphone.ExtAPI.TryGetUserGroup(UserGroup_Id.Parse(Role), out var group), Is.True, $"the smartphone has no group '{Role}'");
+            Assert.That((await smartphone.ExtAPI.AddUserToUserGroup((User) stored!, User2UserGroupEdgeLabel.IsMember, (UserGroup) group!)).IsSuccess, Is.True);
+
+            var client = new HttpClient { BaseAddress = address, Timeout = TimeSpan.FromSeconds(60) };
+
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                                                             "Basic",
+                                                             Convert.ToBase64String(Encoding.UTF8.GetBytes($"{Name}:{password}"))
+                                                         );
+
+            return client;
+
+        }
+
+        private static async Task<(HttpStatusCode Status, JObject JSON)> Send(HttpClient Client, HttpMethod Method, String Path, Object? JSON = null)
+        {
+
+            using var request = new HttpRequestMessage(Method, Path);
+
+            if (JSON is not null)
+                request.Content = new StringContent(JObject.FromObject(JSON).ToString(), Encoding.UTF8, "application/json");
+
+            var response = await Client.SendAsync(request);
+            var text     = await response.Content.ReadAsStringAsync();
+
+            return (response.StatusCode, text.Length > 0 ? JObject.Parse(text) : new JObject());
+
+        }
+
+        /// <summary>
+        /// Demo points that are free now, and stay so for the next minute.
+        /// </summary>
+        private static (ChargingLocation Location, ChargingEVSE EVSE)[] FreePoints()
+        {
+
+            var now = DateTimeOffset.UtcNow;
+
+            return [ .. DemoLocations.All.
+                            SelectMany(location => location.EVSEs.Select(evse => (location, evse))).
+                            Where(pair => DemoLocations.StatusOf(pair.evse, now)                         == EVSEStatus.Available &&
+                                          DemoLocations.StatusOf(pair.evse, now + TimeSpan.FromMinutes(1)) == EVSEStatus.Available) ];
+
+        }
+
+        private String AccountFile
+            => Path.Combine(directory, Smartphone.ProviderDirectoryName, "account.json");
+
+        #endregion
+
+
+        #region AnAdministratorMakesTheAccountAndADriverOnlyLooks()
+
+        /// <summary>
+        /// An administrator makes the account: the provider gets a password the
+        /// phone made up and a signing request of a key made on the phone, and
+        /// certifies that key. The phone keeps password and key in a file of its
+        /// own; a driver sees which account it is, and neither of them, and may
+        /// make none.
+        /// </summary>
+        [Test]
+        public async Task AnAdministratorMakesTheAccountAndADriverOnlyLooks()
+        {
+
+            using var admin   = await SignedInAs("admin1",  "systemadmin");
+            using var driver  = await SignedInAs("driver1", "driver");
+
+            var (status, refused) = await Send(driver, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp!.URL, username = "phone1", email = "phone1@example.org" });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Forbidden), refused.ToString());
+
+            (status, var signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp.URL, username = "phone1", email = "phone1@example.org" });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), signedUp.ToString());
+
+            (status, var seen) = await Send(driver, HttpMethod.Get, "api/v1/provider");
+
+            var kept     = JObject.Parse(File.ReadAllText(AccountFile));
+            var keyId    = seen["account"]!["accountKey"]!["id"]!.Value<String>()!;
+            var key      = emsp.AccountKeys[keyId.ToUpperInvariant()];
+
+            using var ofKey  = key.Certificate.GetECDsaPublicKey()!;
+            using var kept1  = ECDsa.Create();
+            kept1.ImportFromPem(kept["accountKey"]!.Value<String>());
+
+            using (Assert.EnterMultipleScope())
+            {
+
+                Assert.That(status,                                                Is.EqualTo(HttpStatusCode.OK), seen.ToString());
+                Assert.That(seen["set"]!.Value<Boolean>(),                         Is.True);
+                Assert.That(seen["account"]!["username"]!.Value<String>(),         Is.EqualTo("phone1"));
+                Assert.That(seen["account"]!["party"]!.Value<String>(),            Is.EqualTo(TestEMSP.Party));
+                Assert.That(seen["account"]!["madeUp"]!.Value<Boolean>(),          Is.True);
+                Assert.That(seen.ToString(),                                       Does.Not.Contain(kept["password"]!.Value<String>()), "the password is shown");
+                Assert.That(seen.ToString(),                                       Does.Not.Contain("PRIVATE KEY"),                    "the key is shown");
+
+                Assert.That(key.Owner,                                             Is.EqualTo("phone1"));
+                Assert.That(kept["password"]!.Value<String>()!.Length,             Is.GreaterThanOrEqualTo(32), "a password made up, and of a length nobody guesses");
+                Assert.That(ofKey.ExportSubjectPublicKeyInfo(),                    Is.EqualTo(kept1.ExportSubjectPublicKeyInfo()), "the provider certified another key than the phone keeps");
+
+            }
+
+            (status, var twice) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp.URL, username = "phone2", email = "phone2@example.org" });
+
+            Assert.That(status,                             Is.EqualTo(HttpStatusCode.BadRequest), twice.ToString());
+            Assert.That(twice["error"]!.Value<String>(),    Does.Contain("forget it first"));
+
+        }
+
+        #endregion
+
+        #region EveryStartHasATicketOfItsOwn()
+
+        /// <summary>
+        /// Every "Charge now!" asks for a ticket of its own: a key of its own,
+        /// an id of its own, good for an hour - signed by that key and the
+        /// account key, and back without the account's signature. The session
+        /// names it; the ticket and its key are kept beside the account.
+        /// </summary>
+        [Test]
+        public async Task EveryStartHasATicketOfItsOwn()
+        {
+
+            using var admin   = await SignedInAs("admin1",  "systemadmin");
+            using var driver  = await SignedInAs("driver1", "driver");
+
+            var (status, signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp!.URL, username = "phone1", email = "phone1@example.org" });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), signedUp.ToString());
+
+            var points = FreePoints();
+
+            Assert.That(points, Has.Length.GreaterThanOrEqualTo(2), "two free demo points to charge at");
+
+            (status, var first)  = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = points[0].Location.Id, evseUid = points[0].EVSE.Uid });
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), first.ToString());
+
+            (status, var second) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = points[1].Location.Id, evseUid = points[1].EVSE.Uid });
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), second.ToString());
+
+            var ticket1  = (JObject) first ["ticket"]!;
+            var ticket2  = (JObject) second["ticket"]!;
+            var issued   = emsp.Tickets;
+
+            Assert.That(COSESign.TryParse(issued[0].Issued, out var cose, out var error), Is.True, error);
+
+            var notBefore  = DateTimeOffset.Parse(ticket1["notBefore"]!.Value<String>()!, System.Globalization.CultureInfo.InvariantCulture);
+            var notAfter   = DateTimeOffset.Parse(ticket1["notAfter"]!. Value<String>()!, System.Globalization.CultureInfo.InvariantCulture);
+            var keptFile   = Path.Combine(directory, Smartphone.ProviderDirectoryName, "tickets", ticket1["id"]!.Value<String>() + ".json");
+
+            using (Assert.EnterMultipleScope())
+            {
+
+                Assert.That(issued,                                                   Has.Count.EqualTo(2));
+                Assert.That(issued.Select(ticket => ticket.Owner),                    Is.All.EqualTo("phone1"));
+                Assert.That(ticket1["id"]!.Value<String>(),                           Is.Not.EqualTo(ticket2["id"]!.Value<String>()),            "two starts, one ticket");
+                Assert.That(ticket1["keyThumbprint"]!.Value<String>(),                Is.Not.EqualTo(ticket2["keyThumbprint"]!.Value<String>()), "two starts, one key");
+                Assert.That(ticket1["party"]!.Value<String>(),                        Is.EqualTo(TestEMSP.Party));
+                Assert.That(notAfter - notBefore,                                     Is.EqualTo(TimeSpan.FromHours(1)));
+                Assert.That(ticket1["issuerFingerprint"]!.Value<String>(),            Is.EqualTo(Convert.ToHexStringLower(SHA256.HashData(emsp.Issuer.RawData))));
+
+                // What the provider sends back is what a charge point operator
+                // sees: the ticket's key and the provider, and not the account.
+                Assert.That(cose!.Signatures,                                         Has.Count.EqualTo(2));
+                Assert.That(cose.Signatures.Select(signature => signature.ProtectedHeader.KeyIdentifier!.Length),
+                                                                                      Is.EquivalentTo(new[] { 6, 32 }));
+
+                Assert.That(File.Exists(keptFile),                                    Is.True, "the ticket and its key are not kept");
+                Assert.That(JObject.Parse(File.ReadAllText(keptFile))["ticketKey"]!.Value<String>(), Does.Contain("PRIVATE KEY"));
+
+            }
+
+            (status, var kept) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{first["id"]}");
+
+            Assert.That(kept["ticket"]!["id"]!.Value<String>(), Is.EqualTo(ticket1["id"]!.Value<String>()), "the session forgot its ticket");
+
+            // The session of the sign-up served both starts; one that is over
+            // is taken anew, once.
+            Assert.That(emsp.SignIns, Is.EqualTo(1), "signed in again for every start");
+
+            emsp.EndSessions();
+
+            var (third, problem) = await smartphone!.TicketForStartAsync("DE*GEF*E1*1");
+
+            Assert.That(third,        Is.Not.Null, problem);
+            Assert.That(emsp.SignIns, Is.EqualTo(2));
+
+        }
+
+        #endregion
+
+        #region ATicketThatNamesTheAccountIsRefused(How)
+
+        /// <summary>
+        /// A provider that sends a ticket back with the account's signature
+        /// still in it - which would tell the charge point operator whose it is
+        /// - or with another payload than was asked for: the phone refuses it,
+        /// and starts nothing.
+        /// </summary>
+        [TestCase("keepAccountSignature", "account's signature still in it")]
+        [TestCase("changePayload",        "its payload was changed")]
+        public async Task ATicketThatNamesTheAccountIsRefused(String How, String Said)
+        {
+
+            using var admin   = await SignedInAs("admin1",  "systemadmin");
+            using var driver  = await SignedInAs("driver1", "driver");
+
+            var (status, signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp!.URL, username = "phone1", email = "phone1@example.org" });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), signedUp.ToString());
+
+            emsp.Misbehave = How;
+
+            var point = FreePoints().First();
+
+            (status, var refused) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = point.Location.Id, evseUid = point.EVSE.Uid });
+
+            (_, var sessions) = await Send(driver, HttpMethod.Get, "api/v1/charging/sessions");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                               Is.EqualTo(HttpStatusCode.BadGateway), refused.ToString());
+                Assert.That(refused["error"]!.Value<String>(),    Does.Contain(Said));
+                Assert.That(sessions["total"]!.Value<Int32>(),    Is.Zero, "a session was started with a ticket that was refused");
+            }
+
+        }
+
+        #endregion
+
+        #region AnAccountOfTheDriversIsTakenAndForgotten()
+
+        /// <summary>
+        /// An account the driver made in a browser is taken with its password -
+        /// a wrong one is told so - and forgotten again: its account key taken
+        /// back at the provider, its file gone, and a start without a ticket.
+        /// </summary>
+        [Test]
+        public async Task AnAccountOfTheDriversIsTakenAndForgotten()
+        {
+
+            emsp!.SignedUp("alice", "correct horse battery staple");
+
+            using var admin = await SignedInAs("admin1", "systemadmin");
+
+            var (status, wrong) = await Send(admin, HttpMethod.Post, "api/v1/provider/signin", new { url = emsp.URL, username = "alice", password = "Tr0ub4dor&3" });
+
+            Assert.That(status,                             Is.EqualTo(HttpStatusCode.BadRequest), wrong.ToString());
+            Assert.That(wrong["error"]!.Value<String>(),    Does.Contain("did not let 'alice' in"));
+
+            (status, var signedIn) = await Send(admin, HttpMethod.Post, "api/v1/provider/signin", new { url = emsp.URL, username = "alice", password = "correct horse battery staple" });
+
+            Assert.That(status,                                          Is.EqualTo(HttpStatusCode.OK), signedIn.ToString());
+            Assert.That(signedIn["account"]!["madeUp"]!.Value<Boolean>(), Is.False);
+
+            var keyId = signedIn["account"]!["accountKey"]!["id"]!.Value<String>()!.ToUpperInvariant();
+
+            (status, var forgotten) = await Send(admin, HttpMethod.Post, "api/v1/provider/forget", new { });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), forgotten.ToString());
+
+            var point = FreePoints().First();
+
+            (status, var session) = await Send(admin, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = point.Location.Id, evseUid = point.EVSE.Uid });
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(forgotten["set"]!.Value<Boolean>(),   Is.False);
+                Assert.That(emsp.AccountKeys[keyId].Revoked,      Is.True,  "the account key was not taken back at the provider");
+                Assert.That(File.Exists(AccountFile),             Is.False, "the account is still kept");
+                Assert.That(status,                               Is.EqualTo(HttpStatusCode.Created), session.ToString());
+                Assert.That(session["ticket"],                    Is.Null, "a ticket without an account");
+                Assert.That(emsp.Tickets,                         Is.Empty);
+            }
+
+        }
+
+        #endregion
+
+        #region TheAccountIsThereAfterARestart()
+
+        /// <summary>
+        /// The account and its key are read back at the next start, and the
+        /// next "Charge now!" gets its ticket with them.
+        /// </summary>
+        [Test]
+        public async Task TheAccountIsThereAfterARestart()
+        {
+
+            using (var admin = await SignedInAs("admin1", "systemadmin"))
+            {
+                var (status, signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp!.URL, username = "phone1", email = "phone1@example.org" });
+                Assert.That(status, Is.EqualTo(HttpStatusCode.OK), signedUp.ToString());
+            }
+
+            await smartphone!.DisposeAsync();
+            smartphone = null;
+
+            await TestPorts.StartedOnFreshPorts(SmartphoneFrom);
+
+            Assert.That(smartphone!.ProviderAccount?.Username, Is.EqualTo("phone1"));
+
+            var (ticket, error) = await smartphone.TicketForStartAsync("DE*GEF*E1*1");
+
+            Assert.That(ticket,         Is.Not.Null, error);
+            Assert.That(emsp!.Tickets,  Has.Count.EqualTo(1));
+            Assert.That(emsp.SignIns,   Is.EqualTo(2), "signed up, and signed in with the password it kept");
+
+        }
+
+        #endregion
+
+    }
+
+}

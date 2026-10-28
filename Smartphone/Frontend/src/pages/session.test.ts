@@ -61,6 +61,26 @@ describe('a charging session', () => {
 
     });
 
+    it('names the charging ticket it was started with, and nothing secret of it', async () => {
+
+        current = session({ status: 'stopped', endedAt: '2026-10-10T08:10:00Z', stoppedBy: 'root',
+                            ticket: { id: '9f2c41d08a7e3b65c0ffee0123456789', party: 'DE*GDF',
+                                      notBefore: '2026-10-10T08:00:00Z', notAfter: '2026-10-10T09:00:00Z',
+                                      keyThumbprint: '6cab95a41a13b2c42f552b7c81248078b3f319afe7d3caf133bc4b4dbead1605',
+                                      issuerFingerprint: '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0' } });
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                                smartphone, root => root.querySelector('.session-ticket') !== null);
+
+        const ticket = root.querySelector('.session-ticket')!.textContent!;
+
+        assert.match(ticket, /9f2c41d08a7e3b65c0ffee0123456789/);
+        assert.match(ticket, /DE\*GDF/);
+        assert.match(ticket, /6cab95a41a13b2c42f552b7c81248078b3f319afe7d3caf133bc4b4dbead1605/);
+        assert.match(root.textContent!, /the e-mobility provider issued its ticket/);
+
+    });
+
     it('says so where there is no such session', async () => {
 
         const root = await open(sessionPage, '/charging/sessions/NOSUCHONE', [ 'charging:read' ],

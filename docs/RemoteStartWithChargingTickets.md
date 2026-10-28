@@ -1,0 +1,287 @@
+# Starting a charging session with a charging ticket (draft)
+
+How a driver's app starts and stops a charging session at a station of a
+roaming network through its e-mobility provider (EMSP), so that
+
+- the charge point operator (CPO) learns nothing of who the driver is, nor
+  that two sessions were the same driver's;
+- nobody but the driver's app can start a session on the driver's ticket -
+  not a man in the middle, and not the EMSP at another charge point or at
+  another time;
+- the EMSP still says, in a way the CPO can keep, that it vouches for the
+  start and pays for it;
+- the driver can later show which signed meter values were theirs, without
+  showing their account.
+
+A draft for the Smartphone (the app), the
+[EMSP](https://github.com/OpenChargingCloud/EMSP) and a CSMS behind OCPI.
+What exists today and what does not is said at the end.
+
+
+## The parties and their keys
+
+| Who | Key | What it says | Who trusts it, and how |
+|---|---|---|---|
+| the driver's account at the EMSP | an **account key**, P-256, long-lived, one or more per account | "this is me" | the EMSP: it certified it below its account CA, from a PKCS#10 request the app made (`POST /api/v1/account-keys`) |
+| one charging session | a **ticket key**, P-256, made for one start and thrown away after it | "I hold this ticket" | the CPO: the ticket names it, and the EMSP signed the ticket |
+| the EMSP | its **ticket issuer key** | "this EMSP issued this ticket", and "this EMSP vouches for this start" | the CPO: by the issuer certificate (`GET /api/v1/tickets/issuer.pem`), or by a signing key of the EMSP as a party of the roaming network (WWCP_POI, `eMobilityProviders`) |
+| the roaming network's operator | its identity keys, by their thumbprints | what the network says of the station: its EVSEs, tariffs, energy meters and their keys | the app: by the trust anchor it was given |
+
+The account key never reaches the CPO. The ticket key never reaches anybody
+but the app.
+
+
+## 1. Before: the station, checked
+
+The app has checked the proof of the station against the trust anchor of the
+roaming network (Smartphone, map of a roaming network): it knows the EVSE, its
+tariff and price, and the public key its energy meter signs meter values with.
+It keeps the proof - the digest of its effective tree and its commit - so that
+the start request can name what the driver saw.
+
+
+## 2. The ticket: one per start
+
+Exactly as the EMSP issues tickets today (EMSP README, "Account keys and
+charging tickets"):
+
+1. The app makes a ticket key for this start alone.
+2. It writes the payload - deterministic CBOR, protected body header
+   `{3: "application/charging-ticket+cbor"}`:
+   ```
+   { "typ": "ChargingTicket", "v": 1, "id": h'16 random bytes', "emsp": "DE*GDF",
+     "key": <COSE_Key of the ticket key>, "nbf": <now>, "exp": <now + 1 h>,
+     "limits": { "kW": .., "minutes": .., "kWh": .. } }
+   ```
+3. It signs it twice with ES256 - with the ticket key (kid `"ticket"`) and
+   with an account key (kid the SHA-256 of its certificate) - and sends it,
+   `POST /api/v1/tickets`.
+4. The EMSP checks both signatures, takes the account key's signature off,
+   signs with its ticket issuer key, and answers with the ticket signed by
+   the ticket key and by itself.
+
+**One ticket per start.** A ticket that is used twice links two sessions at
+the CPO. The EMSP takes tickets good for up to 30 days; the app asks for one
+good for an hour, made right before the start.
+
+**Nothing that tells drivers apart.** `nbf` is now, `exp` a fixed time after
+it, and the limits are the same few values for everybody (or none): a ticket
+with unusual limits is a fingerprint of its own.
+
+
+## 3. The start request: signed by the ticket key, and by the EMSP
+
+A **start request** is a COSE_Sign (CBOR tag 98) with the protected body header
+`{3: "application/start-request+cbor"}` and the payload, written by the app:
+
+```
+{
+  "typ":     "StartRequest",
+  "v":       1,
+  "ticket":  h'SHA-256 of the ticket as the EMSP issued it (its COSE_Sign bytes)',
+  "evse":    "DE*GEF*E2*1",                 ; the EVSE, as the roaming network names it
+  "at":      1793200000,                    ; seconds since 1970, when the driver asked
+  "nonce":   h'16 random bytes',
+  "proof":   h'the effectiveTree digest of the version the app checked',   ; optional
+  "tariff":  "DE*GEF*T_DC"                                                  ; optional
+}
+```
+
+It carries **two signatures over the same payload**:
+
+1. **The ticket key's** (kid `"ticket"`), made by the app. It says: the
+   holder of this ticket wants to charge at exactly this EVSE, now. The EMSP
+   cannot change the EVSE, the time or the ticket without breaking it; nor
+   start on the ticket somewhere else; nor start again with the same request,
+   which the nonce makes once-only.
+
+2. **The EMSP's** (kid the SHA-256 of its ticket issuer certificate), added by
+   the EMSP. It says: this EMSP issued this ticket to an account it knows, has
+   not withdrawn it, vouches for this start and pays for it. What only the
+   EMSP sets goes into the **protected header of its own signature**, so that
+   it is covered by the EMSP's signature alone and the app's signature stays
+   valid:
+
+   ```
+   { 1: -7,                                   ; ES256
+     4: h'SHA-256 of the issuer certificate',  ; kid
+     "token":    "T-9F2C41D08A7E3B65",         ; the OCPI token of this start alone
+     "authRef":  "8e1c…",                      ; OCPI authorization_reference
+     "iat":      1793200002 }                  ; when the EMSP signed
+   ```
+
+   COSE's `Sig_structure` covers the body's protected header, the signer's
+   protected header and the payload: the app's signature covers what the app
+   wrote, the EMSP's what the app wrote and what the EMSP added.
+
+The app sends the request to the EMSP **with the ticket** it names:
+`POST /api/v1/tickets/{ticketId}/start` with
+`{"ticket": "<base64>", "request": "<base64>"}`. ES256 signatures are
+randomized, so the digest of an issued ticket is the one of exactly the bytes
+the EMSP sent back - which the app holds and the EMSP does not keep: its
+record of a ticket is its metadata. With the ticket at hand the EMSP checks the
+digest against it rather than against a copy of its own.
+
+**The EMSP checks** that the ticket carries its own issuer's signature and is
+one it issued to the account that asks (by its `id`), is good now and not
+withdrawn; that the request's `ticket` is the digest of these bytes, and the
+request is signed by the ticket's key; that `at` is within a few minutes of its
+clock; that the nonce is new; that the EVSE is one of a CPO it is peered with.
+It adds its signature and sends the command.
+
+
+## 4. EMSP → CPO: OCPI `START_SESSION`
+
+```json
+{
+  "response_url":            "https://emsp.example/ocpi/2.2.1/commands/START_SESSION/8e1c…",
+  "token": {
+    "country_code": "DE", "party_id": "GDF",
+    "uid":          "T-9F2C41D08A7E3B65",
+    "type":         "APP_USER",
+    "contract_id":  "T-9F2C41D08A7E3B65",
+    "issuer":       "GraphDefined EMSP",
+    "valid":        true,
+    "whitelist":    "NEVER",
+    "last_updated": "…"
+  },
+  "location_id":             "DE*GEF*P1",
+  "evse_uid":                "DE*GEF*E2*1",
+  "authorization_reference": "8e1c…",
+  "charging_ticket":         "<base64 of the ticket>",
+  "start_request":           "<base64 of the start request, both signatures>"
+}
+```
+
+**The token is of this start alone.** Its `uid` and `contract_id` are new for
+every start and say nothing of the account - not a card's UID, not an eMAID.
+Were it the driver's card or contract, every session would be linked at the
+CPO again, ticket or not. The EMSP keeps which account a token was made for,
+for the CDR.
+
+`charging_ticket` and `start_request` are fields OCPI does not know; a
+receiver that does not know them ignores them and treats the command as any
+other `START_SESSION` - which is why the token must be one the CPO may ask
+about (`whitelist` `NEVER`: it asks the EMSP in real time, and the EMSP says
+`ALLOWED` for exactly this start).
+
+So the EMSP's real-time authorization knows **tokens of one start**, a path of
+their own beside its cards and its eMAIDs: a token made for a start, `ALLOWED`
+for the location and EVSE of that start and while its ticket is good, and for
+nothing else; `BLOCKED` once the session it was made for has ended.
+
+
+## 5. The CPO checks
+
+A CPO that knows charging tickets checks, before it starts:
+
+1. the ticket: signed by its own key and by an issuer it trusts, for this
+   EMSP (`emsp` and the OCPI party), good now;
+2. the start request: its `ticket` the digest of this ticket, signed by the
+   ticket's key; its `evse` the EVSE of the command; its `at` within a few
+   minutes; its nonce not seen before;
+3. the EMSP's signature on the start request, by the issuer it trusts, its
+   `token` the command's token and its `authRef` the command's
+   `authorization_reference`;
+4. the ticket's limits, which become the station's: power, duration and
+   energy, e.g. as a charging profile of OCPP's `RequestStartTransaction`.
+
+It keeps the ticket and the start request with the session: they are its
+evidence that the EMSP authorized and the driver asked for this start, at
+this EVSE, at this time - whatever the EMSP says later.
+
+
+## 6. The meter values: the driver's, without the driver's name
+
+The station starts the transaction with the token as its `idToken`. Where its
+energy meter signs OCMF, the identification fields of the meter values carry
+what identifies the ticket and nothing else - e.g. `IS` true, `IT`
+`UNDEFINED`, `ID` the token or the ticket's id.
+
+The app checks the meter values with the key of the energy meter the proof of
+the station gave before the start (step 1), and holds the ticket: it can show
+that these signed meter values were of its session - to the EMSP, or anybody
+disputing an invoice - without showing its account.
+
+
+## 7. Stopping
+
+A **stop request** is the same as a start request - `"typ": "StopRequest"`,
+naming the ticket, the session as the EMSP knows it, `at` and a nonce - signed
+by the ticket key and countersigned by the EMSP, sent with OCPI
+`STOP_SESSION`. Only the holder of the ticket stops; the EMSP can still stop on
+its own, as OCPI lets it, and says so by its signature alone.
+
+
+## 8. The CDR
+
+The CDR comes back to the EMSP with the start's token (`cdr_token`); the EMSP
+knows its account and bills it. The CPO's CDR names no account.
+
+
+## What it hides, and what it does not
+
+- **From the CPO:** who the driver is, and that two sessions were the same
+  driver's - as long as each start has a ticket and a token of its own, and
+  the ticket says nothing that tells drivers apart.
+- **Not from the CPO:** the EVSE, the time, the energy; at ISO 15118 the
+  vehicle's EVCCID; the IP address of an app that talks to the station
+  directly. A ticket hides the account, not the car.
+- **Not from the EMSP:** whose ticket it is. It has to know, to bill and to
+  withdraw a ticket that is misused. Hiding it from the EMSP as well takes
+  blind signatures (e.g. RFC 9474) and prepaid tickets - not this draft.
+
+
+## One CBOR, one COSE
+
+The app, the EMSP and the CSMS write and check all of it with the CBOR and
+COSE of [Styx](https://github.com/Vanaheimr/Styx) (`org.GraphDefined.Vanaheimr.Illias`,
+below Hermod), and with nothing of their own:
+
+| | Styx |
+|---|---|
+| the ticket's and the start request's payload, deterministic | `CBORWriter` / `CBORValue` |
+| the ticket key in the payload, a COSE_Key on P-256 | `COSEKey` (EC2), checked to be on the curve |
+| whose key a signature is: its kid, in the signature's protected header | the ticket key's `"ticket"`; an account key's and the ticket issuer's the SHA-256 of its certificate, as the EMSP names them - not a COSE Key Thumbprint (RFC 9679) |
+| the ticket and the start request, one payload with several signers | `COSESign` (tag 98), `COSESignature` |
+| the app's signature, made first | `COSESign.Sign(payload, ticketKey, protectedHeader, …)` |
+| the EMSP's signature, added without touching the app's | `COSESign.AddSignature(issuerKey, protectedHeader)`, its own fields in its own protected bucket (`COSEHeaders`, text labels) |
+| every check | `COSESign.Verify(signature, publicKey, …)`, per signature |
+
+The EMSP's own `Tickets/COSE.cs` on `System.Formats.Cbor` goes, and the
+tickets it issues today are read and written with Styx, the bytes unchanged:
+the payload is deterministic CBOR either way, and a COSE_Sign is the same
+four-element array.
+
+**Protected headers are checked as the bytes that came, never rebuilt.** Styx
+writes a protected header in the order its parameters were added
+(`COSEHeaders.ToProtectedByteArray`), not deterministically: every signature
+covers the bytes as they travel with the message, so nothing changes for
+whoever checks those - but a header written anew from its values may be other
+bytes, and its signature then no longer holds. Payloads are deterministic CBOR
+(RFC 8949, section 4.2.1); a map with a key twice is refused.
+
+
+## Open points
+
+- **OCPI.** `charging_ticket` and `start_request` as fields of
+  `START_SESSION` / `STOP_SESSION`, or a module of their own; and through a
+  roaming hub, which has to pass them on.
+- **Trusting the EMSP.** Its ticket issuer certificate per OCPI peering, or
+  its signing keys as a party of the roaming network in WWCP_POI - so that a
+  CPO trusts every EMSP of the network by the same trust anchor the app uses.
+- **Header labels.** Text labels (`"token"`, `"authRef"`, `"iat"`) in the
+  EMSP's protected header, or registered integers.
+- **Clocks.** How many minutes `at` may be off, at the EMSP and at the CPO.
+- **Offline.** A station that checks tickets itself, without its CSMS.
+
+
+## What exists today
+
+| | |
+|---|---|
+| EMSP | self sign-up; account keys from a PKCS#10 request; tickets issued from a request signed by the ticket key and an account key, the account's signature taken off |
+| EMSP, missing | Styx's CBOR and COSE in place of its own; start and stop requests (`POST /api/v1/tickets/{id}/start`), its signature on them, a token per start, OCPI `START_SESSION` / `STOP_SESSION` |
+| CSMS / CPO, missing | checking a ticket and a start request, limits as a charging profile, the token in the OCMF identification |
+| Smartphone | the station's proof checked against the trust anchor, its tariff, and its energy meter's key; an account at an EMSP, signed up or in with a session; an account key from a PKCS#10 request; a ticket per start, built, signed and checked with Styx - against the EMSP as committed and as moved to Styx |
+| Smartphone, missing | the start and stop requests |

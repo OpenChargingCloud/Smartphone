@@ -49,6 +49,10 @@ namespace cloud.charging.open.Smartphone
     /// | <c>POST v1/charging/sessions</c> | <c>{ "locationId", "evseUid" }</c>: start one, 201 and the session |
     /// | <c>GET v1/charging/sessions/{id}</c> | one session, as it is now |
     /// | <c>POST v1/charging/sessions/{id}/stop</c> | stop one that is still charging |
+    /// | <c>GET v1/provider</c> | the account at the e-mobility provider, without its password and key |
+    /// | <c>POST v1/provider/signup</c> | <c>{ "url", "username", "email" }</c>: an account made there, with a password the phone keeps, and an account key |
+    /// | <c>POST v1/provider/signin</c> | <c>{ "url", "username", "password" }</c>: an account the driver has there, taken, and an account key |
+    /// | <c>POST v1/provider/forget</c> | the account forgotten, its account key taken back there |
     /// </para>
     /// <para>
     /// No event of its own on the node's stream: that stream is for whoever
@@ -123,6 +127,11 @@ namespace cloud.charging.open.Smartphone
             AddHandler(HTTPPath.Root + "v1/charging/sessions",                PostChargingSession,       HTTPMethod.POST);
             AddHandler(HTTPPath.Root + "v1/charging/sessions/{id}",           GetChargingSession,        HTTPMethod.GET);
             AddHandler(HTTPPath.Root + "v1/charging/sessions/{id}/stop",      PostStopChargingSession,   HTTPMethod.POST);
+
+            AddHandler(HTTPPath.Root + "v1/provider",                         GetProvider,               HTTPMethod.GET);
+            AddHandler(HTTPPath.Root + "v1/provider/signup",                  PostProviderSignUp,        HTTPMethod.POST);
+            AddHandler(HTTPPath.Root + "v1/provider/signin",                  PostProviderSignIn,        HTTPMethod.POST);
+            AddHandler(HTTPPath.Root + "v1/provider/forget",                  PostProviderForget,        HTTPMethod.POST);
 
         }
 

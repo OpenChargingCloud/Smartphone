@@ -116,10 +116,36 @@ export const sessionPage: Page = {
                         </div>
 
                         ${session.simulated ? html`
-                            <p class="small muted">Simulated: no e-mobility provider was asked, and nothing was charged for real.</p>
+                            <p class="small muted">
+                                Simulated: ${session.ticket !== undefined
+                                                 ? 'the e-mobility provider issued its ticket, and takes no start request yet'
+                                                 : 'no e-mobility provider was asked'}, and nothing was charged for real.
+                            </p>
                         ` : nothing}
 
                     </section>
+
+                    ${session.ticket !== undefined ? html`
+                        <section class="card session-ticket">
+
+                            <h2><i class="fa-solid fa-ticket"></i> Charging ticket</h2>
+
+                            <div class="kv-list">
+                                ${kv('Ticket',        html`<span class="commit">${session.ticket.id}</span>`)}
+                                ${kv('Provider',      session.ticket.party)}
+                                ${kv('Good',          `${dayAndTime(session.ticket.notBefore)} until ${dayAndTime(session.ticket.notAfter)}`)}
+                                ${kv('Its key',       html`<span class="commit">${session.ticket.keyThumbprint}</span>`)}
+                                ${kv('Signed by',     html`<span class="commit">${session.ticket.issuerFingerprint}</span>`)}
+                            </div>
+
+                            <p class="small muted">
+                                A ticket of this start alone, with a key of its own, signed by the provider's ticket issuer
+                                and not by this phone's account: a charge point operator learns who pays, and not who
+                                charges. The key stays on this phone, to prove what is done with the ticket.
+                            </p>
+
+                        </section>
+                    ` : nothing}
 
                 </div>
 

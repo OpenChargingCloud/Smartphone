@@ -196,6 +196,7 @@ namespace cloud.charging.open.Smartphone
         /// <param name="SSH">What the program says about serving the command line over SSH; nothing by default - see SSHSettings.</param>
         /// <param name="Web">What the program says of HTTPS and of the reverse proxies in front - from --https, --https-cert, --redirect-port and --trusted-proxy - over the "web" section of the configuration file; nothing by default, and then only the file says it.</param>
         /// <param name="ChargingSessionsPath">The file the charging sessions are kept in; "charging-sessions.json" beside the configuration file by default.</param>
+        /// <param name="ProviderPath">The directory the account at the e-mobility provider and its charging tickets are kept in; "provider/" beside the configuration file by default.</param>
         public Smartphone(IIPAddress?            HTTPHostname       = null,
                           IPPort?                HTTPPort           = null,
                           HTTPServer?            HTTPServer         = null,
@@ -216,7 +217,8 @@ namespace cloud.charging.open.Smartphone
                           TimeProvider?          TimeProvider       = null,
                           SSHSettings?           SSH                = null,
                           WebConfiguration?      Web                = null,
-                          String?                ChargingSessionsPath  = null)
+                          String?                ChargingSessionsPath  = null,
+                          String?                ProviderPath          = null)
 
             : base(Kind:               SmartphoneKind,
                    Version:            typeof(Smartphone).Assembly.GetName().Version?.ToString(3) ?? "0.0.0",
@@ -278,8 +280,20 @@ namespace cloud.charging.open.Smartphone
                               "map");
 
             this.Log.Info($"{Sessions.All().Count} charging session(s) are kept in '{Sessions.FilePath}'. " +
-                           "Charging is simulated: there is no e-mobility provider to start a real session at yet.",
+                           "Charging is simulated: no e-mobility provider takes a start request yet.",
                           "charging");
+
+            #endregion
+
+            #region The account at the e-mobility provider
+
+            this.ProviderPath  = Path.GetFullPath(ProviderPath ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(this.ConfigFile.Path)) ?? ".", ProviderDirectoryName));
+            this.provider      = LoadProviderAccount();
+
+            this.Log.Info(provider is not null
+                              ? $"This phone has the account '{provider.Username}' at the e-mobility provider {provider.Party} ({provider.URL}), and asks it for a charging ticket at every start."
+                              : "This phone has no account at an e-mobility provider: it starts without charging tickets.",
+                          "provider");
 
             #endregion
 

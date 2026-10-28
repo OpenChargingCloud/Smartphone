@@ -18,14 +18,16 @@ import { historyPage } from './pages/history';
 import { locationPage } from './pages/location';
 import { mapPage } from './pages/map';
 import { mapSettingsPage } from './pages/mapSettings';
+import { providerPage } from './pages/provider';
 import { sessionPage } from './pages/session';
 
 // What a smartphone has pages for of its own: the map of charging stations,
 // with what is signed about one of a roaming network, and charging - what
 // charges now, every session there was, and one of them in full - with where
-// the map takes its stations from below the configuration. Everything else is what every node has: name resolution, the
-// time, the SSH server, the certificates it believes, who it is as a client
-// and the log - see WWCP_Node's start.ts.
+// the map takes its stations from and the account at the e-mobility provider
+// below the configuration. Everything else is what every node has: name
+// resolution, the time, the SSH server, the certificates it believes, who it
+// is as a client and the log - see WWCP_Node's start.ts.
 startNode({
 
     name:  'Smartphone',
@@ -38,6 +40,7 @@ startNode({
         ] },
         nodeMenu.configuration([
             { path: '/configuration/map', label: 'Map', icon: 'fa-map', permission: [ 'map:read' ] },
+            { path: '/configuration/provider', label: 'E-mobility provider', icon: 'fa-id-card', permission: [ 'provider:read' ] },
             nodeMenu.dns,
             nodeMenu.nts,
             nodeMenu.ssh,
@@ -83,7 +86,8 @@ startNode({
         '/charging/sessions/:id':   sessionPage,
 
         '/configuration':           configurationPage,
-        '/configuration/map':       mapSettingsPage
+        '/configuration/map':       mapSettingsPage,
+        '/configuration/provider':  providerPage
 
     }
 

@@ -23,6 +23,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 using cloud.charging.open.Smartphone.Map;
+using cloud.charging.open.Smartphone.Provider;
 
 #endregion
 
@@ -159,6 +160,7 @@ namespace cloud.charging.open.Smartphone.Charging
         /// <param name="EVSE">At which of its EVSEs.</param>
         /// <param name="StatusOf">What an EVSE says of itself now, before this phone is taken into account.</param>
         /// <param name="StartedBy">Who started it.</param>
+        /// <param name="Ticket">The charging ticket it is started with, where the phone has an e-mobility provider.</param>
         /// <param name="Session">The session started.</param>
         /// <param name="Error">Why none was.</param>
         /// <param name="NotSaved">True where the file could not be written: nothing about the request was wrong, and nothing was started.</param>
@@ -166,6 +168,7 @@ namespace cloud.charging.open.Smartphone.Charging
                                 ChargingEVSE                               EVSE,
                                 Func<ChargingEVSE, DateTimeOffset, String> StatusOf,
                                 String                                     StartedBy,
+                                ChargingTicketReference?                   Ticket,
                                 [NotNullWhen(true)]  out ChargingSession?  Session,
                                 [NotNullWhen(false)] out String?           Error,
                                 out Boolean                                NotSaved)
@@ -196,7 +199,7 @@ namespace cloud.charging.open.Smartphone.Charging
                     return false;
                 }
 
-                var started = ChargingSession.New(NewId(), Location, EVSE, now, StartedBy);
+                var started = ChargingSession.New(NewId(), Location, EVSE, now, StartedBy, Ticket);
 
                 sessions.Add(started);
 

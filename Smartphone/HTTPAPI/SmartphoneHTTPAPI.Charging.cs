@@ -212,32 +212,33 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// POST /api/v1/charging/sessions with { "locationId", "evseUid" }:
-        /// start charging there - simulated. 201 with the session; 404 where
-        /// the station or its EVSE is not on the map; 409 where the EVSE is not
-        /// available.
+        /// start charging there - simulated, with a charging ticket of its own
+        /// where the phone has an e-mobility provider. 201 with the session;
+        /// 404 where the station or its EVSE is not on the map; 409 where the
+        /// EVSE is not available; 502 where the provider issued no ticket.
         /// </summary>
-        private Task<HTTPResponse> PostChargingSession(HTTPRequest Request)
+        private async Task<HTTPResponse> PostChargingSession(HTTPRequest Request)
         {
 
             if (!TryAuthorize(Request, Permission.Run(SmartphoneAccess.Charging), true, out var user, out var refused))
-                return Task.FromResult(refused);
+                return refused;
 
             if (!TryParseJSONObject(Request, out var json, out var errorResponse))
-                return Task.FromResult(errorResponse);
+                return errorResponse;
 
             var locationId  = json.Value<String>("locationId")?.Trim();
             var evseUid     = json.Value<String>("evseUid")?.   Trim();
 
             if (String.IsNullOrEmpty(locationId) || String.IsNullOrEmpty(evseUid))
-                return Task.FromResult(ErrorJSON(Request, HTTPStatusCode.BadRequest,
-                                                 "Say where to charge: 'locationId' and 'evseUid', as the map gives them."));
+                return ErrorJSON(Request, HTTPStatusCode.BadRequest,
+                                 "Say where to charge: 'locationId' and 'evseUid', as the map gives them.");
 
-            if (!Smartphone.TryStartCharging(locationId, evseUid, user.Id.ToString(), out var session, out var error, out var refusal))
-                return Task.FromResult(Refused(Request, refusal, error));
+            var start = await Smartphone.StartChargingAsync(locationId, evseUid, user.Id.ToString());
 
-            return Task.FromResult(
-                       JSONResponse(Request, HTTPStatusCode.Created, session.ToJSON(Smartphone.TimeProvider.GetUtcNow()))
-                   );
+            if (start.Session is null)
+                return Refused(Request, start.Refusal, start.Error ?? "Nothing was started.");
+
+            return JSONResponse(Request, HTTPStatusCode.Created, start.Session.ToJSON(Smartphone.TimeProvider.GetUtcNow()));
 
         }
 
@@ -285,6 +286,7 @@ namespace cloud.charging.open.Smartphone
                          Refusal switch {
                              ChargingRefusal.NotFound  => HTTPStatusCode.NotFound,
                              ChargingRefusal.NotSaved  => HTTPStatusCode.InternalServerError,
+                             ChargingRefusal.Provider  => HTTPStatusCode.BadGateway,
                              _                         => HTTPStatusCode.Conflict
                          },
                          Error);

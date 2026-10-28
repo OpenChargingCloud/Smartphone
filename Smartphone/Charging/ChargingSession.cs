@@ -22,6 +22,7 @@ using System.Diagnostics.CodeAnalysis;
 using Newtonsoft.Json.Linq;
 
 using cloud.charging.open.Smartphone.Map;
+using cloud.charging.open.Smartphone.Provider;
 
 #endregion
 
@@ -77,7 +78,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                          DateTimeOffset   StartedAt,
                                          String           StartedBy,
                                          DateTimeOffset?  StoppedAt  = null,
-                                         String?          StoppedBy  = null)
+                                         String?          StoppedBy  = null,
+                                         ChargingTicketReference?  Ticket  = null)
     {
 
         #region Data
@@ -117,17 +119,19 @@ namespace cloud.charging.open.Smartphone.Charging
         #endregion
 
 
-        #region New(Id, Location, EVSE, StartedAt, StartedBy)
+        #region New(Id, Location, EVSE, StartedAt, StartedBy, Ticket = null)
 
         /// <summary>
         /// A session started now, at an EVSE of a location - one that says
-        /// what charging there costs.
+        /// what charging there costs - with the charging ticket it was started
+        /// with, where the phone has an e-mobility provider.
         /// </summary>
-        public static ChargingSession New(String            Id,
-                                          ChargingLocation  Location,
-                                          ChargingEVSE      EVSE,
-                                          DateTimeOffset    StartedAt,
-                                          String            StartedBy)
+        public static ChargingSession New(String                    Id,
+                                          ChargingLocation          Location,
+                                          ChargingEVSE              EVSE,
+                                          DateTimeOffset            StartedAt,
+                                          String                    StartedBy,
+                                          ChargingTicketReference?  Ticket   = null)
 
             => new (Id,
                     Location.Id,
@@ -144,7 +148,8 @@ namespace cloud.charging.open.Smartphone.Charging
                     Location.Tariff.Currency,
                     DefaultTargetEnergyKWh,
                     StartedAt,
-                    StartedBy);
+                    StartedBy,
+                    Ticket: Ticket);
 
         #endregion
 
@@ -250,6 +255,9 @@ namespace cloud.charging.open.Smartphone.Charging
             if (status == ChargingSessionStatus.Stopped)
                 json.Add(new JProperty("stoppedBy", StoppedBy));
 
+            if (Ticket is not null)
+                json.Add(new JProperty("ticket", Ticket.ToJSON()));
+
             return json;
 
         }
@@ -289,6 +297,9 @@ namespace cloud.charging.open.Smartphone.Charging
                 json.Add(new JProperty("stoppedAt", stopped.ToString("o")));
                 json.Add(new JProperty("stoppedBy", StoppedBy));
             }
+
+            if (Ticket is not null)
+                json.Add(new JProperty("ticket", Ticket.ToJSON()));
 
             return json;
 
@@ -330,7 +341,8 @@ namespace cloud.charging.open.Smartphone.Charging
                               Time  ("startedAt"),
                               Text  ("startedBy"),
                               JSON["stoppedAt"] is JToken { Type: JTokenType.String } ? Time("stoppedAt") : null,
-                              JSON.Value<String>("stoppedBy")
+                              JSON.Value<String>("stoppedBy"),
+                              ChargingTicketReference.TryParse(JSON["ticket"])
                           );
 
                 if (Session.MaxPowerKW <= 0 || Session.TargetEnergyKWh <= 0)

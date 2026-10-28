@@ -13,13 +13,13 @@ import { nodeAPI,
 // What every node answers - the log, name resolution, the time, the store,
 // who is signed in - and how it is asked are WWCP_Node's, and every page here
 // reads them from this module. What follows is what a smartphone says of its
-// own: its configuration's own section, the kinds its store keeps, its map and
-// its charging sessions.
+// own: its configuration's own section, the kinds its store keeps, its map, its
+// charging sessions and its account at an e-mobility provider.
 export * from '@node/api/client';
 
 
-/** What a role may be allowed to touch on this smartphone: what every node has, its map and its charging. */
-export type Resource = NodeResource | 'map' | 'charging';
+/** What a role may be allowed to touch on this smartphone: what every node has, its map, its charging and its account at an e-mobility provider. */
+export type Resource = NodeResource | 'map' | 'charging' | 'provider';
 
 /** What somebody signed in to this smartphone may do: an operation on a resource, written "certificates:edit". */
 export type Permission = `${Resource}:${Operation}`;
@@ -237,6 +237,42 @@ export interface MapSettings {
 /** What a charging session is doing. */
 export type ChargingSessionStatus = 'charging' | 'stopped' | 'finished';
 
+/** The charging ticket a session was started with: which, good when, and whose keys - nothing secret. */
+export interface ChargingTicketReference {
+    id:                 string;
+    party:              string;
+    notBefore:          string;
+    notAfter:           string;
+    /** The SHA-256 of the ticket key's SubjectPublicKeyInfo, hex. */
+    keyThumbprint:      string;
+    /** The SHA-256 of the certificate of the provider's ticket issuer, hex. */
+    issuerFingerprint:  string;
+}
+
+/** The account of this phone at an e-mobility provider, as its page shows it: not its password, and not its key. */
+export interface ProviderAccount {
+    url:           string;
+    username:      string;
+    email:         string;
+    /** Whether the phone made the account, and its password, itself. */
+    madeUp:        boolean;
+    /** The provider's name for itself in a ticket: "DE*GDF". */
+    party:         string;
+    since:         string;
+    accountKey:    { id: string; subject: string; issuer: string; notBefore: string; notAfter: string };
+    ticketIssuer:  { subject: string; fingerprint: string; notAfter: string };
+}
+
+/** The account at the e-mobility provider, or none. */
+export interface ProviderSettings {
+    message?:        string;
+    set:             boolean;
+    account:         ProviderAccount | null;
+    /** How long a ticket of this phone is good for, in minutes. */
+    ticketValidity:  number;
+    directory:       string;
+}
+
 /** One charging session of this phone, as it is now. */
 export interface ChargingSession {
     id:               string;
@@ -255,6 +291,8 @@ export interface ChargingSession {
     progressPercent:  number;
     cost:             { amount: number; pricePerKWh: number; currency: string };
     stoppedBy?:       string;
+    /** The charging ticket it was started with, where the phone has an e-mobility provider. */
+    ticket?:          ChargingTicketReference;
 }
 
 /** The charging sessions of this phone, the newest first. */
@@ -279,6 +317,13 @@ export const api = {
         check:        (locationId: string)                  => request<LocationCheck>  ('GET',  `/map/locations/${encodeURIComponent(locationId)}/check`),
         settings:     ()                                    => request<MapSettings>    ('GET',  '/configuration/map'),
         saveSettings: (settings: { stationsURL: string })   => request<MapSettings>    ('PUT',  '/configuration/map', settings)
+    },
+
+    provider: {
+        get:          ()                                                              => request<ProviderSettings>('GET',  '/provider'),
+        signUp:       (account: { url: string; username: string; email: string })     => request<ProviderSettings>('POST', '/provider/signup', account),
+        signIn:       (account: { url: string; username: string; password: string })  => request<ProviderSettings>('POST', '/provider/signin', account),
+        forget:       ()                                                              => request<ProviderSettings>('POST', '/provider/forget', {})
     },
 
     roamingNetwork: {

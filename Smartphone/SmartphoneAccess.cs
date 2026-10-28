@@ -30,12 +30,14 @@ namespace cloud.charging.open.Smartphone
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Two resources, because they are two different things to be trusted
+    /// Three resources, because they are three different things to be trusted
     /// with. The map is looked at by anybody who holds the phone; where it
     /// takes its charging stations from is a setting, and changing it points
     /// the phone at somebody else's idea of where one may charge. Charging is
     /// money: starting a session is what a driver does, and what a viewer of
-    /// the phone may not.
+    /// the phone may not. The account at the e-mobility provider is whose
+    /// money: a driver sees which it is, and only an administrator makes,
+    /// takes or forgets one.
     /// </para>
     /// <para>
     /// The node brings the viewer, who may look at everything, and the
@@ -62,9 +64,17 @@ namespace cloud.charging.open.Smartphone
         public const String  Charging  = "charging";
 
         /// <summary>
-        /// Both.
+        /// The account at the e-mobility provider: read, which provider and as
+        /// whom, and its account key; edited, an account made, taken or
+        /// forgotten - which binds the phone to somebody who pays for what is
+        /// charged with it.
         /// </summary>
-        public static readonly IReadOnlyList<String>  Resources = [ Map, Charging ];
+        public const String  Provider  = "provider";
+
+        /// <summary>
+        /// All three.
+        /// </summary>
+        public static readonly IReadOnlyList<String>  Resources = [ Map, Charging, Provider ];
 
         #endregion
 
@@ -78,8 +88,9 @@ namespace cloud.charging.open.Smartphone
         public static readonly Role  Driver  = new ("driver",
                                                     [ Permission.Read(Map),
                                                       Permission.Read(Charging),
-                                                      Permission.Run (Charging) ],
-                                                    "charges with this phone: looks at the map and the sessions, and starts and stops one");
+                                                      Permission.Run (Charging),
+                                                      Permission.Read(Provider) ],
+                                                    "charges with this phone: looks at the map, the sessions and the account at the e-mobility provider, and starts and stops a session");
 
         /// <summary>
         /// The one role a smartphone adds.
