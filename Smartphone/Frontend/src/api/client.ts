@@ -249,6 +249,20 @@ export interface ChargingTicketReference {
     issuerFingerprint:  string;
 }
 
+/** What a session keeps of its start through the e-mobility provider, as the provider countersigned it - and of its stop. */
+export interface ChargingStartReference {
+    /** The OCPI token of this start alone. */
+    token:                   string;
+    /** The OCPI authorization reference the provider sent the charge point operator. */
+    authorizationReference:  string;
+    /** The SHA-256 of the start request as the provider countersigned it, hex. */
+    requestDigest:           string;
+    countersignedAt:         string;
+    /** The SHA-256 of the stop request as the provider countersigned it, hex - once there was one. */
+    stopRequestDigest?:      string;
+    stopCountersignedAt?:    string;
+}
+
 /** The account of this phone at an e-mobility provider, as its page shows it: not its password, and not its key. */
 export interface ProviderAccount {
     url:           string;
@@ -293,6 +307,7 @@ export interface ChargingSession {
     stoppedBy?:       string;
     /** The charging ticket it was started with, where the phone has an e-mobility provider. */
     ticket?:          ChargingTicketReference;
+    start?:           ChargingStartReference;
 }
 
 /** The charging sessions of this phone, the newest first. */

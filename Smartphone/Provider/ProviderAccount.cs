@@ -205,7 +205,8 @@ namespace cloud.charging.open.Smartphone.Provider
     /// <summary>
     /// A ticket the provider issued to this phone for one start: the ticket as
     /// it was signed, and its key - kept, as a stop and the meter values of the
-    /// session will be proven with it.
+    /// session are proven with it - and the start and stop requests made with
+    /// it, as the provider countersigned them.
     /// </summary>
     /// <param name="Id">Its id, the 16 random bytes as hex.</param>
     /// <param name="Party">The provider it is good with.</param>
@@ -217,6 +218,8 @@ namespace cloud.charging.open.Smartphone.Provider
     /// <param name="IssuerFingerprint">The SHA-256 of the certificate of the provider's ticket issuer, hex.</param>
     /// <param name="EVSEId">The EVSE it was asked for.</param>
     /// <param name="IssuedAt">When the provider issued it.</param>
+    /// <param name="Start">The start request made with it, as the provider countersigned it.</param>
+    /// <param name="Stop">The stop request made with it, as the provider countersigned it.</param>
     public sealed record IssuedTicket(String          Id,
                                       String          Party,
                                       DateTimeOffset  NotBefore,
@@ -226,7 +229,9 @@ namespace cloud.charging.open.Smartphone.Provider
                                       String          KeyThumbprint,
                                       String          IssuerFingerprint,
                                       String          EVSEId,
-                                      DateTimeOffset  IssuedAt)
+                                      DateTimeOffset  IssuedAt,
+                                      Byte[]?         Start  = null,
+                                      Byte[]?         Stop   = null)
     {
 
         /// <summary>
@@ -236,18 +241,90 @@ namespace cloud.charging.open.Smartphone.Provider
 
             => new (Id, Party, NotBefore, NotAfter, KeyThumbprint, IssuerFingerprint);
 
-        public JObject ToStorageJSON()
+        /// <summary>
+        /// Its key.
+        /// </summary>
+        public ECDsa TicketKey()
+        {
+            var key = ECDsa.Create();
+            key.ImportFromPem(TicketKeyPEM);
+            return key;
+        }
 
-            => new (new JProperty("id",                 Id),
-                    new JProperty("party",              Party),
-                    new JProperty("notBefore",          NotBefore.ToString("o")),
-                    new JProperty("notAfter",           NotAfter. ToString("o")),
-                    new JProperty("ticket",             Convert.ToBase64String(Ticket)),
-                    new JProperty("ticketKey",          TicketKeyPEM),
-                    new JProperty("keyThumbprint",      KeyThumbprint),
-                    new JProperty("issuerFingerprint",  IssuerFingerprint),
-                    new JProperty("evseId",             EVSEId),
-                    new JProperty("issuedAt",           IssuedAt.ToString("o")));
+        public JObject ToStorageJSON()
+        {
+
+            var json = new JObject(
+                           new JProperty("id",                 Id),
+                           new JProperty("party",              Party),
+                           new JProperty("notBefore",          NotBefore.ToString("o")),
+                           new JProperty("notAfter",           NotAfter. ToString("o")),
+                           new JProperty("ticket",             Convert.ToBase64String(Ticket)),
+                           new JProperty("ticketKey",          TicketKeyPEM),
+                           new JProperty("keyThumbprint",      KeyThumbprint),
+                           new JProperty("issuerFingerprint",  IssuerFingerprint),
+                           new JProperty("evseId",             EVSEId),
+                           new JProperty("issuedAt",           IssuedAt.ToString("o"))
+                       );
+
+            if (Start is not null)
+                json.Add(new JProperty("start", Convert.ToBase64String(Start)));
+
+            if (Stop is not null)
+                json.Add(new JProperty("stop",  Convert.ToBase64String(Stop)));
+
+            return json;
+
+        }
+
+        /// <summary>
+        /// A ticket as its file kept it, its key with it.
+        /// </summary>
+        public static Boolean TryParseStorage(JObject                                 JSON,
+                                              [NotNullWhen(true)]  out IssuedTicket?  Ticket,
+                                              [NotNullWhen(false)] out String?        Error)
+        {
+
+            Ticket = null;
+
+            try
+            {
+
+                String         Text  (String Name) => JSON.Value<String>(Name) is { Length: > 0 } text ? text : throw new FormatException($"'{Name}' is missing.");
+                DateTimeOffset Time  (String Name) => DateTimeOffset.Parse(Text(Name), CultureInfo.InvariantCulture);
+                Byte[]?        Bytes (String Name) => JSON.Value<String>(Name) is { Length: > 0 } text ? Convert.FromBase64String(text) : null;
+
+                Ticket = new IssuedTicket(Text ("id"),
+                                          Text ("party"),
+                                          Time ("notBefore"),
+                                          Time ("notAfter"),
+                                          Bytes("ticket") ?? throw new FormatException("'ticket' is missing."),
+                                          Text ("ticketKey"),
+                                          Text ("keyThumbprint"),
+                                          Text ("issuerFingerprint"),
+                                          Text ("evseId"),
+                                          Time ("issuedAt"),
+                                          Bytes("start"),
+                                          Bytes("stop"));
+
+                // A key that is the ticket's, or none: it is what proves it.
+                using var key = Ticket.TicketKey();
+
+                if (ChargingTickets.Thumbprint(key) != Ticket.KeyThumbprint)
+                    throw new FormatException("its key is not the one of the ticket.");
+
+                Error = null;
+                return true;
+
+            }
+            catch (Exception e) when (e is FormatException or CryptographicException or ArgumentException)
+            {
+                Ticket  = null;
+                Error   = $"The charging ticket '{JSON.Value<String>("id") ?? "without an id"}' could not be read: {e.Message}";
+                return false;
+            }
+
+        }
 
     }
 
@@ -287,6 +364,68 @@ namespace cloud.charging.open.Smartphone.Provider
                 return null;
 
             return new ChargingTicketReference(id, party, notBefore, notAfter, key, issuer);
+
+        }
+
+    }
+
+
+    /// <summary>
+    /// What a charging session keeps of its start through the e-mobility
+    /// provider: the OCPI token of this start alone and the authorization
+    /// reference the provider sent the charge point operator, the SHA-256 of
+    /// the start request as the provider countersigned it and when it did -
+    /// and the same of the stop, once there was one. The requests themselves
+    /// are kept with the ticket.
+    /// </summary>
+    public sealed record ChargingStartReference(String           Token,
+                                                String           AuthorizationReference,
+                                                String           RequestDigest,
+                                                DateTimeOffset   CountersignedAt,
+                                                String?          StopRequestDigest    = null,
+                                                DateTimeOffset?  StopCountersignedAt  = null)
+    {
+
+        public JObject ToJSON()
+        {
+
+            var json = new JObject(
+                           new JProperty("token",                   Token),
+                           new JProperty("authorizationReference",  AuthorizationReference),
+                           new JProperty("requestDigest",           RequestDigest),
+                           new JProperty("countersignedAt",         CountersignedAt.ToString("o"))
+                       );
+
+            if (StopRequestDigest is not null && StopCountersignedAt is DateTimeOffset stopped)
+            {
+                json.Add(new JProperty("stopRequestDigest",    StopRequestDigest));
+                json.Add(new JProperty("stopCountersignedAt",  stopped.ToString("o")));
+            }
+
+            return json;
+
+        }
+
+        public static ChargingStartReference? TryParse(JToken? JSON)
+        {
+
+            if (JSON is not JObject json ||
+                json.Value<String>("token")                   is not { Length: > 0 } token    ||
+                json.Value<String>("authorizationReference")  is not { Length: > 0 } authRef  ||
+                json.Value<String>("requestDigest")           is not { Length: > 0 } digest   ||
+               !DateTimeOffset.TryParse(json.Value<String>("countersignedAt"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var countersignedAt))
+                return null;
+
+            var stopDigest = json.Value<String>("stopRequestDigest");
+
+            return new ChargingStartReference(token,
+                                              authRef,
+                                              digest,
+                                              countersignedAt,
+                                              stopDigest,
+                                              stopDigest is not null && DateTimeOffset.TryParse(json.Value<String>("stopCountersignedAt"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var stopped)
+                                                  ? stopped
+                                                  : null);
 
         }
 

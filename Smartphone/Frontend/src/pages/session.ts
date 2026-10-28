@@ -117,9 +117,11 @@ export const sessionPage: Page = {
 
                         ${session.simulated ? html`
                             <p class="small muted">
-                                Simulated: ${session.ticket !== undefined
-                                                 ? 'the e-mobility provider issued its ticket, and takes no start request yet'
-                                                 : 'no e-mobility provider was asked'}, and nothing was charged for real.
+                                ${session.start !== undefined
+                                      ? 'Started through the e-mobility provider, which countersigned the start. What it charged is simulated: no meter values reach this phone yet.'
+                                      : `Simulated: ${session.ticket !== undefined
+                                                          ? 'the e-mobility provider issued its ticket, and took no start request'
+                                                          : 'no e-mobility provider was asked'}, and nothing was charged for real.`}
                             </p>
                         ` : nothing}
 
@@ -142,6 +144,32 @@ export const sessionPage: Page = {
                                 A ticket of this start alone, with a key of its own, signed by the provider's ticket issuer
                                 and not by this phone's account: a charge point operator learns who pays, and not who
                                 charges. The key stays on this phone, to prove what is done with the ticket.
+                            </p>
+
+                        </section>
+                    ` : nothing}
+
+                    ${session.start !== undefined ? html`
+                        <section class="card session-start">
+
+                            <h2><i class="fa-solid fa-file-signature"></i> Start and stop</h2>
+
+                            <div class="kv-list">
+                                ${kv('Token',            html`<span class="mono">${session.start.token}</span>`)}
+                                ${kv('Reference',        html`<span class="commit">${session.start.authorizationReference}</span>`)}
+                                ${kv('Start request',    html`<span class="commit">${session.start.requestDigest}</span>`)}
+                                ${kv('Countersigned',    dayAndTime(session.start.countersignedAt))}
+                                ${session.start.stopRequestDigest !== undefined ? html`
+                                    ${kv('Stop request',  html`<span class="commit">${session.start.stopRequestDigest}</span>`)}
+                                    ${kv('Countersigned', dayAndTime(session.start.stopCountersignedAt ?? ''))}
+                                ` : nothing}
+                            </div>
+
+                            <p class="small muted">
+                                Signed on this phone by the ticket's key - this EVSE, this moment, this ticket - and
+                                countersigned by the provider, with a token of this start alone: the charge point operator
+                                holds both, as proof that the driver asked for exactly this and the provider pays for it.
+                                The stop names the start, and is countersigned with the same token.
                             </p>
 
                         </section>

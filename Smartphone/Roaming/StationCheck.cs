@@ -136,6 +136,16 @@ namespace cloud.charging.open.Smartphone.Roaming
         public Boolean                             Verified
             => Attestation is not null;
 
+        /// <summary>
+        /// The digest of the effective tree of the version the proof is of -
+        /// what a start request names as the version the driver saw - where the
+        /// proof holds.
+        /// </summary>
+        public Byte[]?                             EffectiveTree
+            => Verified && Proof?.TryCalculateETag(out var etag, out _) == true
+                   ? [ .. etag.Digest ]
+                   : null;
+
         #endregion
 
         #region Constructor(s)
@@ -255,10 +265,10 @@ namespace cloud.charging.open.Smartphone.Roaming
                 var currency = tariff["currency"]?.Value<String>() ?? "";
 
                 if (StatedElements(tariffId, EVSEId) is JArray stated && EnergyPrice(stated) is Decimal statedPrice)
-                    return new SmartphoneTariff(statedPrice, currency);
+                    return new SmartphoneTariff(statedPrice, currency, tariffId);
 
                 if (EnergyPrice(tariff["elements"] as JArray) is Decimal price)
-                    return new SmartphoneTariff(price, currency);
+                    return new SmartphoneTariff(price, currency, tariffId);
 
             }
 
@@ -370,12 +380,13 @@ namespace cloud.charging.open.Smartphone.Roaming
             json.Add(new JProperty("textMismatch",  TextMismatch));
 
             json.Add(new JProperty("roamingNetwork", new JObject(
-                         new JProperty("id",           network["@id"]?.Value<String>()),
-                         new JProperty("name",         RoamingNetworkClient.Text(network["name"])),
-                         new JProperty("description",  RoamingNetworkClient.Text(network["description"])),
-                         new JProperty("operator",     RoamingNetworkClient.Text(network["operator"]?["name"]) ?? network["operator"]?["@id"]?.Value<String>()),
-                         new JProperty("revision",     Proof.Revision),
-                         new JProperty("commitId",     Proof.CommitId?.ToString())
+                         new JProperty("id",             network["@id"]?.Value<String>()),
+                         new JProperty("name",           RoamingNetworkClient.Text(network["name"])),
+                         new JProperty("description",    RoamingNetworkClient.Text(network["description"])),
+                         new JProperty("operator",       RoamingNetworkClient.Text(network["operator"]?["name"]) ?? network["operator"]?["@id"]?.Value<String>()),
+                         new JProperty("revision",       Proof.Revision),
+                         new JProperty("commitId",       Proof.CommitId?.ToString()),
+                         new JProperty("effectiveTree",  EffectiveTree is Byte[] effectiveTree ? Convert.ToHexStringLower(effectiveTree) : null)
                      )));
 
             json.Add(new JProperty("attestation", new JObject(

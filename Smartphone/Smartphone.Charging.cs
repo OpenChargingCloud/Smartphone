@@ -17,8 +17,6 @@
 
 #region Usings
 
-using System.Diagnostics.CodeAnalysis;
-
 using Newtonsoft.Json.Linq;
 
 using cloud.charging.open.Smartphone.Charging;
@@ -43,7 +41,7 @@ namespace cloud.charging.open.Smartphone
         Conflict,
         /// <summary>The sessions could not be written down: nothing about the request was wrong.</summary>
         NotSaved,
-        /// <summary>The e-mobility provider issued no charging ticket for it, or could not be reached.</summary>
+        /// <summary>The e-mobility provider issued no charging ticket for it, started or stopped nothing, or could not be reached.</summary>
         Provider
     }
 
@@ -62,18 +60,34 @@ namespace cloud.charging.open.Smartphone
     }
 
 
+    /// <summary>
+    /// What came of "Stop": the session stopped, or why it was not.
+    /// </summary>
+    public sealed record ChargingStop(ChargingSession?  Session,
+                                      String?           Error,
+                                      ChargingRefusal   Refusal)
+    {
+
+        public static ChargingStop Refused(ChargingRefusal Refusal, String Error)
+            => new (null, Error, Refusal);
+
+    }
+
+
     public partial class Smartphone
     {
 
         #region StartChargingAsync(LocationId, EVSEUid, Who, CancellationToken = default)
 
         /// <summary>
-        /// Start charging at an EVSE of a station of the map - simulated, for
-        /// as long as the e-mobility provider takes no start requests. At a
-        /// station of a roaming network, only once the proof of its station was
-        /// checked and while it holds, for the price it gives. With an account
-        /// at an e-mobility provider, with a charging ticket of its own, asked
-        /// for right before the start and kept with the session.
+        /// Start charging at an EVSE of a station of the map. At a station of a
+        /// roaming network, only once the proof of its station was checked and
+        /// while it holds, for the price it gives. Without an account at an
+        /// e-mobility provider, simulated. With one, through it: a charging
+        /// ticket of its own, asked for right before the start, and a start
+        /// request signed by the ticket's key, which the provider countersigns
+        /// and sends the charge point operator - the session's figures
+        /// simulated, for as long as no meter values reach the phone.
         /// </summary>
         /// <param name="LocationId">The station, by the id the map gave it.</param>
         /// <param name="EVSEUid">Its EVSE, by the uid the map gave it.</param>
@@ -100,6 +114,10 @@ namespace cloud.charging.open.Smartphone
 
             Func<ChargingEVSE, DateTimeOffset, String> statusOf = DemoLocations.StatusOf;
 
+            // What the driver saw, for the start request to name.
+            Byte[]?  effectiveTree  = null;
+            String?  tariffId       = null;
+
             // Of a roaming network, only where the proof of its station was
             // checked and still holds: what it costs is what the proof says,
             // and a station nobody attested is no place to charge at.
@@ -122,15 +140,18 @@ namespace cloud.charging.open.Smartphone
                 if (tariff is null)
                     return ChargingStart.Refused(ChargingRefusal.Conflict, $"The proof of {evse.EVSEId} at {location.Name} names no price per kWh, and a simulated session counts with nothing else.");
 
-                location  = location with { Tariff = tariff };
-                statusOf  = (_, _) => EVSEStatus.Unknown;
+                location       = location with { Tariff = tariff };
+                statusOf       = (_, _) => EVSEStatus.Unknown;
+                effectiveTree  = station.EffectiveTree;
+                tariffId       = tariff.TariffId;
 
             }
 
             // With an account at an e-mobility provider: a ticket of its own for
             // this start - only where the start can be, so that no ticket is
-            // asked for in vain.
-            IssuedTicket? ticket = null;
+            // asked for in vain - and the start through the provider.
+            IssuedTicket?            ticket  = null;
+            ChargingStartReference?  start   = null;
 
             if (ProviderAccount is not null)
             {
@@ -151,15 +172,42 @@ namespace cloud.charging.open.Smartphone
                     return ChargingStart.Refused(ChargingRefusal.Provider, problem ?? "The e-mobility provider issued no charging ticket.");
                 }
 
+                (start, problem) = await StartThroughProviderAsync(ticket, evse.EVSEId, effectiveTree, tariffId, CancellationToken);
+
+                if (start is null)
+                {
+                    Log.Warning($"'{Who}' wanted to charge at {location.Name}, {evse.EVSEId}, and {ticket.Party} started nothing: {problem}", "charging", "provider");
+                    return ChargingStart.Refused(ChargingRefusal.Provider, problem ?? "The e-mobility provider started nothing.");
+                }
+
             }
 
-            if (!Sessions.TryStart(location, evse, statusOf, Who, ticket?.Reference, out var session, out var error, out var notSaved))
+            if (!Sessions.TryStart(location, evse, statusOf, Who, ticket?.Reference, start, out var session, out var error, out var notSaved))
+            {
+
+                // Started at the provider, and no session here to stop it with:
+                // stopped again, rather than left charging for nobody.
+                if (ticket is not null && start is not null)
+                {
+
+                    var (stopped, stopProblem) = await StopThroughProviderAsync(ticket.Reference, start, CancellationToken);
+
+                    Log.Warning($"{ticket.Party} started charging at {evse.EVSEId} for '{Who}', and this phone could not keep the session: {error} " +
+                                (stopped is not null ? "It was stopped again." : $"It could not be stopped again: {stopProblem}"),
+                                "charging", "provider");
+
+                }
+
                 return ChargingStart.Refused(notSaved ? ChargingRefusal.NotSaved : ChargingRefusal.Conflict, error);
+
+            }
 
             Log.Notice($"'{Who}' started charging at {location.Name}, {evse.EVSEId}, with {session.PowerKW:0.#} kW until {session.TargetEnergyKWh:0.#} kWh" +
                        (anchor is not null ? $" for {session.PricePerKWh:0.00##} {session.Currency} per kWh, as its checked proof says" : "") +
-                       (ticket is not null ? $", with the charging ticket {ticket.Id} of {ticket.Party}" : "") +
-                       $" - simulated: {(ticket is not null ? "the provider takes no start requests yet" : "no e-mobility provider was asked")}. The session is {session.Id}.",
+                       (ticket is not null && start is not null
+                            ? $", through {ticket.Party} with the charging ticket {ticket.Id} and the token {start.Token} - its figures simulated, as no meter values reach this phone yet"
+                            :  " - simulated: no e-mobility provider was asked") +
+                       $". The session is {session.Id}.",
                        "charging", "web");
 
             return new ChargingStart(session, null, ChargingRefusal.None);
@@ -168,34 +216,58 @@ namespace cloud.charging.open.Smartphone
 
         #endregion
 
-        #region TryStopCharging(Id, Who, out Session, out Error, out Refusal)
+        #region StopChargingAsync(Id, Who, CancellationToken = default)
 
         /// <summary>
-        /// Stop a charging session that is still charging.
+        /// Stop a charging session that is still charging - one started through
+        /// the e-mobility provider through it, with a stop request signed by the
+        /// ticket's key, and only once the provider countersigned it.
         /// </summary>
-        public Boolean TryStopCharging(String                                     Id,
-                                       String                                     Who,
-                                       [NotNullWhen(true)]  out ChargingSession?  Session,
-                                       [NotNullWhen(false)] out String?           Error,
-                                       out ChargingRefusal                        Refusal)
+        /// <param name="Id">The session.</param>
+        /// <param name="Who">Who asked, for the log and the session.</param>
+        /// <param name="CancellationToken">To stop asking the provider.</param>
+        public async Task<ChargingStop> StopChargingAsync(String             Id,
+                                                          String             Who,
+                                                          CancellationToken  CancellationToken = default)
         {
 
-            Refusal = ChargingRefusal.None;
+            var running = Sessions.Get(Id);
 
-            if (!Sessions.TryStop(Id, Who, out Session, out Error, out var notFound, out var notSaved))
+            if (running is null)
+                return ChargingStop.Refused(ChargingRefusal.NotFound, $"There is no charging session '{Id}' on this phone.");
+
+            if (!running.IsActiveAt(TimeProvider.GetUtcNow()))
+                return ChargingStop.Refused(ChargingRefusal.Conflict, $"The charging session '{Id}' is {running.StatusAt(TimeProvider.GetUtcNow()).ToString().ToLowerInvariant()} already.");
+
+            ChargingStartReference? stopped = null;
+
+            if (running.Ticket is not null && running.Start is not null)
             {
-                Refusal = notFound ? ChargingRefusal.NotFound
-                        : notSaved ? ChargingRefusal.NotSaved
-                        :            ChargingRefusal.Conflict;
-                return false;
+
+                (stopped, var problem) = await StopThroughProviderAsync(running.Ticket, running.Start, CancellationToken);
+
+                if (stopped is null)
+                {
+                    Log.Warning($"'{Who}' wanted to stop charging at {running.EVSEId} ({running.Id}), and {running.Ticket.Party} stopped nothing: {problem}", "charging", "provider");
+                    return ChargingStop.Refused(ChargingRefusal.Provider, problem ?? "The e-mobility provider stopped nothing.");
+                }
+
             }
 
-            var now = TimeProvider.GetUtcNow();
+            if (!Sessions.TryStop(Id, Who, stopped, out var session, out var error, out var notFound, out var notSaved))
+                return ChargingStop.Refused(notFound ? ChargingRefusal.NotFound
+                                          : notSaved ? ChargingRefusal.NotSaved
+                                          :            ChargingRefusal.Conflict,
+                                            stopped is not null
+                                                ? $"{running.Ticket!.Party} stopped the session, and this phone could not say so: {error}"
+                                                : error);
 
-            Log.Notice($"'{Who}' stopped charging at {Session.LocationName}, {Session.EVSEId}, after {Session.EnergyAt(now):0.###} kWh. The session was {Session.Id}.",
+            Log.Notice($"'{Who}' stopped charging at {session.LocationName}, {session.EVSEId}, after {session.EnergyAt(TimeProvider.GetUtcNow()):0.###} kWh" +
+                       (stopped is not null ? $", through {running.Ticket!.Party}, which countersigned the stop of the token {stopped.Token}" : "") +
+                       $". The session was {session.Id}.",
                        "charging", "web");
 
-            return true;
+            return new ChargingStop(session, null, ChargingRefusal.None);
 
         }
 

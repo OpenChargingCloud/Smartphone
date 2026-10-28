@@ -18,6 +18,7 @@
 #region Usings
 
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -39,13 +40,21 @@ namespace cloud.charging.open.Smartphone.Tests
     /// An e-mobility provider on the loopback, as far as a phone asks one: it
     /// signs accounts up and in - with a session in cookies, as Hermod's
     /// HTTPExtAPI does, and no HTTP Basic - certifies account keys from PKCS#10
-    /// requests below an account CA, and issues charging tickets - checked as
-    /// the EMSP checks them, and signed back without the account's signature,
-    /// with its ticket issuer's - all of it with the CBOR and COSE of Styx.
+    /// requests below an account CA, issues charging tickets - checked as the
+    /// EMSP checks them, and signed back without the account's signature, with
+    /// its ticket issuer's - and countersigns start and stop requests made with
+    /// them, as docs/RemoteStartWithChargingTickets.md says, with a token of
+    /// each start alone: all of it with the CBOR and COSE of Styx. It starts
+    /// nothing anywhere: there is no charge point operator behind it.
     /// </summary>
     /// <remarks>
-    /// Where told to misbehave, it sends back tickets a phone has to refuse:
-    /// with the account's signature still in them, or with another payload.
+    /// Where told to misbehave, it sends back what a phone has to refuse: a
+    /// ticket with the account's signature still in it, or with another
+    /// payload; a start countersigned with the token where its signature does
+    /// not cover it, by another key than its ticket issuer's, an hour off, or
+    /// with the phone's own signature replaced; a stop countersigned with
+    /// another token than its start's - or it refuses the start, or knows of
+    /// none, as the EMSP does not yet.
     /// </remarks>
     public sealed class TestEMSP : IAsyncDisposable
     {
@@ -65,6 +74,11 @@ namespace cloud.charging.open.Smartphone.Tests
         private          Int32                                            signIns;
         private readonly ConcurrentDictionary<String, (String Owner, X509Certificate2 Certificate, Boolean Revoked)>  accountKeys  = new();
         private readonly ConcurrentQueue<(String Owner, Byte[] Request, Byte[] Issued)>                             tickets      = new();
+        private readonly ConcurrentDictionary<String, String>                                                       ticketIds    = new();
+        private readonly ConcurrentDictionary<String, Byte>                                                         nonces       = new();
+        private readonly ConcurrentQueue<StartOrStop>                                                               starts       = new();
+        private readonly ConcurrentQueue<StartOrStop>                                                               stops        = new();
+        private readonly ConcurrentDictionary<String, StartOrStop>                                                  started      = new();
 
         #endregion
 
@@ -78,9 +92,25 @@ namespace cloud.charging.open.Smartphone.Tests
             => $"http://127.0.0.1:{server.TCPPort}/";
 
         /// <summary>
-        /// How it misbehaves: "keepAccountSignature" or "changePayload", or not at all.
+        /// How it misbehaves: "keepAccountSignature" or "changePayload" with a
+        /// ticket; "takesNoStarts", "refuseStart", "countersignUnprotected",
+        /// "countersignWithOtherKey", "countersignAnHourOff" or "replaceOwnSignature"
+        /// with a start;
+        /// "otherTokenOnStop" with a stop - or not at all.
         /// </summary>
         public String? Misbehave  { get; set; }
+
+        /// <summary>
+        /// The starts it countersigned, the first first.
+        /// </summary>
+        public IReadOnlyList<StartOrStop> Starts
+            => [ .. starts ];
+
+        /// <summary>
+        /// The stops it countersigned, the first first.
+        /// </summary>
+        public IReadOnlyList<StartOrStop> Stops
+            => [ .. stops ];
 
         /// <summary>
         /// The tickets it issued: to whom, the request as it came, the ticket as it went.
@@ -142,6 +172,8 @@ namespace cloud.charging.open.Smartphone.Tests
             api.AddHandler(HTTPPath.Parse("/api/v1/tickets"),                   request => Task.FromResult(emsp.PostTicket(request)),    HTTPMethod.POST);
             api.AddHandler(HTTPPath.Parse("/api/v1/account-keys"),              request => Task.FromResult(emsp.PostAccountKey(request)), HTTPMethod.POST);
             api.AddHandler(HTTPPath.Parse("/api/v1/account-keys/{id}/revoke"),  request => Task.FromResult(emsp.RevokeKey(request)),     HTTPMethod.POST);
+            api.AddHandler(HTTPPath.Parse("/api/v1/tickets/{id}/start"),        request => Task.FromResult(emsp.PostStart(request)),     HTTPMethod.POST);
+            api.AddHandler(HTTPPath.Parse("/api/v1/tickets/{id}/stop"),         request => Task.FromResult(emsp.PostStop(request)),      HTTPMethod.POST);
 
             await server.Start();
 
@@ -392,6 +424,7 @@ namespace cloud.charging.open.Smartphone.Tests
                                      ToByteArray();
 
                 tickets.Enqueue((user, bytes, issued));
+                ticketIds[Convert.ToHexStringLower(Of(payload, CBORValue.FromText("id")).AsBytes())] = user;
 
                 return JSON(Request, HTTPStatusCode.Created, new JObject(
                            new JProperty("message",  "Signed."),
@@ -403,6 +436,323 @@ namespace cloud.charging.open.Smartphone.Tests
             catch (Exception e) when (e is FormatException or InvalidOperationException or InvalidCastException or CryptographicException)
             {
                 return Refused(Request, "It is no charging ticket: " + e.Message);
+            }
+
+        }
+
+        #endregion
+
+
+        #region (private) PostStart(Request) / PostStop(Request)
+
+        /// <summary>
+        /// A start request, with the ticket it names: the ticket one this EMSP
+        /// issued to whoever asks and good now, the request signed by the
+        /// ticket's key alone, near this clock, its nonce new - countersigned,
+        /// with a token of this start alone in the protected header.
+        /// </summary>
+        private HTTPResponse PostStart(HTTPRequest Request)
+        {
+
+            if (WhoIs(Request) is not String user)
+                return Unauthorized(Request);
+
+            if (Misbehave == "refuseStart")
+                return JSON(Request, HTTPStatusCode.Conflict, new JObject(new JProperty("error", "This EMSP is peered with no charge point operator of that EVSE.")));
+
+            // As an EMSP answers that has no such route.
+            if (Misbehave == "takesNoStarts")
+                return new HTTPResponse.Builder(Request) {
+                           HTTPStatusCode  = HTTPStatusCode.NotFound,
+                           Connection      = ConnectionType.Close
+                       };
+
+            var json = JObject.Parse(Request.HTTPBodyAsUTF8String ?? "{}");
+
+            try
+            {
+
+                var ticket   = Convert.FromBase64String(json.Value<String>("ticket")  ?? "");
+                var request  = Convert.FromBase64String(json.Value<String>("request") ?? "");
+
+                if (!TryTicketOf(user, Request.ParsedURLParameters.ElementAtOrDefault(0) ?? "", ticket, out var ticketKey, out var refusal))
+                    return Refused(Request, refusal);
+
+                using (ticketKey)
+                {
+
+                    if (!TryRequestOf(request, StartRequests.StartContentType, StartRequests.StartType, ticket, ticketKey, out var start, out var payload, out refusal))
+                        return Refused(Request, refusal);
+
+                    if (payload.TryGetValue(CBORValue.FromText("evse"), out var evse) is false || !evse.TryGetText(out _))
+                        return Refused(Request, "A start request names its EVSE.");
+
+                    var token          = "T-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(8));
+                    var authRef        = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+                    var countersigned  = Countersign(start, ticketKey, token, authRef);
+                    var done           = new StartOrStop(user, request, countersigned, token, authRef);
+
+                    starts.Enqueue(done);
+                    started[Convert.ToHexStringLower(SHA256.HashData(countersigned))] = done;
+
+                    return JSON(Request, HTTPStatusCode.OK, new JObject(
+                               new JProperty("message",  "Countersigned, and sent to the charge point operator."),
+                               new JProperty("request",  Convert.ToBase64String(countersigned)),
+                               new JProperty("token",    token),
+                               new JProperty("authRef",  authRef)
+                           ));
+
+                }
+
+            }
+            catch (Exception e) when (e is FormatException or InvalidOperationException or InvalidCastException or CryptographicException)
+            {
+                return Refused(Request, "No start request with its ticket: " + e.Message);
+            }
+
+        }
+
+        /// <summary>
+        /// A stop request, with the ticket and the start it names: the start one
+        /// this EMSP countersigned for whoever asks, not stopped yet -
+        /// countersigned with the token and the reference of that start.
+        /// </summary>
+        private HTTPResponse PostStop(HTTPRequest Request)
+        {
+
+            if (WhoIs(Request) is not String user)
+                return Unauthorized(Request);
+
+            var json = JObject.Parse(Request.HTTPBodyAsUTF8String ?? "{}");
+
+            try
+            {
+
+                var ticket   = Convert.FromBase64String(json.Value<String>("ticket")  ?? "");
+                var start    = Convert.FromBase64String(json.Value<String>("start")   ?? "");
+                var request  = Convert.FromBase64String(json.Value<String>("request") ?? "");
+
+                if (!TryTicketOf(user, Request.ParsedURLParameters.ElementAtOrDefault(0) ?? "", ticket, out var ticketKey, out var refusal))
+                    return Refused(Request, refusal);
+
+                using (ticketKey)
+                {
+
+                    var startDigest = SHA256.HashData(start);
+
+                    if (!started.TryGetValue(Convert.ToHexStringLower(startDigest), out var ofStart) || ofStart.Owner != user)
+                        return Refused(Request, "This EMSP countersigned no such start of yours.");
+
+                    if (stops.Any(stop => stop.Token == ofStart.Token))
+                        return JSON(Request, HTTPStatusCode.Conflict, new JObject(new JProperty("error", $"The session of {ofStart.Token} is stopped already.")));
+
+                    if (!TryRequestOf(request, StartRequests.StopContentType, StartRequests.StopType, ticket, ticketKey, out var stop, out var payload, out refusal))
+                        return Refused(Request, refusal);
+
+                    if (!payload.TryGetValue(CBORValue.FromText("start"), out var namedStart) || !namedStart.TryGetBytes(out var named) || !named.AsSpan().SequenceEqual(startDigest))
+                        return Refused(Request, "The stop request names another start than the one it came with.");
+
+                    var token          = Misbehave == "otherTokenOnStop" ? "T-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(8)) : ofStart.Token;
+                    var countersigned  = Countersign(stop, ticketKey, token, ofStart.AuthRef);
+
+                    stops.Enqueue(new StartOrStop(user, request, countersigned, token, ofStart.AuthRef));
+
+                    return JSON(Request, HTTPStatusCode.OK, new JObject(
+                               new JProperty("message",  "Countersigned, and sent to the charge point operator."),
+                               new JProperty("request",  Convert.ToBase64String(countersigned))
+                           ));
+
+                }
+
+            }
+            catch (Exception e) when (e is FormatException or InvalidOperationException or InvalidCastException or CryptographicException)
+            {
+                return Refused(Request, "No stop request with its ticket and its start: " + e.Message);
+            }
+
+        }
+
+        #endregion
+
+        #region (private) TryTicketOf(User, Id, Ticket, out TicketKey, out Refusal)
+
+        /// <summary>
+        /// The key of a ticket a request came with: one this EMSP signed as its
+        /// ticket issuer, issued to the given user by the given id, and good now.
+        /// </summary>
+        private Boolean TryTicketOf(String                                   User,
+                                    String                                   Id,
+                                    Byte[]                                   Ticket,
+                                    [NotNullWhen(true)]  out ECDsa?          TicketKey,
+                                    [NotNullWhen(false)] out String?         Refusal)
+        {
+
+            TicketKey = null;
+
+            if (!COSESign.TryParse(Ticket, out var ticket, out var error))
+            {
+                Refusal = "The ticket is no COSE_Sign: " + error;
+                return false;
+            }
+
+            if (!ticket.Signatures.Any(signature => ticket.Verify(signature, ChargingTickets.PublicKeyOf(issuerKey), out _, ExpectedAlgorithm: COSEAlgorithm.ES256)))
+            {
+                Refusal = "The ticket is not signed by this EMSP's ticket issuer.";
+                return false;
+            }
+
+            var payload = CBORValue.Parse(ticket.Payload ?? []);
+
+            if (!payload.TryGetValue(CBORValue.FromText("id"), out var id) || Convert.ToHexStringLower(id.AsBytes()) != Id.ToLowerInvariant() ||
+                !ticketIds.TryGetValue(Id.ToLowerInvariant(), out var owner) || owner != User)
+            {
+                Refusal = $"This EMSP issued you no ticket '{Id}'.";
+                return false;
+            }
+
+            if (!payload.TryGetValue(CBORValue.FromText("exp"), out var exp) || exp.AsInt64() <= DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+            {
+                Refusal = $"The ticket '{Id}' is good no more.";
+                return false;
+            }
+
+            payload.TryGetValue(CBORValue.FromText("key"), out var key);
+            key.TryGetValue(CBORValue.FromInt64(-2), out var x);
+            key.TryGetValue(CBORValue.FromInt64(-3), out var y);
+
+            TicketKey = ECDsa.Create(new ECParameters {
+                            Curve  = ECCurve.NamedCurves.nistP256,
+                            Q      = new ECPoint { X = x.AsBytes(), Y = y.AsBytes() }
+                        });
+
+            Refusal = null;
+            return true;
+
+        }
+
+        #endregion
+
+        #region (private) TryRequestOf(Bytes, ContentType, Type, Ticket, TicketKey, out Request, out Payload, out Refusal)
+
+        /// <summary>
+        /// A start or a stop request: of its content type and type, naming the
+        /// ticket it came with, signed by the ticket's key alone, near this
+        /// clock, and with a nonce never seen before.
+        /// </summary>
+        private Boolean TryRequestOf(Byte[]                                    Bytes,
+                                     String                                    ContentType,
+                                     String                                    Type,
+                                     Byte[]                                    Ticket,
+                                     ECDsa                                     TicketKey,
+                                     [NotNullWhen(true)]  out COSESign?        Request,
+                                     out CBORValue                             Payload,
+                                     [NotNullWhen(false)] out String?          Refusal)
+        {
+
+            Payload = CBORValue.Null;
+
+            if (!COSESign.TryParse(Bytes, out Request, out var error))
+            {
+                Refusal = "The request is no COSE_Sign: " + error;
+                return false;
+            }
+
+            if (Request.ProtectedHeader.ContentType?.TryGetText(out var contentType) != true || contentType != ContentType)
+            {
+                Refusal = $"The body's protected header says it is no '{ContentType}'.";
+                return false;
+            }
+
+            Payload = CBORValue.Parse(Request.Payload ?? []);
+
+            if (!Payload.TryGetValue(CBORValue.FromText("typ"), out var typ) || typ.AsText() != Type ||
+                !Payload.TryGetValue(CBORValue.FromText("v"),   out var v)   || v.AsInt64()  != StartRequests.Version)
+            {
+                Refusal = $"It is no {Type} of version 1.";
+                return false;
+            }
+
+            if (!Payload.TryGetValue(CBORValue.FromText("ticket"), out var named) || !named.AsBytes().AsSpan().SequenceEqual(SHA256.HashData(Ticket)))
+            {
+                Refusal = "The request names another ticket than the one it came with.";
+                return false;
+            }
+
+            if (Request.Signatures.Count != 1 || Request.Signatures[0].ProtectedHeader.KeyIdentifier?.AsSpan().SequenceEqual(ChargingTickets.TicketKeyId) != true ||
+               !Request.Verify(Request.Signatures[0], ChargingTickets.PublicKeyOf(TicketKey), out _, ExpectedAlgorithm: COSEAlgorithm.ES256))
+            {
+                Refusal = "The request is not signed by the ticket's key, and by nobody else.";
+                return false;
+            }
+
+            if (!Payload.TryGetValue(CBORValue.FromText("at"), out var at) || Math.Abs(at.AsInt64() - DateTimeOffset.UtcNow.ToUnixTimeSeconds()) > 300)
+            {
+                Refusal = "The request was made more than five minutes from now.";
+                return false;
+            }
+
+            if (!Payload.TryGetValue(CBORValue.FromText("nonce"), out var nonce) || nonce.AsBytes().Length != 16 || !nonces.TryAdd(Convert.ToHexString(nonce.AsBytes()), 0))
+            {
+                Refusal = "The request's nonce is no 16 bytes, or was seen before.";
+                return false;
+            }
+
+            Refusal = null;
+            return true;
+
+        }
+
+        #endregion
+
+        #region (private) Countersign(Request, TicketKey, Token, AuthRef)
+
+        /// <summary>
+        /// The request with this EMSP's signature added, the token, the
+        /// reference and the time in its protected header - or as told to
+        /// misbehave.
+        /// </summary>
+        private Byte[] Countersign(COSESign  Request,
+                                   ECDsa     TicketKey,
+                                   String    Token,
+                                   String    AuthRef)
+        {
+
+            var issuerKid  = SHA256.HashData(issuer.RawData);
+            var now        = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + (Misbehave == "countersignAnHourOff" ? 3600 : 0);
+            var signed     = COSEHeaders.Create(COSEAlgorithm.ES256, issuerKid).
+                                 Set(CBORValue.FromText(StartRequests.TokenLabel),     CBORValue.FromText(Token)).
+                                 Set(CBORValue.FromText(StartRequests.AuthRefLabel),   CBORValue.FromText(AuthRef)).
+                                 Set(CBORValue.FromText(StartRequests.SignedAtLabel),  CBORValue.FromInt64(now));
+
+            using var otherKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+
+            switch (Misbehave)
+            {
+
+                case "countersignUnprotected":
+                    return Request.AddSignature(ChargingTickets.PrivateKeyOf(issuerKey),
+                                                COSEHeaders.Create(COSEAlgorithm.ES256, issuerKid).
+                                                    Set(CBORValue.FromText(StartRequests.SignedAtLabel), CBORValue.FromInt64(now)),
+                                                COSEHeaders.Empty.
+                                                    Set(CBORValue.FromText(StartRequests.TokenLabel),    CBORValue.FromText(Token)).
+                                                    Set(CBORValue.FromText(StartRequests.AuthRefLabel),  CBORValue.FromText(AuthRef))).
+                                   ToByteArray();
+
+                case "countersignWithOtherKey":
+                    return Request.AddSignature(ChargingTickets.PrivateKeyOf(otherKey), signed).ToByteArray();
+
+                case "replaceOwnSignature":
+                    return COSESign.Sign(Request.Payload!,
+                                         ChargingTickets.PrivateKeyOf(otherKey),
+                                         COSEHeaders.Create(COSEAlgorithm.ES256, ChargingTickets.TicketKeyId),
+                                         BodyProtectedHeader:  Request.ProtectedHeader,
+                                         CanonicalizePayload:  false).
+                                   AddSignature(ChargingTickets.PrivateKeyOf(issuerKey), signed).
+                                   ToByteArray();
+
+                default:
+                    return Request.AddSignature(ChargingTickets.PrivateKeyOf(issuerKey), signed).ToByteArray();
+
             }
 
         }
@@ -457,5 +807,16 @@ namespace cloud.charging.open.Smartphone.Tests
         }
 
     }
+
+
+    /// <summary>
+    /// A start or a stop the test EMSP countersigned: for whom, the request as
+    /// it came, as it went, and the token and the reference of its start.
+    /// </summary>
+    public sealed record StartOrStop(String  Owner,
+                                     Byte[]  Request,
+                                     Byte[]  Countersigned,
+                                     String  Token,
+                                     String  AuthRef);
 
 }

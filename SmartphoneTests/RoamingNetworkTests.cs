@@ -59,6 +59,7 @@ namespace cloud.charging.open.Smartphone.Tests
         private Uri?                 address;
         private TestRoamingNetwork?  network;
         private TestRoamingNetwork?  other;
+        private TestEMSP?            emsp;
 
         #endregion
 
@@ -84,11 +85,15 @@ namespace cloud.charging.open.Smartphone.Tests
             if (other is not null)
                 await other.DisposeAsync();
 
+            if (emsp is not null)
+                await emsp.DisposeAsync();
+
             // One instance runs every test of the fixture: a network of the
             // test before, disposed, is none of the next.
             smartphone  = null;
             network     = null;
             other       = null;
+            emsp        = null;
 
             try
             {
@@ -551,6 +556,55 @@ namespace cloud.charging.open.Smartphone.Tests
             var dc = map["locations"]![0]!["evses"]!.Single(evse => evse["evse_id"]!.Value<String>() == TestRoamingNetwork.DCEVSE);
 
             Assert.That(dc["status"]!.Value<String>(), Is.EqualTo("CHARGING"), "this phone charges there");
+
+        }
+
+        #endregion
+
+        #region AStartThroughTheProviderNamesWhatTheDriverSaw()
+
+        /// <summary>
+        /// With an account at an e-mobility provider, the start request at a
+        /// checked station names what the driver saw: the version of the
+        /// station's proof the phone checked, by the digest of its effective
+        /// tree, and the tariff its price is of.
+        /// </summary>
+        [Test]
+        public async Task AStartThroughTheProviderNamesWhatTheDriverSaw()
+        {
+
+            emsp = await TestEMSP.Start();
+
+            using var admin  = await WithTheRoamingNetwork();
+            using var driver = await SignedInAs("driver1", "driver");
+
+            var (status, signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp.URL, username = "phone1", email = "phone1@example.org" });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), signedUp.ToString());
+
+            (status, var check) = await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            Assert.That(check["verified"]!.Value<Boolean>(), Is.True, check.ToString());
+
+            var effectiveTree = check["stations"]!.Single(station => station["stationId"]!.Value<String>() == TestRoamingNetwork.DCStation)!["roamingNetwork"]!["effectiveTree"]!.Value<String>();
+
+            (status, var session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            var payload = CBORValue.Parse(COSESign.Parse(emsp.Starts.Single().Request).Payload!);
+
+            CBORValue Of(String Key) => payload.TryGetValue(CBORValue.FromText(Key), out var value) ? value : throw new AssertionException($"'{Key}' is not in the start request.");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(effectiveTree,                                   Has.Length.EqualTo(64), check.ToString());
+                Assert.That(Convert.ToHexStringLower(Of("proof").AsBytes()), Is.EqualTo(effectiveTree), "the start names another version than the one checked");
+                Assert.That(Of("tariff").AsText(),                           Is.EqualTo(TestRoamingNetwork.DCTariff));
+                Assert.That(Of("evse").AsText(),                             Is.EqualTo(TestRoamingNetwork.DCEVSE));
+                Assert.That(session["start"]!["token"]!.Value<String>(),     Is.EqualTo(emsp.Starts.Single().Token));
+                Assert.That(session["cost"]!["pricePerKWh"]!.Value<Decimal>(), Is.EqualTo(0.65m));
+            }
 
         }
 

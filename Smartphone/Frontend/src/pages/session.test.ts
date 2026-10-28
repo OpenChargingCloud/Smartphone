@@ -78,6 +78,34 @@ describe('a charging session', () => {
         assert.match(ticket, /DE\*GDF/);
         assert.match(ticket, /6cab95a41a13b2c42f552b7c81248078b3f319afe7d3caf133bc4b4dbead1605/);
         assert.match(root.textContent!, /the e-mobility provider issued its ticket/);
+        assert.equal(root.querySelector('.session-start'), null, 'a start through the provider nobody made');
+
+    });
+
+    it('names the start and the stop the provider countersigned', async () => {
+
+        current = session({ status: 'stopped', endedAt: '2026-10-10T08:10:00Z', stoppedBy: 'root',
+                            ticket: { id: '9f2c41d08a7e3b65c0ffee0123456789', party: 'DE*GDF',
+                                      notBefore: '2026-10-10T08:00:00Z', notAfter: '2026-10-10T09:00:00Z',
+                                      keyThumbprint: '6cab95a41a13b2c42f552b7c81248078b3f319afe7d3caf133bc4b4dbead1605',
+                                      issuerFingerprint: '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0' },
+                            start:  { token: 'T-9F2C41D08A7E3B65', authorizationReference: '8e1c0ffee0123456789abcdef0123456',
+                                      requestDigest: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
+                                      countersignedAt: '2026-10-10T08:00:02Z',
+                                      stopRequestDigest: 'ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100',
+                                      stopCountersignedAt: '2026-10-10T08:10:01Z' } });
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                                smartphone, root => root.querySelector('.session-start') !== null);
+
+        const start = root.querySelector('.session-start')!.textContent!;
+
+        assert.match(start, /T-9F2C41D08A7E3B65/);
+        assert.match(start, /8e1c0ffee0123456789abcdef0123456/);
+        assert.match(start, /a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90/);
+        assert.match(start, /ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100/);
+        assert.match(root.textContent!, /Started through the e-mobility provider, which countersigned the start/);
+        assert.doesNotMatch(root.textContent!, /nothing was charged for real/);
 
     });
 

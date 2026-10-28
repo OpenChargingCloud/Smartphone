@@ -212,10 +212,11 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// POST /api/v1/charging/sessions with { "locationId", "evseUid" }:
-        /// start charging there - simulated, with a charging ticket of its own
-        /// where the phone has an e-mobility provider. 201 with the session;
-        /// 404 where the station or its EVSE is not on the map; 409 where the
-        /// EVSE is not available; 502 where the provider issued no ticket.
+        /// start charging there - simulated, or through the e-mobility provider
+        /// with a charging ticket of its own where the phone has one. 201 with
+        /// the session; 404 where the station or its EVSE is not on the map;
+        /// 409 where the EVSE is not available; 502 where the provider issued
+        /// no ticket or started nothing.
         /// </summary>
         private async Task<HTTPResponse> PostChargingSession(HTTPRequest Request)
         {
@@ -244,20 +245,22 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// POST /api/v1/charging/sessions/{id}/stop: stop a session that is
-        /// still charging. 409 where it is over already.
+        /// still charging - through the e-mobility provider where it was
+        /// started through it. 409 where it is over already; 502 where the
+        /// provider stopped nothing, and the session goes on.
         /// </summary>
-        private Task<HTTPResponse> PostStopChargingSession(HTTPRequest Request)
+        private async Task<HTTPResponse> PostStopChargingSession(HTTPRequest Request)
         {
 
             if (!TryAuthorize(Request, Permission.Run(SmartphoneAccess.Charging), true, out var user, out var refused))
-                return Task.FromResult(refused);
+                return refused;
 
-            if (!Smartphone.TryStopCharging(IdOf(Request), user.Id.ToString(), out var session, out var error, out var refusal))
-                return Task.FromResult(Refused(Request, refusal, error));
+            var stop = await Smartphone.StopChargingAsync(IdOf(Request), user.Id.ToString());
 
-            return Task.FromResult(
-                       JSONResponse(Request, HTTPStatusCode.OK, session.ToJSON(Smartphone.TimeProvider.GetUtcNow()))
-                   );
+            if (stop.Session is null)
+                return Refused(Request, stop.Refusal, stop.Error ?? "Nothing was stopped.");
+
+            return JSONResponse(Request, HTTPStatusCode.OK, stop.Session.ToJSON(Smartphone.TimeProvider.GetUtcNow()));
 
         }
 

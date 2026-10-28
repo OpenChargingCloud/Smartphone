@@ -122,10 +122,12 @@ namespace cloud.charging.open.Smartphone.Map
 
     /// <summary>
     /// What charging at a location costs - one price per kWh, which is all a
-    /// demo station says and all the simulated session counts with.
+    /// demo station says and all the simulated session counts with - and, at a
+    /// station of a roaming network, the tariff of its proof it is of.
     /// </summary>
     public sealed record ChargingTariff(Decimal  PricePerKWh,
-                                        String   Currency);
+                                        String   Currency,
+                                        String?  TariffId  = null);
 
 
     /// <summary>

@@ -63,7 +63,9 @@ export const chargingPage: Page = {
 
                 ${current?.simulated ? html`
                     <div class="notice small">
-                        Simulated: no e-mobility provider is asked yet, and nothing is charged for real.
+                        ${active.some(session => session.start !== undefined)
+                              ? 'Simulated figures: no meter values reach this phone yet. A session not started through an e-mobility provider charges nothing for real.'
+                              : 'Simulated: no e-mobility provider is asked yet, and nothing is charged for real.'}
                     </div>
                 ` : nothing}
 

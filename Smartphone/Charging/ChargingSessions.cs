@@ -150,7 +150,7 @@ namespace cloud.charging.open.Smartphone.Charging
 
         #endregion
 
-        #region TryStart(Location, EVSE, StatusNow, StartedBy, out Session, out Error, out Conflict)
+        #region TryStart(Location, EVSE, StatusOf, StartedBy, Ticket, Start, out Session, out Error, out NotSaved)
 
         /// <summary>
         /// Start a session at an EVSE of a location - where it is available, or
@@ -161,6 +161,7 @@ namespace cloud.charging.open.Smartphone.Charging
         /// <param name="StatusOf">What an EVSE says of itself now, before this phone is taken into account.</param>
         /// <param name="StartedBy">Who started it.</param>
         /// <param name="Ticket">The charging ticket it is started with, where the phone has an e-mobility provider.</param>
+        /// <param name="Start">Its start, as the provider countersigned it.</param>
         /// <param name="Session">The session started.</param>
         /// <param name="Error">Why none was.</param>
         /// <param name="NotSaved">True where the file could not be written: nothing about the request was wrong, and nothing was started.</param>
@@ -169,6 +170,7 @@ namespace cloud.charging.open.Smartphone.Charging
                                 Func<ChargingEVSE, DateTimeOffset, String> StatusOf,
                                 String                                     StartedBy,
                                 ChargingTicketReference?                   Ticket,
+                                ChargingStartReference?                    Start,
                                 [NotNullWhen(true)]  out ChargingSession?  Session,
                                 [NotNullWhen(false)] out String?           Error,
                                 out Boolean                                NotSaved)
@@ -199,7 +201,7 @@ namespace cloud.charging.open.Smartphone.Charging
                     return false;
                 }
 
-                var started = ChargingSession.New(NewId(), Location, EVSE, now, StartedBy, Ticket);
+                var started = ChargingSession.New(NewId(), Location, EVSE, now, StartedBy, Ticket, Start);
 
                 sessions.Add(started);
 
@@ -219,13 +221,15 @@ namespace cloud.charging.open.Smartphone.Charging
 
         #endregion
 
-        #region TryStop(Id, StoppedBy, out Session, out Error, out NotFound, out NotSaved)
+        #region TryStop(Id, StoppedBy, Stopped, out Session, out Error, out NotFound, out NotSaved)
 
         /// <summary>
-        /// Stop a session that is still charging.
+        /// Stop a session that is still charging - with its start as the
+        /// provider countersigned the stop, where it was started through one.
         /// </summary>
         public Boolean TryStop(String                                     Id,
                                String                                     StoppedBy,
+                               ChargingStartReference?                    Stopped,
                                [NotNullWhen(true)]  out ChargingSession?  Session,
                                [NotNullWhen(false)] out String?           Error,
                                out Boolean                                NotFound,
@@ -257,7 +261,7 @@ namespace cloud.charging.open.Smartphone.Charging
                     return false;
                 }
 
-                var stopped = running with { StoppedAt = now, StoppedBy = StoppedBy };
+                var stopped = running with { StoppedAt = now, StoppedBy = StoppedBy, Start = Stopped ?? running.Start };
 
                 sessions[index] = stopped;
 

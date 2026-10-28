@@ -125,7 +125,8 @@ export const providerPage: Page = {
                     <p class="small muted">
                         Every "Charge now!" asks for a ticket of its own: a key made for that start alone, good for
                         ${validity} minutes, signed by the provider's ticket issuer. A charge point operator sees that key
-                        and the provider, never this account - and no two sessions with the same key.
+                        and the provider, never this account - and no two sessions with the same key. The start and
+                        the stop are requests signed by that key, which the provider countersigns.
                     </p>
 
                 </section>

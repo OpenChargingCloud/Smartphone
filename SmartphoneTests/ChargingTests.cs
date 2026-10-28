@@ -252,20 +252,20 @@ namespace cloud.charging.open.Smartphone.Tests
             var clock     = new SetClock(Monday);
             var sessions  = SessionsIn(clock);
 
-            Assert.That(sessions.TryStart(Holzmarkt, Holzmarkt.EVSEs[0], AllFree, "root", null, out var started, out var error, out _), Is.True, error);
+            Assert.That(sessions.TryStart(Holzmarkt, Holzmarkt.EVSEs[0], AllFree, "root", null, null, out var started, out var error, out _), Is.True, error);
 
-            var again     = sessions.TryStart(Holzmarkt, Holzmarkt.EVSEs[0], AllFree, "root", null, out _, out var twice, out _);
-            var busy      = sessions.TryStart(Lobeda, Lobeda.EVSEs[0], (_, _) => EVSEStatus.Charging, "root", null, out _, out var notFree, out _);
-            var parallel  = sessions.TryStart(Lobeda, Lobeda.EVSEs[1], AllFree, "root", null, out var second, out _, out _);
-
-            clock.Advance(TimeSpan.FromMinutes(30));
-
-            var stopped   = sessions.TryStop(started!.Id, "root", out var stoppedSession, out _, out _, out _);
+            var again     = sessions.TryStart(Holzmarkt, Holzmarkt.EVSEs[0], AllFree, "root", null, null, out _, out var twice, out _);
+            var busy      = sessions.TryStart(Lobeda, Lobeda.EVSEs[0], (_, _) => EVSEStatus.Charging, "root", null, null, out _, out var notFree, out _);
+            var parallel  = sessions.TryStart(Lobeda, Lobeda.EVSEs[1], AllFree, "root", null, null, out var second, out _, out _);
 
             clock.Advance(TimeSpan.FromMinutes(30));
 
-            var stopAgain = sessions.TryStop(started.Id, "root", out _, out var over, out var notFound, out _);
-            var noSuch    = sessions.TryStop("NOSUCHONE", "root", out _, out _, out var noSuchNotFound, out _);
+            var stopped   = sessions.TryStop(started!.Id, "root", null, out var stoppedSession, out _, out _, out _);
+
+            clock.Advance(TimeSpan.FromMinutes(30));
+
+            var stopAgain = sessions.TryStop(started.Id, "root", null, out _, out var over, out var notFound, out _);
+            var noSuch    = sessions.TryStop("NOSUCHONE", "root", null, out _, out _, out var noSuchNotFound, out _);
 
             Assert.Multiple(() => {
 
@@ -312,11 +312,11 @@ namespace cloud.charging.open.Smartphone.Tests
             var clock = new SetClock(Monday);
             var first = SessionsIn(clock);
 
-            first.TryStart(Holzmarkt, Holzmarkt.EVSEs[0], AllFree, "root", null, out var running, out _, out _);
-            first.TryStart(Lobeda,    Lobeda.EVSEs[0],    AllFree, "root", null, out var stopped, out _, out _);
+            first.TryStart(Holzmarkt, Holzmarkt.EVSEs[0], AllFree, "root", null, null, out var running, out _, out _);
+            first.TryStart(Lobeda,    Lobeda.EVSEs[0],    AllFree, "root", null, null, out var stopped, out _, out _);
 
             clock.Advance(TimeSpan.FromMinutes(2));
-            first.TryStop(stopped!.Id, "alice", out _, out _, out _, out _);
+            first.TryStop(stopped!.Id, "alice", null, out _, out _, out _, out _);
 
             clock.Advance(TimeSpan.FromMinutes(58));
 

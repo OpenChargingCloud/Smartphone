@@ -49,8 +49,9 @@ namespace cloud.charging.open.Smartphone.Tests
     /// phone keeps, and an account key the provider certifies from a request
     /// made on the phone - and a charging ticket of its own for every start,
     /// which comes back without the account's signature in it, or is refused;
-    /// signed in with a session, as the provider's web interface is, and anew
-    /// where it is over.
+    /// a start and a stop request signed by the ticket's key, which come back
+    /// countersigned by the provider, or are refused; signed in with a
+    /// session, as the provider's web interface is, and anew where it is over.
     /// </summary>
     public class ProviderTests
     {
@@ -203,6 +204,29 @@ namespace cloud.charging.open.Smartphone.Tests
 
         private String AccountFile
             => Path.Combine(directory, Smartphone.ProviderDirectoryName, "account.json");
+
+        private JObject KeptTicket(String Id)
+            => JObject.Parse(File.ReadAllText(Path.Combine(directory, Smartphone.ProviderDirectoryName, "tickets", Id + ".json")));
+
+        private static CBORValue PayloadOf(Byte[] COSE)
+            => CBORValue.Parse(COSESign.Parse(COSE).Payload!);
+
+        private static CBORValue Of(CBORValue Map, String Key)
+            => Map.TryGetValue(CBORValue.FromText(Key), out var value) ? value : throw new AssertionException($"'{Key}' is not in the payload.");
+
+        private async Task<(HttpClient Admin, HttpClient Driver)> WithAnAccount()
+        {
+
+            var admin   = await SignedInAs("admin1",  "systemadmin");
+            var driver  = await SignedInAs("driver1", "driver");
+
+            var (status, signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp!.URL, username = "phone1", email = "phone1@example.org" });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), signedUp.ToString());
+
+            return (admin, driver);
+
+        }
 
         #endregion
 
@@ -381,6 +405,185 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(refused["error"]!.Value<String>(),    Does.Contain(Said));
                 Assert.That(sessions["total"]!.Value<Int32>(),    Is.Zero, "a session was started with a ticket that was refused");
             }
+
+        }
+
+        #endregion
+
+        #region AStartAndAStopGoThroughTheProvider()
+
+        /// <summary>
+        /// "Charge now!" with an account: a start request for exactly this EVSE,
+        /// now, naming the ticket, signed by the ticket's key alone - and back
+        /// countersigned by the provider's ticket issuer, with a token of this
+        /// start alone. "Stop" names that start, and comes back countersigned
+        /// with the same token. Both are kept with the ticket; the session says
+        /// what the provider said. The account is not forgotten while it charges.
+        /// </summary>
+        [Test]
+        public async Task AStartAndAStopGoThroughTheProvider()
+        {
+
+            var (admin, driver) = await WithAnAccount();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            var point = FreePoints().First();
+
+            var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = point.Location.Id, evseUid = point.EVSE.Uid });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            var ticket   = emsp!.Tickets.Single().Issued;
+            var start    = emsp.Starts.Single();
+            var payload  = PayloadOf(start.Request);
+            var signed   = COSESign.Parse(start.Countersigned);
+            var kept     = KeptTicket(session["ticket"]!["id"]!.Value<String>()!);
+
+            using (Assert.EnterMultipleScope())
+            {
+
+                Assert.That(Of(payload, "typ").AsText(),                                Is.EqualTo(StartRequests.StartType));
+                Assert.That(Of(payload, "evse").AsText(),                               Is.EqualTo(point.EVSE.EVSEId));
+                Assert.That(Of(payload, "ticket").AsBytes(),                            Is.EqualTo(SHA256.HashData(ticket)), "the start names another ticket");
+                Assert.That(Of(payload, "nonce").AsBytes(),                             Has.Length.EqualTo(16));
+                Assert.That(payload.TryGetValue(CBORValue.FromText("proof"), out _),    Is.False, "a demo station has no proof to name");
+                Assert.That(COSESign.Parse(start.Request).Signatures,                   Has.Count.EqualTo(1), "the phone signs alone");
+                Assert.That(signed.Signatures,                                          Has.Count.EqualTo(2));
+
+                Assert.That(session["start"]!["token"]!.Value<String>(),                   Is.EqualTo(start.Token));
+                Assert.That(session["start"]!["authorizationReference"]!.Value<String>(),  Is.EqualTo(start.AuthRef));
+                Assert.That(session["start"]!["requestDigest"]!.Value<String>(),           Is.EqualTo(Convert.ToHexStringLower(SHA256.HashData(start.Countersigned))));
+                Assert.That(kept["start"]!.Value<String>(),                                Is.EqualTo(Convert.ToBase64String(start.Countersigned)), "the start is not kept with its ticket");
+
+            }
+
+            (status, var forgotten) = await Send(admin, HttpMethod.Post, "api/v1/provider/forget", new { });
+
+            Assert.That(status,                                 Is.EqualTo(HttpStatusCode.BadRequest), forgotten.ToString());
+            Assert.That(forgotten["error"]!.Value<String>(),    Does.Contain("stop the session first"));
+
+            (status, var stopped) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{session["id"]}/stop");
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), stopped.ToString());
+
+            var stop       = emsp.Stops.Single();
+            var ofStop     = PayloadOf(stop.Request);
+
+            kept = KeptTicket(session["ticket"]!["id"]!.Value<String>()!);
+
+            using (Assert.EnterMultipleScope())
+            {
+
+                Assert.That(stopped["status"]!.Value<String>(),                           Is.EqualTo("stopped"));
+                Assert.That(Of(ofStop, "typ").AsText(),                                   Is.EqualTo(StartRequests.StopType));
+                Assert.That(Of(ofStop, "start").AsBytes(),                                Is.EqualTo(SHA256.HashData(start.Countersigned)), "the stop names another start");
+                Assert.That(Of(ofStop, "ticket").AsBytes(),                               Is.EqualTo(SHA256.HashData(ticket)));
+                Assert.That(stop.Token,                                                   Is.EqualTo(start.Token));
+                Assert.That(stopped["start"]!["stopRequestDigest"]!.Value<String>(),      Is.EqualTo(Convert.ToHexStringLower(SHA256.HashData(stop.Countersigned))));
+                Assert.That(kept["stop"]!.Value<String>(),                                Is.EqualTo(Convert.ToBase64String(stop.Countersigned)), "the stop is not kept with its ticket");
+
+            }
+
+            // What the session says of its start outlives a restart.
+            await smartphone!.DisposeAsync();
+            smartphone = null;
+
+            await TestPorts.StartedOnFreshPorts(SmartphoneFrom);
+
+            using var again = await SignedInAs("driver2", "driver");
+
+            (status, var read) = await Send(again, HttpMethod.Get, $"api/v1/charging/sessions/{session["id"]}");
+
+            Assert.That(read["start"]!["stopRequestDigest"]!.Value<String>(), Is.EqualTo(stopped["start"]!["stopRequestDigest"]!.Value<String>()), read.ToString());
+
+        }
+
+        #endregion
+
+        #region ACountersignatureThatDoesNotHoldStartsNothing(How, Said)
+
+        /// <summary>
+        /// A provider that takes no start requests, refuses the start, or sends
+        /// it back countersigned in a way that does not hold - its token where
+        /// its signature does not cover it, by another key than its ticket
+        /// issuer's, an hour off, or with the phone's own signature replaced by
+        /// another: the phone says so, and starts nothing.
+        /// </summary>
+        [TestCase("takesNoStarts",            "Does it take start requests yet?")]
+        [TestCase("refuseStart",              "peered with no charge point operator")]
+        [TestCase("countersignUnprotected",   "in its protected header")]
+        [TestCase("countersignWithOtherKey",  "not countersigned by its ticket issuer")]
+        [TestCase("countersignAnHourOff",     "off this phone's clock")]
+        [TestCase("replaceOwnSignature",      "without this phone's own signature")]
+        public async Task ACountersignatureThatDoesNotHoldStartsNothing(String How, String Said)
+        {
+
+            var (admin, driver) = await WithAnAccount();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            emsp!.Misbehave = How;
+
+            var point = FreePoints().First();
+
+            var (status, refused) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = point.Location.Id, evseUid = point.EVSE.Uid });
+
+            (_, var sessions) = await Send(driver, HttpMethod.Get, "api/v1/charging/sessions");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                               Is.EqualTo(HttpStatusCode.BadGateway), refused.ToString());
+                Assert.That(refused["error"]!.Value<String>(),    Does.Contain(Said));
+                Assert.That(sessions["total"]!.Value<Int32>(),    Is.Zero, "a session was started with a start that was refused");
+            }
+
+        }
+
+        #endregion
+
+        #region AStopThatDoesNotHoldLeavesTheSessionCharging()
+
+        /// <summary>
+        /// A stop the provider countersigns with another token than its start's
+        /// is refused: the session goes on charging, and is stopped by the next
+        /// stop that holds.
+        /// </summary>
+        [Test]
+        public async Task AStopThatDoesNotHoldLeavesTheSessionCharging()
+        {
+
+            var (admin, driver) = await WithAnAccount();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            var point = FreePoints().First();
+
+            var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = point.Location.Id, evseUid = point.EVSE.Uid });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            emsp!.Misbehave = "otherTokenOnStop";
+
+            (status, var refused) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{session["id"]}/stop");
+            (_,      var still)   = await Send(driver, HttpMethod.Get,  $"api/v1/charging/sessions/{session["id"]}");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                               Is.EqualTo(HttpStatusCode.BadGateway), refused.ToString());
+                Assert.That(refused["error"]!.Value<String>(),    Does.Contain("another token"));
+                Assert.That(still["status"]!.Value<String>(),     Is.EqualTo("charging"));
+            }
+
+            emsp.Misbehave = null;
+
+            (status, var stopped) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{session["id"]}/stop");
+
+            Assert.That(status,                               Is.EqualTo(HttpStatusCode.OK), stopped.ToString());
+            Assert.That(stopped["status"]!.Value<String>(),   Is.EqualTo("stopped"));
 
         }
 

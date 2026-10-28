@@ -17,6 +17,7 @@
 
 #region Usings
 
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
@@ -25,6 +26,7 @@ using Newtonsoft.Json.Linq;
 
 using cloud.charging.open.protocols.WWCP.Node;
 
+using cloud.charging.open.Smartphone.Charging;
 using cloud.charging.open.Smartphone.Provider;
 
 #endregion
@@ -318,6 +320,7 @@ namespace cloud.charging.open.Smartphone
         /// Forget the account at the e-mobility provider: its account key taken
         /// back there, where the provider can be reached, and its file deleted.
         /// The tickets the phone was issued stay, with the sessions they started.
+        /// Not while a session started through the provider charges.
         /// </summary>
         public async Task<ProviderResult> ForgetProviderAsync(String Who)
         {
@@ -329,6 +332,11 @@ namespace cloud.charging.open.Smartphone
 
                 if (provider is not ProviderAccount account)
                     return new ProviderResult(false, "This phone has no account at an e-mobility provider.");
+
+                // A session started through the provider is stopped through it,
+                // which takes the account.
+                if (Sessions.Active(TimeProvider.GetUtcNow()).FirstOrDefault(session => session.Start is not null) is ChargingSession charging)
+                    return new ProviderResult(false, $"This phone is charging through {account.Party} at {charging.EVSEId} ({charging.Id}): stop the session first, as only the account can.");
 
                 var revoked = await ClientOf(account).RevokeAccountKeyAsync(account.AccountCertificateId);
 
@@ -415,16 +423,8 @@ namespace cloud.charging.open.Smartphone
             if (!answer.Success)
                 return (null, $"{account.Party} issued no charging ticket for {EVSEId}: {answer.Problem}");
 
-            Byte[] issued;
-
-            try
-            {
-                issued = Convert.FromBase64String(answer.JSON?["ticket"]?.Value<String>() ?? "");
-            }
-            catch (FormatException)
-            {
+            if (!TryBase64(answer.JSON?["ticket"], out var issued))
                 return (null, $"{account.Party} answered the ticket for {EVSEId} with no ticket.");
-            }
 
             if (!ChargingTickets.TryCheckIssued(issued, payload, ticketKey, issuer, kid, out var problem))
                 return (null, problem);
@@ -444,7 +444,7 @@ namespace cloud.charging.open.Smartphone
             // the ticket is nobody's.
             Directory.CreateDirectory(ProviderTicketsPath);
 
-            if (!TryWriteOwnerOnly(Path.Combine(ProviderTicketsPath, ticket.Id + ".json"), ticket.ToStorageJSON(), out var error))
+            if (!TryWriteOwnerOnly(TicketFile(ticket.Id), ticket.ToStorageJSON(), out var error))
                 return (null, $"The charging ticket for {EVSEId} could not be kept, and with it its key: {error}");
 
             Log.Info($"{account.Party} issued the charging ticket {ticket.Id} for {EVSEId}, good until {ticket.NotAfter:o}: its key {ticket.KeyThumbprint[..16]}…, " +
@@ -457,6 +457,220 @@ namespace cloud.charging.open.Smartphone
 
         #endregion
 
+        #region StartThroughProviderAsync(Ticket, EVSEId, EffectiveTree, TariffId, CancellationToken)
+
+        /// <summary>
+        /// Start charging through the e-mobility provider: a start request for
+        /// this EVSE, now, signed by the ticket's key and sent with the ticket -
+        /// and back countersigned by the provider's ticket issuer, with the
+        /// token of this start alone and the authorization reference it sent the
+        /// charge point operator. Kept with the ticket: it is what proves the
+        /// driver asked for this start, and what the stop names.
+        /// </summary>
+        /// <param name="Ticket">The ticket of this start.</param>
+        /// <param name="EVSEId">The EVSE, as the roaming network names it.</param>
+        /// <param name="EffectiveTree">The digest of the version of the station's proof the phone checked, at a station of a roaming network.</param>
+        /// <param name="TariffId">The tariff of that proof the price is of.</param>
+        /// <param name="CancellationToken">To stop asking the provider.</param>
+        public async Task<(ChargingStartReference? Start, String? Error)> StartThroughProviderAsync(IssuedTicket       Ticket,
+                                                                                                   String             EVSEId,
+                                                                                                   Byte[]?            EffectiveTree,
+                                                                                                   String?            TariffId,
+                                                                                                   CancellationToken  CancellationToken = default)
+        {
+
+            if (provider is not ProviderAccount account)
+                return (null, "This phone has no account at an e-mobility provider.");
+
+            using var ticketKey  = Ticket.TicketKey();
+            using var issuer     = account.Issuer();
+
+            var payload   = StartRequests.StartPayload(Ticket.Ticket, EVSEId, TimeProvider.GetUtcNow(), RandomNumberGenerator.GetBytes(16), EffectiveTree, TariffId);
+            var request   = StartRequests.Sign(payload, StartRequests.StartContentType, ticketKey);
+            var answer    = await ClientOf(account).StartAsync(Ticket.Id, Ticket.Ticket, request);
+
+            if (!answer.Success)
+                return (null, $"{account.Party} started nothing at {EVSEId}: {answer.Problem}" +
+                              (answer.Status is 404 or 405 ? " Does it take start requests yet?" : ""));
+
+            if (!TryBase64(answer.JSON?["request"], out var countersigned))
+                return (null, $"{account.Party} answered the start at {EVSEId} with no start request.");
+
+            if (!StartRequests.TryCheckCountersigned(countersigned, request, ticketKey, issuer, TimeProvider.GetUtcNow(), null, out var countersignature, out var problem))
+                return (null, problem);
+
+            var start = new ChargingStartReference(countersignature.Token,
+                                                   countersignature.AuthorizationReference,
+                                                   Convert.ToHexStringLower(StartRequests.Digest(countersigned)),
+                                                   countersignature.SignedAt);
+
+            if (!TryWriteOwnerOnly(TicketFile(Ticket.Id), (Ticket with { Start = countersigned }).ToStorageJSON(), out var error))
+            {
+
+                // Started, and not kept: no stop could name it, so it is stopped
+                // now, while the phone still has it.
+                var (_, _, stopProblem) = await StopAtProviderAsync(account, Ticket, countersigned, countersignature);
+
+                return (null, $"{account.Party} started charging at {EVSEId}, and the start could not be kept with its ticket: {error} " +
+                              (stopProblem is null ? "It was stopped again." : $"It could not be stopped again either: {stopProblem}"));
+
+            }
+
+            Log.Info($"{account.Party} countersigned the start at {EVSEId} with the charging ticket {Ticket.Id}: the token {start.Token}, the authorization reference {start.AuthorizationReference}.",
+                     "provider", "charging");
+
+            return (start, null);
+
+        }
+
+        #endregion
+
+        #region StopThroughProviderAsync(Ticket, Start, CancellationToken)
+
+        /// <summary>
+        /// Stop a session that was started through the e-mobility provider: a
+        /// stop request naming the ticket and the start, signed by the ticket's
+        /// key, and back countersigned by the provider with the token and the
+        /// reference of the start. Kept with the ticket.
+        /// </summary>
+        /// <param name="Ticket">The ticket the session was started with.</param>
+        /// <param name="Start">What the session keeps of its start.</param>
+        /// <param name="CancellationToken">To stop asking the provider.</param>
+        public async Task<(ChargingStartReference? Stopped, String? Error)> StopThroughProviderAsync(ChargingTicketReference  Ticket,
+                                                                                                    ChargingStartReference   Start,
+                                                                                                    CancellationToken        CancellationToken = default)
+        {
+
+            if (provider is not ProviderAccount account)
+                return (null, $"The session was started through {Ticket.Party}, and this phone has no account there any more to stop it with.");
+
+            if (account.Party != Ticket.Party)
+                return (null, $"The session was started through {Ticket.Party}, and this phone's account is at {account.Party}.");
+
+            if (!TryReadTicket(Ticket.Id, out var issued, out var problem))
+                return (null, problem);
+
+            if (issued.Start is null || Convert.ToHexStringLower(StartRequests.Digest(issued.Start)) != Start.RequestDigest)
+                return (null, $"The charging ticket {Ticket.Id} keeps no start, or another one than the session's: the session cannot be stopped with it.");
+
+            var (stop, countersignature, stopProblem) = await StopAtProviderAsync(account,
+                                                                                  issued,
+                                                                                  issued.Start,
+                                                                                  new ProviderCountersignature(Start.Token, Start.AuthorizationReference, Start.CountersignedAt));
+
+            if (stop is null || countersignature is null)
+                return (null, stopProblem);
+
+            if (!TryWriteOwnerOnly(TicketFile(issued.Id), (issued with { Stop = stop }).ToStorageJSON(), out var error))
+                Log.Warning($"{account.Party} countersigned the stop of {Start.Token}, and the stop could not be kept with the charging ticket {issued.Id}: {error}", "provider", "charging");
+
+            return (Start with {
+                        StopRequestDigest    = Convert.ToHexStringLower(StartRequests.Digest(stop)),
+                        StopCountersignedAt  = countersignature.SignedAt
+                    },
+                    null);
+
+        }
+
+        #endregion
+
+        #region (private) StopAtProviderAsync(Account, Ticket, Start, Of)
+
+        /// <summary>
+        /// The stop request of a start, signed by the ticket's key, sent with the
+        /// ticket and the start, and checked as it comes back countersigned.
+        /// </summary>
+        private async Task<(Byte[]? Stop, ProviderCountersignature? Countersignature, String? Error)> StopAtProviderAsync(ProviderAccount           Account,
+                                                                                                                         IssuedTicket              Ticket,
+                                                                                                                         Byte[]                    Start,
+                                                                                                                         ProviderCountersignature  Of)
+        {
+
+            using var ticketKey  = Ticket.TicketKey();
+            using var issuer     = Account.Issuer();
+
+            var payload  = StartRequests.StopPayload(Ticket.Ticket, Start, TimeProvider.GetUtcNow(), RandomNumberGenerator.GetBytes(16));
+            var request  = StartRequests.Sign(payload, StartRequests.StopContentType, ticketKey);
+            var answer   = await ClientOf(Account).StopAsync(Ticket.Id, Ticket.Ticket, Start, request);
+
+            if (!answer.Success)
+                return (null, null, $"{Account.Party} stopped nothing at {Ticket.EVSEId}: {answer.Problem}");
+
+            if (!TryBase64(answer.JSON?["request"], out var countersigned))
+                return (null, null, $"{Account.Party} answered the stop at {Ticket.EVSEId} with no stop request.");
+
+            if (!StartRequests.TryCheckCountersigned(countersigned, request, ticketKey, issuer, TimeProvider.GetUtcNow(), Of, out var countersignature, out var problem))
+                return (null, null, problem);
+
+            Log.Info($"{Account.Party} countersigned the stop at {Ticket.EVSEId} of the token {Of.Token}.", "provider", "charging");
+
+            return (countersigned, countersignature, null);
+
+        }
+
+        #endregion
+
+
+        #region (private) TicketFile(Id) / TryReadTicket(Id, out Ticket, out Error)
+
+        private String TicketFile(String Id)
+
+            => Path.Combine(ProviderTicketsPath, Id + ".json");
+
+        /// <summary>
+        /// A ticket this phone was issued, as its file keeps it - by an id that
+        /// is one, 16 bytes as hex, and so no path to anywhere else.
+        /// </summary>
+        private Boolean TryReadTicket(String                                  Id,
+                                      [NotNullWhen(true)]  out IssuedTicket?  Ticket,
+                                      [NotNullWhen(false)] out String?        Error)
+        {
+
+            Ticket = null;
+
+            if (Id.Length != 32 || !Id.All(Uri.IsHexDigit))
+            {
+                Error = $"'{Id}' is no id of a charging ticket.";
+                return false;
+            }
+
+            try
+            {
+                return IssuedTicket.TryParseStorage(JObject.Parse(File.ReadAllText(TicketFile(Id))), out Ticket, out Error);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+            {
+                Error = $"The charging ticket {Id} could not be read, and with it its key: {e.Message}";
+                return false;
+            }
+
+        }
+
+        #endregion
+
+        #region (private static) TryBase64(JSON, out Bytes)
+
+        private static Boolean TryBase64(JToken? JSON, [NotNullWhen(true)] out Byte[]? Bytes)
+        {
+
+            Bytes = null;
+
+            if (JSON?.Type != JTokenType.String)
+                return false;
+
+            try
+            {
+                Bytes = Convert.FromBase64String(JSON.Value<String>()!);
+                return Bytes.Length > 0;
+            }
+            catch (FormatException)
+            {
+                return false;
+            }
+
+        }
+
+        #endregion
 
         #region (private) ClientOf(Account)
 

@@ -42,8 +42,9 @@ namespace cloud.charging.open.Smartphone.Charging
 
 
     /// <summary>
-    /// One charging session of this phone - simulated, for as long as there
-    /// is no e-mobility provider to start a real one at.
+    /// One charging session of this phone - simulated where there is no
+    /// e-mobility provider to start a real one at; and where there is one, its
+    /// figures simulated, for as long as no meter values reach the phone.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -79,7 +80,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                          String           StartedBy,
                                          DateTimeOffset?  StoppedAt  = null,
                                          String?          StoppedBy  = null,
-                                         ChargingTicketReference?  Ticket  = null)
+                                         ChargingTicketReference?  Ticket  = null,
+                                         ChargingStartReference?   Start   = null)
     {
 
         #region Data
@@ -119,19 +121,21 @@ namespace cloud.charging.open.Smartphone.Charging
         #endregion
 
 
-        #region New(Id, Location, EVSE, StartedAt, StartedBy, Ticket = null)
+        #region New(Id, Location, EVSE, StartedAt, StartedBy, Ticket = null, Start = null)
 
         /// <summary>
         /// A session started now, at an EVSE of a location - one that says
         /// what charging there costs - with the charging ticket it was started
-        /// with, where the phone has an e-mobility provider.
+        /// with and its start as the provider countersigned it, where the
+        /// phone has an e-mobility provider.
         /// </summary>
         public static ChargingSession New(String                    Id,
                                           ChargingLocation          Location,
                                           ChargingEVSE              EVSE,
                                           DateTimeOffset            StartedAt,
                                           String                    StartedBy,
-                                          ChargingTicketReference?  Ticket   = null)
+                                          ChargingTicketReference?  Ticket   = null,
+                                          ChargingStartReference?   Start    = null)
 
             => new (Id,
                     Location.Id,
@@ -149,7 +153,8 @@ namespace cloud.charging.open.Smartphone.Charging
                     DefaultTargetEnergyKWh,
                     StartedAt,
                     StartedBy,
-                    Ticket: Ticket);
+                    Ticket:  Ticket,
+                    Start:   Start);
 
         #endregion
 
@@ -258,6 +263,9 @@ namespace cloud.charging.open.Smartphone.Charging
             if (Ticket is not null)
                 json.Add(new JProperty("ticket", Ticket.ToJSON()));
 
+            if (Start is not null)
+                json.Add(new JProperty("start",  Start. ToJSON()));
+
             return json;
 
         }
@@ -301,6 +309,9 @@ namespace cloud.charging.open.Smartphone.Charging
             if (Ticket is not null)
                 json.Add(new JProperty("ticket", Ticket.ToJSON()));
 
+            if (Start is not null)
+                json.Add(new JProperty("start",  Start. ToJSON()));
+
             return json;
 
         }
@@ -342,7 +353,8 @@ namespace cloud.charging.open.Smartphone.Charging
                               Text  ("startedBy"),
                               JSON["stoppedAt"] is JToken { Type: JTokenType.String } ? Time("stoppedAt") : null,
                               JSON.Value<String>("stoppedBy"),
-                              ChargingTicketReference.TryParse(JSON["ticket"])
+                              ChargingTicketReference.TryParse(JSON["ticket"]),
+                              ChargingStartReference. TryParse(JSON["start"])
                           );
 
                 if (Session.MaxPowerKW <= 0 || Session.TargetEnergyKWh <= 0)

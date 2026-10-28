@@ -59,7 +59,7 @@ namespace cloud.charging.open.Smartphone.Provider
     /// <summary>
     /// The phone asking its e-mobility provider - an EMSP of this family -
     /// over its HTTP API: signing up, an account certificate for the phone's
-    /// account key, and charging tickets.
+    /// account key, charging tickets, and the starts and stops made with them.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -240,6 +240,48 @@ namespace cloud.charging.open.Smartphone.Provider
             => SignedInAsync(HTTPMethod.POST,
                              "api/v1/tickets",
                              new JObject(new JProperty("request", Convert.ToBase64String(Request))));
+
+        #endregion
+
+        #region StartAsync(TicketId, Ticket, Request)
+
+        /// <summary>
+        /// POST /api/v1/tickets/{id}/start: a start request, sent with the
+        /// ticket it names - which the provider does not keep - and answered
+        /// with the request it countersigned.
+        /// </summary>
+        public Task<EMSPAnswer> StartAsync(String  TicketId,
+                                           Byte[]  Ticket,
+                                           Byte[]  Request)
+
+            => SignedInAsync(HTTPMethod.POST,
+                             $"api/v1/tickets/{TicketId}/start",
+                             new JObject(
+                                 new JProperty("ticket",   Convert.ToBase64String(Ticket)),
+                                 new JProperty("request",  Convert.ToBase64String(Request))
+                             ));
+
+        #endregion
+
+        #region StopAsync(TicketId, Ticket, Start, Request)
+
+        /// <summary>
+        /// POST /api/v1/tickets/{id}/stop: a stop request, sent with the ticket
+        /// and the countersigned start it names, and answered with the request
+        /// it countersigned.
+        /// </summary>
+        public Task<EMSPAnswer> StopAsync(String  TicketId,
+                                          Byte[]  Ticket,
+                                          Byte[]  Start,
+                                          Byte[]  Request)
+
+            => SignedInAsync(HTTPMethod.POST,
+                             $"api/v1/tickets/{TicketId}/stop",
+                             new JObject(
+                                 new JProperty("ticket",   Convert.ToBase64String(Ticket)),
+                                 new JProperty("start",    Convert.ToBase64String(Start)),
+                                 new JProperty("request",  Convert.ToBase64String(Request))
+                             ));
 
         #endregion
 

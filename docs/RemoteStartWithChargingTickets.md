@@ -129,6 +129,31 @@ request is signed by the ticket's key; that `at` is within a few minutes of its
 clock; that the nonce is new; that the EVSE is one of a CPO it is peered with.
 It adds its signature and sends the command.
 
+**The EMSP answers** once the CPO has accepted the command (OCPI's
+synchronous `CommandResponse`, `ACCEPTED`): `200` with the request as it
+countersigned it, both signatures:
+
+```json
+{ "request": "<base64 of the start request, both signatures>",
+  "token":   "T-9F2C41D08A7E3B65",
+  "authRef": "8e1c…" }
+```
+
+Its `token` and `authRef` are for reading only: what counts is what the
+protected header of its signature says. Anything else - a ticket it did not
+issue, a request that does not hold, a CPO that rejects the command - is an
+error status with `{"error": "…"}`, and no countersigned request.
+
+**The app checks** what comes back before it calls anything started: the
+body's protected header, the payload and its own signature are the bytes it
+sent; there is exactly one more signature, its kid the SHA-256 of the ticket
+issuer certificate the app was given when it signed in, and it holds for that
+certificate's key; its protected header - not its unprotected one - says
+`token`, `authRef` and `iat`, and `iat` is within five minutes of the app's
+clock. A start that fails any of it is refused, and nothing is started. The
+app keeps the countersigned request with the ticket and its key: it is what
+the stop names, and what proves the driver asked for this start.
+
 
 ## 4. EMSP → CPO: OCPI `START_SESSION`
 
@@ -206,11 +231,38 @@ disputing an invoice - without showing its account.
 
 ## 7. Stopping
 
-A **stop request** is the same as a start request - `"typ": "StopRequest"`,
-naming the ticket, the session as the EMSP knows it, `at` and a nonce - signed
-by the ticket key and countersigned by the EMSP, sent with OCPI
-`STOP_SESSION`. Only the holder of the ticket stops; the EMSP can still stop on
-its own, as OCPI lets it, and says so by its signature alone.
+A **stop request** is a start request's twin, with the protected body header
+`{3: "application/stop-request+cbor"}` and the payload
+
+```
+{
+  "typ":     "StopRequest",
+  "v":       1,
+  "ticket":  h'SHA-256 of the ticket as the EMSP issued it',
+  "start":   h'SHA-256 of the start request as the EMSP countersigned it',
+  "at":      1793203600,
+  "nonce":   h'16 random bytes'
+}
+```
+
+The start is named by the bytes the CPO holds of it, which name the session
+before the CPO has given it an id. Signed by the ticket key, the stop goes to
+the EMSP with the ticket and the start it names, as neither is kept there:
+`POST /api/v1/tickets/{ticketId}/stop` with
+`{"ticket": "<base64>", "start": "<base64>", "request": "<base64>"}`.
+
+The EMSP checks the ticket and the request as for a start, and that the start
+is one it countersigned for this account and not stopped yet; it
+countersigns with **the token and the `authRef` of that start** and its own
+`iat`, sends OCPI `STOP_SESSION`, and answers `{"request": "<base64>"}`. The
+app checks the countersignature as it does a start's, and that its token and
+reference are the start's. Only the holder of the ticket stops; the EMSP can
+still stop on its own, as OCPI lets it, and says so by its signature alone.
+
+A stop that does not hold leaves the session charging: the app says so, and
+the next stop that holds ends it. While a session started through the EMSP
+charges, the app does not forget its account there - only the account can
+stop it.
 
 
 ## 8. The CDR
@@ -272,7 +324,11 @@ bytes, and its signature then no longer holds. Payloads are deterministic CBOR
   CPO trusts every EMSP of the network by the same trust anchor the app uses.
 - **Header labels.** Text labels (`"token"`, `"authRef"`, `"iat"`) in the
   EMSP's protected header, or registered integers.
-- **Clocks.** How many minutes `at` may be off, at the EMSP and at the CPO.
+- **Clocks.** How many minutes `at` may be off, at the EMSP and at the CPO;
+  the app takes five for the EMSP's `iat`.
+- **After the start.** How the app learns what became of it - OCPI's
+  asynchronous `CommandResult`, the session the CPO reports, and its meter
+  values - from the EMSP: e.g. `GET /api/v1/tickets/{ticketId}`.
 - **Offline.** A station that checks tickets itself, without its CSMS.
 
 
@@ -280,8 +336,8 @@ bytes, and its signature then no longer holds. Payloads are deterministic CBOR
 
 | | |
 |---|---|
-| EMSP | self sign-up; account keys from a PKCS#10 request; tickets issued from a request signed by the ticket key and an account key, the account's signature taken off |
-| EMSP, missing | Styx's CBOR and COSE in place of its own; start and stop requests (`POST /api/v1/tickets/{id}/start`), its signature on them, a token per start, OCPI `START_SESSION` / `STOP_SESSION` |
+| EMSP | self sign-up; account keys from a PKCS#10 request; tickets issued from a request signed by the ticket key and an account key, the account's signature taken off - with Styx's CBOR and COSE in place of its own |
+| EMSP, missing | start and stop requests (`POST /api/v1/tickets/{id}/start` and `/stop`), its signature on them, a token per start, OCPI `START_SESSION` / `STOP_SESSION` |
 | CSMS / CPO, missing | checking a ticket and a start request, limits as a charging profile, the token in the OCMF identification |
-| Smartphone | the station's proof checked against the trust anchor, its tariff, and its energy meter's key; an account at an EMSP, signed up or in with a session; an account key from a PKCS#10 request; a ticket per start, built, signed and checked with Styx - against the EMSP as committed and as moved to Styx |
-| Smartphone, missing | the start and stop requests |
+| Smartphone | the station's proof checked against the trust anchor, its tariff, and its energy meter's key; an account at an EMSP, signed up or in with a session; an account key from a PKCS#10 request; a ticket per start, built, signed and checked with Styx - against the EMSP as committed and as moved to Styx; start and stop requests, signed by the ticket key and their countersignature checked - against a stand-in EMSP of its tests, which countersigns as this draft says |
+| Smartphone, missing | what became of a start, and its meter values: a session's figures are simulated |
