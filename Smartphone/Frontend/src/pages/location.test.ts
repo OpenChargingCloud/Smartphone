@@ -14,6 +14,9 @@ import { after, describe, it } from 'node:test';
 
 const { locationPage } = await import('./location.ts');
 
+// Amounts as the browser's locale writes them: 0,65 € here, €0.65 there.
+const { money }        = await import('../charging/words.ts');
+
 after(() => leave());
 
 
@@ -48,9 +51,9 @@ describe('what is signed about a station', () => {
         assert.match(text, /Open Charging Cloud/);
         assert.match(text, /OCC, as roamingNetworkOperator/);
         assert.match(text, /GraphDefined GD-DC300/);
-        assert.match(text, /0[.,]65\s*€ per kWh/);
+        assert.ok(text.includes(`${money(0.65, 'EUR')} per kWh`), 'the price the statement sets is not given');
         assert.match(text, /Tariff DE\*GEF\*T_DC/);
-        assert.match(text, /0[.,]69\s*€\/kWh/);
+        assert.ok(text.includes(`${money(0.69, 'EUR')}/kWh`), 'the price of the tariff is not given');
         assert.match(text, /Kernberg KDM-500/);
         assert.match(text, /DC-2026-001/);
         assert.match(text, /OCMF/);
