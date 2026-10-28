@@ -32,9 +32,11 @@ namespace cloud.charging.open.Smartphone.Map
     /// </summary>
     /// <remarks>
     /// <para>
-    /// For now one URL, and it is kept and shown and not yet asked: until it
-    /// is, the map shows the demo stations of <see cref="DemoLocations"/>.
-    /// Empty is the default and means exactly that.
+    /// For now one URL, and it is kept and shown and not asked: the map shows
+    /// the demo stations of <see cref="DemoLocations"/>, or the charging pools
+    /// of the roaming network whose trust anchor the "roamingNetwork" section
+    /// holds (<see cref="Roaming.RoamingNetworkConfiguration"/>). Empty is the
+    /// default.
     /// </para>
     /// <para>
     /// <code>

@@ -120,7 +120,8 @@ namespace cloud.charging.open.Smartphone.Charging
         #region New(Id, Location, EVSE, StartedAt, StartedBy)
 
         /// <summary>
-        /// A session started now, at an EVSE of a location.
+        /// A session started now, at an EVSE of a location - one that says
+        /// what charging there costs.
         /// </summary>
         public static ChargingSession New(String            Id,
                                           ChargingLocation  Location,
@@ -139,7 +140,7 @@ namespace cloud.charging.open.Smartphone.Charging
                     EVSE.Standard,
                     EVSE.PowerType,
                     EVSE.MaxPowerKW,
-                    Location.Tariff.PricePerKWh,
+                    (Location.Tariff ?? throw new ArgumentException($"{Location.Name} says nothing of what charging there costs.", nameof(Location))).PricePerKWh,
                     Location.Tariff.Currency,
                     DefaultTargetEnergyKWh,
                     StartedAt,

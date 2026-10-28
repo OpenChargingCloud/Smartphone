@@ -152,7 +152,8 @@ namespace cloud.charging.open.Smartphone.Charging
         #region TryStart(Location, EVSE, StatusNow, StartedBy, out Session, out Error, out Conflict)
 
         /// <summary>
-        /// Start a session at an EVSE of a location - where it is available.
+        /// Start a session at an EVSE of a location - where it is available, or
+        /// its status is not known.
         /// </summary>
         /// <param name="Location">Where.</param>
         /// <param name="EVSE">At which of its EVSEs.</param>
@@ -186,7 +187,10 @@ namespace cloud.charging.open.Smartphone.Charging
 
                 var status = StatusOf(EVSE, now);
 
-                if (status != EVSEStatus.Available)
+                // Unknown is what an EVSE of a roaming network is, which says
+                // its status only over its WebSocket: started at as at an
+                // available one, as a driver standing in front of it would.
+                if (status != EVSEStatus.Available && status != EVSEStatus.Unknown)
                 {
                     Error = $"{EVSE.EVSEId} at {Location.Name} is {EVSEStatus.InWords(status)}, not available.";
                     return false;

@@ -72,12 +72,14 @@ namespace cloud.charging.open.Smartphone.Map
     /// <param name="Format">"SOCKET" or "CABLE".</param>
     /// <param name="PowerType">"AC_3_PHASE" or "DC".</param>
     /// <param name="MaxPowerKW">The most it gives, in kW.</param>
+    /// <param name="StationId">Of a roaming network: the charging station it belongs to, whose proof says what is signed about it.</param>
     public sealed record ChargingEVSE(String   Uid,
                                       String   EVSEId,
                                       String   Standard,
                                       String   Format,
                                       String   PowerType,
-                                      Decimal  MaxPowerKW)
+                                      Decimal  MaxPowerKW,
+                                      String?  StationId   = null)
     {
 
         /// <summary>
@@ -87,24 +89,33 @@ namespace cloud.charging.open.Smartphone.Map
             => PowerType == "DC";
 
         /// <summary>
-        /// The EVSE as an OCPI location carries it, with the status it has now.
+        /// The EVSE as an OCPI location carries it, with the status it has now
+        /// - and, of a roaming network, the station it belongs to.
         /// </summary>
         public JObject ToJSON(String Status)
+        {
 
-            => new (
-                   new JProperty("uid",         Uid),
-                   new JProperty("evse_id",     EVSEId),
-                   new JProperty("status",      Status),
-                   new JProperty("connectors",  new JArray(
-                       new JObject(
-                           new JProperty("id",                  "1"),
-                           new JProperty("standard",            Standard),
-                           new JProperty("format",              Format),
-                           new JProperty("power_type",          PowerType),
-                           new JProperty("max_electric_power",  (Int64) (MaxPowerKW * 1000))
-                       )
-                   ))
-               );
+            var json = new JObject(
+                           new JProperty("uid",         Uid),
+                           new JProperty("evse_id",     EVSEId),
+                           new JProperty("status",      Status),
+                           new JProperty("connectors",  new JArray(
+                               new JObject(
+                                   new JProperty("id",                  "1"),
+                                   new JProperty("standard",            Standard),
+                                   new JProperty("format",              Format),
+                                   new JProperty("power_type",          PowerType),
+                                   new JProperty("max_electric_power",  (Int64) (MaxPowerKW * 1000))
+                               )
+                           ))
+                       );
+
+            if (StationId is not null)
+                json.Property("evse_id")!.AddAfterSelf(new JProperty("station_id", StationId));
+
+            return json;
+
+        }
 
     }
 
@@ -121,6 +132,11 @@ namespace cloud.charging.open.Smartphone.Map
     /// One place to charge, as an OCPI location says it: where it is, who runs
     /// it, and its EVSEs.
     /// </summary>
+    /// <remarks>
+    /// A demo station says what charging there costs; a charging pool of a
+    /// roaming network says it only in the proof of its stations, so it has
+    /// no tariff until that proof was checked.
+    /// </remarks>
     public sealed record ChargingLocation(String                       Id,
                                           String                       Name,
                                           String                       Address,
@@ -130,7 +146,7 @@ namespace cloud.charging.open.Smartphone.Map
                                           Double                       Latitude,
                                           Double                       Longitude,
                                           String                       Operator,
-                                          ChargingTariff               Tariff,
+                                          ChargingTariff?              Tariff,
                                           IReadOnlyList<ChargingEVSE>  EVSEs)
     {
 
@@ -163,10 +179,12 @@ namespace cloud.charging.open.Smartphone.Map
                    )),
                    new JProperty("operator",      new JObject(new JProperty("name", Operator))),
                    new JProperty("evses",         new JArray(EVSEs.Select(evse => evse.ToJSON(StatusOf(evse))))),
-                   new JProperty("tariff",        new JObject(
-                       new JProperty("price_per_kwh",  Tariff.PricePerKWh),
-                       new JProperty("currency",       Tariff.Currency)
-                   )),
+                   new JProperty("tariff",        Tariff is not null
+                                                      ? new JObject(
+                                                            new JProperty("price_per_kwh",  Tariff.PricePerKWh),
+                                                            new JProperty("currency",       Tariff.Currency)
+                                                        )
+                                                      : null),
                    new JProperty("last_updated",  LastUpdated.ToString("o"))
                );
 

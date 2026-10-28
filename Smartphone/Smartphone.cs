@@ -249,7 +249,8 @@ namespace cloud.charging.open.Smartphone
 
             #region The map and the charging sessions
 
-            this.map       = LoadMapConfiguration();
+            this.map             = LoadMapConfiguration();
+            this.roamingNetwork  = LoadRoamingNetworkConfiguration();
 
             // Beside the configuration file rather than below the working
             // directory, for the reason the certificate store is: a phone that
@@ -263,11 +264,18 @@ namespace cloud.charging.open.Smartphone
             foreach (var problem in Sessions.ReadProblems)
                 this.Log.Warning(problem, "charging");
 
-            this.Log.Info($"The map shows {DemoLocations.All.Count} demo charging stations" +
-                          (map.StationsURL.Length > 0
-                               ? $"; its data source is set to '{map.StationsURL}', which is not asked yet."
-                               : ", as no data source is set."),
-                          "map");
+            if (roamingNetwork.IsSet)
+                this.Log.Info($"The map shows the charging stations of the roaming network '{roamingNetwork.TrustAnchor.Id}', at {String.Join(", ", roamingNetwork.TrustAnchor.URLs)}, " +
+                              $"each checked against the trust anchor of its operator: {roamingNetwork.TrustAnchor.Keys.Length} identity key(s), " +
+                              $"{roamingNetwork.TrustAnchor.MinConsensus} of {roamingNetwork.TrustAnchor.Holders.Count} holder(s) to agree.",
+                              "map", "poi");
+
+            else
+                this.Log.Info($"The map shows {DemoLocations.All.Count} demo charging stations" +
+                              (map.StationsURL.Length > 0
+                                   ? $"; its data source is set to '{map.StationsURL}', which is not asked yet."
+                                   : ", as no roaming network is set."),
+                              "map");
 
             this.Log.Info($"{Sessions.All().Count} charging session(s) are kept in '{Sessions.FilePath}'. " +
                            "Charging is simulated: there is no e-mobility provider to start a real session at yet.",

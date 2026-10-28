@@ -110,7 +110,8 @@ namespace cloud.charging.open.Smartphone
 
                 if (before.StationsURL != configuration.StationsURL)
                     Log.Notice(configuration.StationsURL.Length > 0
-                                   ? $"'{Who}' at the web interface set the map's data source to '{configuration.StationsURL}'. It is kept, and not asked yet: the map still shows its demo stations."
+                                   ? $"'{Who}' at the web interface set the map's data source to '{configuration.StationsURL}'. It is kept, and not asked: the map shows " +
+                                     (RoamingNetwork.IsSet ? "the stations of its roaming network." : "its demo stations.")
                                    : $"'{Who}' at the web interface removed the map's data source.",
                                "map", "configuration", "web");
 
@@ -135,7 +136,7 @@ namespace cloud.charging.open.Smartphone
 
             return new JObject(
                        new JProperty("stationsURL",   configuration.StationsURL),
-                       new JProperty("source",        "demo"),
+                       new JProperty("source",        RoamingNetwork.IsSet ? "roamingNetwork" : "demo"),
                        new JProperty("maxURLLength",  MapConfiguration.MaxURLLength),
                        new JProperty("file",          ConfigFile.Path)
                    );
@@ -149,7 +150,9 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// The status an EVSE has now, as the map shows it: charging where this
-        /// phone charges there, and otherwise what the EVSE says of itself.
+        /// phone charges there, and otherwise what the EVSE says of itself - of
+        /// a demo station; of a roaming network, unknown, as it says its status
+        /// only over its WebSocket.
         /// </summary>
         public String StatusOf(ChargingLocation  Location,
                                ChargingEVSE      EVSE,
@@ -157,29 +160,67 @@ namespace cloud.charging.open.Smartphone
 
             => Sessions.IsCharging(Location.Id, EVSE.Uid, Now)
                    ? EVSEStatus.Charging
-                   : DemoLocations.StatusOf(EVSE, Now);
+                   : EVSE.StationId is null
+                         ? DemoLocations.StatusOf(EVSE, Now)
+                         : EVSEStatus.Unknown;
 
         #endregion
 
-        #region LocationsJSON()
+        #region LocationsJSONAsync(Refresh = false, CancellationToken = default)
 
         /// <summary>
         /// Every charging station of the map, with the status of each EVSE
-        /// now, and where they came from.
+        /// now, and where they came from: the demo stations, or the charging
+        /// pools of the roaming network whose trust anchor is set, as it listed
+        /// them within the last minute - or now, asked to refresh.
         /// </summary>
-        public JObject LocationsJSON()
+        public async Task<JObject> LocationsJSONAsync(Boolean            Refresh             = false,
+                                                      CancellationToken  CancellationToken   = default)
         {
 
-            var now = TimeProvider.GetUtcNow();
+            var now   = TimeProvider.GetUtcNow();
+            var json  = new JObject(
+                            new JProperty("source",       RoamingNetwork.IsSet ? "roamingNetwork" : "demo"),
+                            new JProperty("stationsURL",  Map.StationsURL),
+                            new JProperty("tiles",        $"{MapTileServer}/{{z}}/{{x}}/{{y}}.png"),
+                            new JProperty("statuses",     new JArray(EVSEStatus.All))
+                        );
 
-            return new JObject(
-                       new JProperty("source",       "demo"),
-                       new JProperty("stationsURL",  Map.StationsURL),
-                       new JProperty("tiles",        $"{MapTileServer}/{{z}}/{{x}}/{{y}}.png"),
-                       new JProperty("timestamp",    now.ToString("o")),
-                       new JProperty("statuses",     new JArray(EVSEStatus.All)),
-                       new JProperty("locations",    new JArray(DemoLocations.All.Select(location => location.ToJSON(evse => StatusOf(location, evse, now), now))))
-                   );
+            if (!RoamingNetwork.IsSet)
+            {
+                json.Add(new JProperty("timestamp",  now.ToString("o")));
+                json.Add(new JProperty("locations",  new JArray(DemoLocations.All.Select(location => location.ToJSON(evse => StatusOf(location, evse, now), now)))));
+                return json;
+            }
+
+            var anchor  = RoamingNetwork.TrustAnchor!;
+            var listed  = await RoamingLocationsAsync(Refresh, CancellationToken);
+
+            json.Add(new JProperty("timestamp",       listed.At.ToString("o")));
+            json.Add(new JProperty("roamingNetwork",  new JObject(
+                         new JProperty("id",     anchor.Id.ToString()),
+                         new JProperty("name",   Roaming.RoamingNetworkClient.Text(anchor.ToJSON()["name"])),
+                         new JProperty("from",   listed.From),
+                         new JProperty("error",  listed.Error)
+                     )));
+
+            json.Add(new JProperty("locations", new JArray(listed.Locations.Select(location => {
+
+                // A pool checked, and still holding: with the price its proof
+                // gives, as a demo station has its own.
+                var shown = locationChecks.TryGetValue(location.Id, out var check) && check.Verified && check.Stations.All(station => station.HoldsAt(anchor, now))
+                                ? location with { Tariff = location.EVSEs.Select(evse => check.StationOf(evse)?.TariffOf(evse.Uid)).FirstOrDefault(tariff => tariff is not null) }
+                                : location;
+
+                var entry = shown.ToJSON(evse => StatusOf(shown, evse, now), listed.At);
+
+                entry["verified"] = check is null ? null : check.Verified && check.Stations.All(station => station.HoldsAt(anchor, now));
+
+                return entry;
+
+            }))));
+
+            return json;
 
         }
 

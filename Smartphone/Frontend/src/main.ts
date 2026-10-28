@@ -15,14 +15,15 @@ import { nodeMenu, startNode } from '@node/start';
 import { chargingPage } from './pages/charging';
 import { configurationPage } from './pages/configuration';
 import { historyPage } from './pages/history';
+import { locationPage } from './pages/location';
 import { mapPage } from './pages/map';
 import { mapSettingsPage } from './pages/mapSettings';
 import { sessionPage } from './pages/session';
 
 // What a smartphone has pages for of its own: the map of charging stations,
-// and charging - what charges now, every session there was, and one of them
-// in full - with where the map takes its stations from below the
-// configuration. Everything else is what every node has: name resolution, the
+// with what is signed about one of a roaming network, and charging - what
+// charges now, every session there was, and one of them in full - with where
+// the map takes its stations from below the configuration. Everything else is what every node has: name resolution, the
 // time, the SSH server, the certificates it believes, who it is as a client
 // and the log - see WWCP_Node's start.ts.
 startNode({
@@ -41,7 +42,8 @@ startNode({
             nodeMenu.nts,
             nodeMenu.ssh,
             nodeMenu.certificates,
-            nodeMenu.identities
+            nodeMenu.identities,
+            nodeMenu.serverIdentities
         ]),
         nodeMenu.logs
     ],
@@ -60,6 +62,11 @@ startNode({
             presents:  html`
                 Who this smartphone is to a server that asks, with its private key. Kept for when it signs in to
                 its e-mobility provider with a certificate; nothing here presents it yet.
+            `,
+            serves:    html`
+                Who this web interface is over HTTPS, with its private key: what --https shows a browser, or
+                "web.tls.certificate": "store". A browser says where it is - Locate me - only to a page served
+                over HTTPS or from the machine itself.
             `
         }
     },
@@ -69,6 +76,7 @@ startNode({
     pages: {
 
         '/map':                     mapPage,
+        '/map/locations/:id':       locationPage,
 
         '/charging':                chargingPage,
         '/charging/history':        historyPage,

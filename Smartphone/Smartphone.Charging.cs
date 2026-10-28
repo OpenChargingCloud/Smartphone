@@ -52,7 +52,9 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// Start charging at an EVSE of a station of the map - simulated, for
-        /// as long as there is no e-mobility provider to ask.
+        /// as long as there is no e-mobility provider to ask. At a station of a
+        /// roaming network, only once the proof of its station was checked and
+        /// while it holds, for the price it gives.
         /// </summary>
         /// <param name="LocationId">The station, by the id the map gave it.</param>
         /// <param name="EVSEUid">Its EVSE, by the uid the map gave it.</param>
@@ -71,7 +73,10 @@ namespace cloud.charging.open.Smartphone
             Session  = null;
             Refusal  = ChargingRefusal.None;
 
-            var location = DemoLocations.Location(LocationId);
+            var anchor    = RoamingNetwork.TrustAnchor;
+            var location  = anchor is null
+                                ? DemoLocations.Location(LocationId)
+                                : RoamingLocation(LocationId);
 
             if (location is null)
             {
@@ -89,14 +94,51 @@ namespace cloud.charging.open.Smartphone
                 return false;
             }
 
-            if (!Sessions.TryStart(location, evse, DemoLocations.StatusOf, Who, out Session, out Error, out var notSaved))
+            Func<ChargingEVSE, DateTimeOffset, String> statusOf = DemoLocations.StatusOf;
+
+            // Of a roaming network, only where the proof of its station was
+            // checked and still holds: what it costs is what the proof says,
+            // and a station nobody attested is no place to charge at.
+            if (anchor is not null)
+            {
+
+                var now      = TimeProvider.GetUtcNow();
+                var station  = locationChecks.TryGetValue(location.Id, out var check) ? check.StationOf(evse) : null;
+
+                if (station is null || !station.HoldsAt(anchor, now))
+                {
+                    Refusal  = ChargingRefusal.Conflict;
+                    Error    = station is null
+                                   ? $"{evse.EVSEId} at {location.Name} was not checked yet: open the station on the map, so that its proof is checked, and charge then."
+                                   : station.Verified
+                                         ? $"The proof of {evse.EVSEId} at {location.Name} was checked at {station.CheckedAt:HH:mm:ss} and does not hold any more: open the station again."
+                                         : $"{evse.EVSEId} at {location.Name} is not signed as the trust anchor of the roaming network requires: {station.Error}";
+                    return false;
+                }
+
+                var tariff = station.TariffOf(evse.Uid);
+
+                if (tariff is null)
+                {
+                    Refusal  = ChargingRefusal.Conflict;
+                    Error    = $"The proof of {evse.EVSEId} at {location.Name} names no price per kWh, and a simulated session counts with nothing else.";
+                    return false;
+                }
+
+                location  = location with { Tariff = tariff };
+                statusOf  = (_, _) => EVSEStatus.Unknown;
+
+            }
+
+            if (!Sessions.TryStart(location, evse, statusOf, Who, out Session, out Error, out var notSaved))
             {
                 Refusal = notSaved ? ChargingRefusal.NotSaved : ChargingRefusal.Conflict;
                 return false;
             }
 
-            Log.Notice($"'{Who}' started charging at {location.Name}, {evse.EVSEId}, with {Session.PowerKW:0.#} kW until {Session.TargetEnergyKWh:0.#} kWh - " +
-                       $"simulated: no e-mobility provider was asked. The session is {Session.Id}.",
+            Log.Notice($"'{Who}' started charging at {location.Name}, {evse.EVSEId}, with {Session.PowerKW:0.#} kW until {Session.TargetEnergyKWh:0.#} kWh" +
+                       (anchor is not null ? $" for {Session.PricePerKWh:0.00##} {Session.Currency} per kWh, as its checked proof says" : "") +
+                       $" - simulated: no e-mobility provider was asked. The session is {Session.Id}.",
                        "charging", "web");
 
             return true;

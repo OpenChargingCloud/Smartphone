@@ -260,6 +260,98 @@ $status-colours: (
 }
 
 
+// --- What is signed about a station of a roaming network --------------------
+
+// On Configuration → Map: what the trust anchor names, above the form that
+// replaces it.
+.roaming-network-anchor {
+    margin-bottom:  0.9rem;
+}
+
+// In a pin: whether the proofs of its stations hold, and the way to them.
+.station-popup {
+
+    .station-check {
+        display:      flex;
+        flex-wrap:    wrap;
+        align-items:  baseline;
+        gap:          0.3rem;
+    }
+
+    .station-details {
+        align-self:   flex-start;
+        margin-top:   0.15rem;
+    }
+
+}
+
+.checked-evse {
+
+    border-top:   1px solid $color-border;
+    margin-top:   0.9rem;
+    padding-top:  0.6rem;
+
+    h3 {
+        margin:       0 0 0.45rem 0;
+        font-size:    0.95rem;
+    }
+
+    .evse-id {
+        font-family:  $font-mono;
+    }
+
+}
+
+.checked-meter {
+
+    margin-top:  0.6rem;
+
+    h4 {
+        margin:     0.3rem 0;
+        font-size:  0.9rem;
+    }
+
+}
+
+// The key of an energy meter: every character of it matters to whoever
+// compares it with the one a transparency software was given, so it wraps
+// and is never shortened.
+.meter-key {
+
+    margin:  0.4rem 0;
+
+    .public-key {
+        display:        block;
+        margin-top:     0.25rem;
+        padding:        0.4rem 0.5rem;
+        border:         1px solid $color-border;
+        border-radius:  6px;
+        background:     $color-bg;
+        font-size:      0.75rem;
+        user-select:    all;
+    }
+
+}
+
+ul.price-statements {
+
+    list-style:  none;
+    padding:     0;
+    margin:      0.3rem 0;
+
+    li {
+        padding:     0.35rem 0;
+        border-top:  1px solid $color-border;
+    }
+
+    .evse-id {
+        font-family:  $font-mono;
+        margin:       0 0.35rem;
+    }
+
+}
+
+
 // --- Charging ---------------------------------------------------------------
 
 .session-status {

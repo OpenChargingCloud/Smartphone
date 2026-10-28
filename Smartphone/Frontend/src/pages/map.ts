@@ -1,9 +1,10 @@
 import * as L from 'leaflet';
 
-import { api, type ChargingLocation, type EVSE, type MapData } from '../api/client';
+import { api, type ChargingLocation, type EVSE, type LocationCheck, type MapData } from '../api/client';
 import { auth } from '../auth';
 import { availability, maxPowerKW, positionOf, search, standardWord, stationStatus, statusClass, statusWord } from '../map/stations';
 import { dayAndTime, money } from '../charging/words';
+import { toURL } from '@node/basePath';
 import type { Page } from '@node/router';
 import { mayButNot, reloadButton, shell } from '@node/shell';
 import { errorMessage } from '@node/ui';
@@ -14,6 +15,14 @@ import { html, nothing, render, type TemplateResult } from '@node/view';
  * it, and "where am I". A station's pin opens what is known about it, and
  * "Charge now!" at one of its EVSEs that is available starts a session there
  * and goes on to the charging page, where it is watched.
+ *
+ * The stations are the smartphone's demo stations, or the charging pools of
+ * the roaming network whose trust anchor it was given. Those say nothing of
+ * their price and nothing that is signed until their pin is opened: then the
+ * smartphone checks the proof of each of their stations against the trust
+ * anchor, the pin says whether they hold, and only then is there a price and
+ * "Charge now!". What the proofs give in full - the tariffs, the energy meters
+ * and the keys they sign with - is a page of its own.
  *
  * The map is Leaflet's, drawn into one element of the page that lit-html
  * leaves alone; everything around it is drawn by comparing, as on every other
@@ -31,7 +40,7 @@ export const mapPage: Page = {
             active:    '/map',
             title:     'Map',
             subtitle:  'Charging stations, and how they are right now.',
-            actions:   reloadButton(() => load())
+            actions:   reloadButton(() => load(true))
         });
 
         const mayCharge = auth.can('charging', 'run');
@@ -52,6 +61,11 @@ export const mapPage: Page = {
         const chosen   = new Map<string, string>();
         const starting = new Set<string>();
         const failed   = new Map<string, string>();
+        const checks   = new Map<string, LocationCheck>();
+        const checking = new Set<string>();
+        const unchecked = new Map<string, string>();
+
+        const ofRoamingNetwork = () => data?.source === 'roamingNetwork';
 
 
         function draw(): void {
@@ -91,7 +105,9 @@ export const mapPage: Page = {
                                                 <span class="station-dot ${statusClass(stationStatus(location))}"></span>
                                                 <span class="map-result-name">${location.name}</span>
                                                 <span class="muted small">${location.address}, ${location.city} -
-                                                    ${availability(location).available} of ${availability(location).total} available</span>
+                                                    ${ofRoamingNetwork()
+                                                          ? `${location.evses.length} charge point(s), their status not known`
+                                                          : `${availability(location).available} of ${availability(location).total} available`}</span>
                                             </button>
                                         </li>
                                     `)}
@@ -99,6 +115,7 @@ export const mapPage: Page = {
                     ` : nothing}
 
                     ${problem !== null ? html`<div class="error-box">The charging stations could not be loaded: ${problem}</div>` : nothing}
+                    ${data?.roamingNetwork?.error ? html`<div class="error-box">${data.roamingNetwork.error}</div>` : nothing}
                     ${located !== null ? html`<div class="notice">${located}</div>` : nothing}
 
                     <div id="map" class="map-canvas" role="region" aria-label="Map of charging stations"></div>
@@ -107,7 +124,9 @@ export const mapPage: Page = {
                         ${legend()}
                         ${data !== null ? html`
                             <span class="muted">
-                                ${data.source === 'demo' ? 'Demo stations' : `From ${data.stationsURL}`},
+                                ${data.source === 'demo'
+                                      ? 'Demo stations'
+                                      : `From the roaming network ${data.roamingNetwork?.name ?? data.roamingNetwork?.id ?? ''}, its stations checked as they are opened`},
                                 as of ${dayAndTime(data.timestamp)}.
                             </span>
                         ` : nothing}
@@ -123,7 +142,11 @@ export const mapPage: Page = {
         /** The colours a pin can have, and what each says. */
         function legend(): TemplateResult {
 
-            const shown = [ 'AVAILABLE', 'CHARGING', 'RESERVED', 'OUTOFORDER', 'PLANNED' ] as const;
+            // A roaming network says the status of its EVSEs only over its
+            // WebSocket: its pins are of a status not known.
+            const shown = ofRoamingNetwork()
+                              ? [ 'UNKNOWN', 'CHARGING' ] as const
+                              : [ 'AVAILABLE', 'CHARGING', 'RESERVED', 'OUTOFORDER', 'PLANNED' ] as const;
 
             return html`${shown.map(status => html`
                 <span class="legend-entry"><span class="station-dot ${statusClass(status)}"></span> ${statusWord(status)}</span>
@@ -189,8 +212,11 @@ export const mapPage: Page = {
 
                     popups.set(location.id, element);
 
+                    const id = location.id;
+
                     marker = L.marker(position, { icon, title: location.name, alt: location.name, keyboard: true }).
                                  bindPopup(element, { minWidth: 260, maxWidth: 340, autoPanPadding: [ 16, 16 ] }).
+                                 on('popupopen', () => void check(id)).
                                  addTo(map);
 
                     markers.set(location.id, marker);
@@ -231,7 +257,7 @@ export const mapPage: Page = {
             if (location === undefined || element === undefined)
                 return;
 
-            const free = location.evses.filter(evse => evse.status === 'AVAILABLE');
+            const free = location.evses.filter(evse => isFree(evse));
 
             // The EVSE chosen before, while it is still free; otherwise the
             // first free one, so that "Charge now!" means something at once.
@@ -240,7 +266,13 @@ export const mapPage: Page = {
             if (pick === undefined || !free.some(evse => evse.uid === pick))
                 pick = free[0]?.uid;
 
-            const busy = starting.has(id);
+            const busy     = starting.has(id);
+            const signed   = ofRoamingNetwork();
+            const checked  = checks.get(id);
+
+            // Of a roaming network, nowhere to charge until its proofs hold:
+            // what it costs and who runs it are only what they say then.
+            const blocked  = signed && checked?.verified !== true;
 
             render(element, html`
 
@@ -250,16 +282,21 @@ export const mapPage: Page = {
 
                     <div class="small">${location.address}, ${location.postal_code} ${location.city}</div>
                     <div class="small muted">
-                        ${location.operator.name} - ${money(location.tariff.price_per_kwh, location.tariff.currency)} per kWh
+                        ${location.operator.name} -
+                        ${location.tariff !== null
+                              ? html`${money(location.tariff.price_per_kwh, location.tariff.currency)} per kWh`
+                              : 'the price is what its proof says'}
                     </div>
 
+                    ${signed ? checkView(id, checked) : nothing}
+
                     <ul class="evse-list">
-                        ${location.evses.map(evse => evseView(location, evse, pick))}
+                        ${location.evses.map(evse => evseView(location, evse, pick, checked))}
                     </ul>
 
                     ${mayCharge ? html`
                         <button type="button" class="btn primary charge-now"
-                                ?disabled=${pick === undefined || busy}
+                                ?disabled=${pick === undefined || busy || blocked}
                                 @click=${() => void chargeNow(location, pick)}>
                             <i class="fa-solid fa-bolt"></i> ${busy ? 'Starting ...' : 'Charge now!'}
                         </button>
@@ -267,6 +304,12 @@ export const mapPage: Page = {
                     ` : html`
                         <div class="small muted">${mayButNot('look at the map', 'start charging')}</div>
                     `}
+
+                    ${signed ? html`
+                        <a class="small station-details" href="${toURL(`/map/locations/${encodeURIComponent(id)}`)}">
+                            <i class="fa-solid fa-file-signature"></i> What is signed about it
+                        </a>
+                    ` : nothing}
 
                     ${failed.has(id) ? html`<div class="form-error" role="alert">${failed.get(id)}</div>` : nothing}
 
@@ -284,10 +327,85 @@ export const mapPage: Page = {
         }
 
 
-        function evseView(location: ChargingLocation, evse: EVSE, pick: string | undefined): TemplateResult {
+        /** Whether this phone may start at an EVSE: available, or of a roaming network, whose status is not known. */
+        function isFree(evse: EVSE): boolean {
+            return evse.status === 'AVAILABLE' || (ofRoamingNetwork() && evse.status === 'UNKNOWN');
+        }
+
+
+        /** Whether the proofs of a station of the roaming network hold, as checked when its pin was opened. */
+        function checkView(id: string, checked: LocationCheck | undefined): TemplateResult | typeof nothing {
+
+            if (checking.has(id) && checked === undefined)
+                return html`<div class="station-check small muted"><i class="fa-solid fa-spinner fa-spin"></i> Checking what is signed ...</div>`;
+
+            if (unchecked.has(id))
+                return html`<div class="station-check small"><span class="chip bad">not checked</span> ${unchecked.get(id)}</div>`;
+
+            if (checked === undefined)
+                return nothing;
+
+            const first = checked.stations.find(station => station.verified);
+            const wrong = checked.stations.find(station => !station.verified);
+
+            return checked.verified
+                       ? html`<div class="station-check small">
+                                  <span class="chip ok"><i class="fa-solid fa-check"></i> signed</span>
+                                  attested by ${first?.roamingNetwork?.operator ?? first?.attestation?.signer ?? 'its operator'}
+                                  of ${first?.roamingNetwork?.name ?? first?.roamingNetwork?.id ?? 'the roaming network'}
+                              </div>`
+                       : html`<div class="station-check small">
+                                  <span class="chip bad"><i class="fa-solid fa-xmark"></i> not signed</span>
+                                  ${wrong?.error ?? 'Its proofs do not hold.'}
+                              </div>`;
+
+        }
+
+
+        /** Check the stations of a pool of the roaming network, as its pin opens - once, until the map is reloaded. */
+        async function check(id: string): Promise<void> {
+
+            if (!ofRoamingNetwork() || checking.has(id) || checks.has(id))
+                return;
+
+            checking.add(id);
+            unchecked.delete(id);
+            drawPopup(id);
+
+            try
+            {
+
+                const checked = await api.map.check(id);
+
+                if (cancelled)
+                    return;
+
+                checks.set(id, checked);
+
+                // What it costs and that it holds are on the map now as well.
+                await load();
+
+            }
+            catch (error)
+            {
+                if (!cancelled)
+                    unchecked.set(id, errorMessage(error));
+            }
+            finally
+            {
+                checking.delete(id);
+                if (!cancelled)
+                    drawPopup(id);
+            }
+
+        }
+
+
+        function evseView(location: ChargingLocation, evse: EVSE, pick: string | undefined, checked?: LocationCheck): TemplateResult {
 
             const connector = evse.connectors[0];
-            const free      = evse.status === 'AVAILABLE';
+            const free      = isFree(evse);
+            const price     = checked?.stations.flatMap(station => station.evses ?? []).find(one => one.id === evse.evse_id)?.price;
 
             return html`
                 <li>
@@ -299,6 +417,7 @@ export const mapPage: Page = {
                         <span class="evse-id">${evse.evse_id}</span>
                         <span class="muted small">
                             ${connector !== undefined ? standardWord(connector.standard) : ''} - ${maxPowerKW(evse)} kW
+                            ${price ? html` - ${money(price.pricePerKWh, price.currency)}/kWh` : nothing}
                         </span>
                     </label>
                 </li>
@@ -448,7 +567,7 @@ export const mapPage: Page = {
         }
 
 
-        async function load(): Promise<void> {
+        async function load(refresh = false): Promise<void> {
 
             clearTimeout(timer);
 
@@ -457,7 +576,12 @@ export const mapPage: Page = {
             try
             {
 
-                const loaded = await api.map.get();
+                // Reload asks the roaming network again, and checks again what
+                // is opened: an attestation holds for minutes.
+                const loaded = await api.map.get(refresh);
+
+                if (refresh)
+                    checks.clear();
 
                 if (cancelled)
                     return;

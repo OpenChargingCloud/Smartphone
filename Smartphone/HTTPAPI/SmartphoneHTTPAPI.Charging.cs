@@ -33,16 +33,88 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// GET /api/v1/map: every charging station of the map, with the status
-        /// of each EVSE now.
+        /// of each EVSE now - "?refresh=true" to ask the roaming network again
+        /// rather than show what it listed within the last minute.
         /// </summary>
-        private Task<HTTPResponse> GetMap(HTTPRequest Request)
+        private async Task<HTTPResponse> GetMap(HTTPRequest Request)
+        {
+
+            if (!TryAuthorize(Request, Permission.Read(SmartphoneAccess.Map), false, out _, out var refused))
+                return refused;
+
+            var refresh = String.Equals(Request.QueryString.GetString("refresh"), "true", StringComparison.OrdinalIgnoreCase);
+
+            return JSONResponse(Request, HTTPStatusCode.OK, await Smartphone.LocationsJSONAsync(refresh));
+
+        }
+
+        #endregion
+
+        #region (private) GetLocationCheck(Request)
+
+        /// <summary>
+        /// GET /api/v1/map/locations/{id}/check: the charging stations of a pool
+        /// of the roaming network checked now - the proof of each against the
+        /// trust anchor, and their price statements - and everything a proof
+        /// that holds gives: the tariffs, and the energy meters with the public
+        /// keys they sign their measurements with. 200 with whether they hold;
+        /// 404 where the map has no such pool; 409 where the map shows its demo
+        /// stations, which nobody signed.
+        /// </summary>
+        private async Task<HTTPResponse> GetLocationCheck(HTTPRequest Request)
+        {
+
+            if (!TryAuthorize(Request, Permission.Read(SmartphoneAccess.Map), false, out _, out var refused))
+                return refused;
+
+            var (check, error, notFound) = await Smartphone.CheckLocationAsync(IdOf(Request));
+
+            if (check is null)
+                return ErrorJSON(Request, notFound ? HTTPStatusCode.NotFound : HTTPStatusCode.Conflict, error!);
+
+            return JSONResponse(Request, HTTPStatusCode.OK, check.ToJSON());
+
+        }
+
+        #endregion
+
+        #region (private) GetRoamingNetworkConfiguration(Request) / PutRoamingNetworkConfiguration(Request)
+
+        /// <summary>
+        /// GET /api/v1/configuration/roamingNetwork: the roaming network the map
+        /// takes its stations from, as its trust anchor says it.
+        /// </summary>
+        private Task<HTTPResponse> GetRoamingNetworkConfiguration(HTTPRequest Request)
         {
 
             if (!TryAuthorize(Request, Permission.Read(SmartphoneAccess.Map), false, out _, out var refused))
                 return Task.FromResult(refused);
 
             return Task.FromResult(
-                       JSONResponse(Request, HTTPStatusCode.OK, Smartphone.LocationsJSON())
+                       JSONResponse(Request, HTTPStatusCode.OK, Smartphone.RoamingNetworkConfigurationJSON())
+                   );
+
+        }
+
+        /// <summary>
+        /// PUT /api/v1/configuration/roamingNetwork with { "trustAnchor" }: the
+        /// text of its QR code, its URI or its JSON - or empty, and the map
+        /// shows its demo stations. Answers with what it says now.
+        /// </summary>
+        private Task<HTTPResponse> PutRoamingNetworkConfiguration(HTTPRequest Request)
+        {
+
+            if (!TryAuthorize(Request, Permission.Edit(SmartphoneAccess.Map), true, out var user, out var refused))
+                return Task.FromResult(refused);
+
+            if (!TryParseJSONObject(Request, out var json, out var errorResponse))
+                return Task.FromResult(errorResponse);
+
+            if (!Smartphone.TryUpdateRoamingNetworkConfiguration(json, user.Id.ToString(), out var error, out var notSaved))
+                return Task.FromResult(NotChanged(Request, HTTPStatusCode.BadRequest, error, notSaved));
+
+            return Task.FromResult(
+                       JSONResponse(Request, HTTPStatusCode.OK, Smartphone.RoamingNetworkConfigurationJSON())
                    );
 
         }

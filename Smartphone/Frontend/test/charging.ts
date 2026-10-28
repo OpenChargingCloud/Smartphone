@@ -1,10 +1,11 @@
 /*
  * What the tests of the map and the charging pages are given to draw: two
- * stations as a smartphone sends them, and a charging session as it sends one.
+ * stations as a smartphone sends them, and a charging session as it sends one;
+ * and a charging pool of a roaming network, with the check of its stations.
  * Each test lays over them what it is about.
  */
 
-import type { ChargingLocation, ChargingSession, MapData } from '../src/api/client';
+import type { ChargingLocation, ChargingSession, LocationCheck, MapData, StationCheck } from '../src/api/client';
 
 
 /** A station of the map: one available AC point and one out of order. */
@@ -83,4 +84,85 @@ export function session(more: Partial<ChargingSession> = {}): ChargingSession {
         cost:             { amount: 0.9, pricePerKWh: 0.49, currency: 'EUR' },
         ...more
     };
+}
+
+
+/** A charging pool of a roaming network, as the map lists it: its two EVSEs of a status not known, and no price yet. */
+export function paradies(more: Partial<ChargingLocation> = {}): ChargingLocation {
+    return {
+        id:            'DE*GEF*P1',
+        name:          'Jena, Paradiesbahnhof',
+        address:       'Am Paradiesbahnhof 1',
+        postal_code:   '07743',
+        city:          'Jena',
+        country:       'DEU',
+        coordinates:   { latitude: '50.922100', longitude: '11.585200' },
+        operator:      { name: 'GraphDefined Charging' },
+        evses:         [
+            { uid: 'DE*GEF*E1*1', evse_id: 'DE*GEF*E1*1', station_id: 'DE*GEF*S1', status: 'UNKNOWN',
+              connectors: [ { id: '1', standard: 'IEC_62196_T2', format: 'SOCKET', power_type: 'AC_3_PHASE', max_electric_power: 22000 } ] },
+            { uid: 'DE*GEF*E2*1', evse_id: 'DE*GEF*E2*1', station_id: 'DE*GEF*S2', status: 'UNKNOWN',
+              connectors: [ { id: '1', standard: 'IEC_62196_T2_COMBO', format: 'CABLE', power_type: 'DC', max_electric_power: 150000 } ] }
+        ],
+        tariff:        null,
+        last_updated:  '2026-10-10T08:00:00Z',
+        verified:      null,
+        ...more
+    };
+}
+
+/** The map of the roaming network QA. */
+export function roamingMapData(locations: ChargingLocation[] = [ paradies() ]): MapData {
+    return {
+        ...mapData(locations),
+        source:          'roamingNetwork',
+        roamingNetwork:  { id: 'QA', name: 'Quality Assurance', from: 'https://hub.example/poi/RNs/QA', error: null }
+    };
+}
+
+/** The check of a station of the pool: its proof attested by OCC, or - not verified - why not. */
+export function stationCheck(stationId: string, evseId: string, verified = true, more: Partial<StationCheck> = {}): StationCheck {
+
+    if (!verified)
+        return {
+            stationId, checkedAt: '2026-10-10T08:00:00Z', from: 'https://hub.example/poi/RNs/QA', verified: false,
+            error: `The proof of ${stationId} is not attested by the operator the trust anchor names: no attestation of a trusted key.`,
+            ...more
+        };
+
+    return {
+        stationId,
+        checkedAt:                '2026-10-10T08:00:00Z',
+        from:                     'https://hub.example/poi/RNs/QA',
+        verified:                 true,
+        error:                    null,
+        textMismatch:             null,
+        roamingNetwork:           { id: 'QA', name: 'Quality Assurance', description: null, operator: 'Open Charging Cloud', revision: 7, commitId: 'c0ffee' },
+        attestation:              { role: 'roamingNetworkOperator', signer: 'OCC', algorithm: 'ES256', keyId: 'a1b2', signedAt: '2026-10-10T07:55:00Z', validUntil: '2026-10-10T08:10:00Z' },
+        chargingStationOperator:  { id: 'DE*GEF', name: 'GraphDefined Charging' },
+        station:                  { name: null, manufacturer: 'GraphDefined', model: 'GD-DC300', hardwareRevision: null, firmwareVersion: null },
+        evses:                    [ {
+            id:            evseId,
+            maxPowerKW:    150,
+            currentTypes:  [ 'DC' ],
+            connectors:    [ { id: '1', type: 'IEC_62196_T2_COMBO', format: 'CABLE' } ],
+            tariffs:       [ { id: 'DE*GEF*T_DC', name: 'DC', currency: 'EUR', elements: [ { priceComponents: [ { type: 'ENERGY', price: 0.69, stepSize: 1 } ] } ] } ],
+            price:         { pricePerKWh: 0.65, currency: 'EUR' },
+            energyMeter:   { id: 'meter-dc-1', manufacturer: 'Kernberg', model: 'KDM-500', serialNumber: 'DC-2026-001', firmwareVersion: null,
+                             signatureMethods: [ 'OCMF' ],
+                             publicKeys: [ { id: 'fba865f35d75', algorithm: 'secp256r1', key: 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE0J5uv5Eo22C9', certificateChain: 0 } ] }
+        } ],
+        priceStatements:          [ { verified: true, error: null, entityType: 'EVSE', entityId: evseId, signer: 'DE*GEF', keyId: '4197', sequence: 0,
+                                      signedAt: '2026-10-10T07:59:00Z', validFrom: '2026-10-10T07:59:00Z', validUntil: null,
+                                      prices: [ { chargingTariffId: 'DE*GEF*T_DC', elements: [ { priceComponents: [ { type: 'ENERGY', price: 0.65, stepSize: 1 } ] } ] } ] } ],
+        priceStatementsError:     null,
+        ...more
+    };
+
+}
+
+/** The check of the pool: both of its stations, holding unless said otherwise. */
+export function locationCheck(verified = true): LocationCheck {
+    const stations = [ stationCheck('DE*GEF*S1', 'DE*GEF*E1*1', verified), stationCheck('DE*GEF*S2', 'DE*GEF*E2*1', verified) ];
+    return { locationId: 'DE*GEF*P1', name: 'Jena, Paradiesbahnhof', verified, checkedAt: '2026-10-10T08:00:00Z', stations };
 }
