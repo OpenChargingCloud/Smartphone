@@ -54,7 +54,7 @@ namespace cloud.charging.open.Smartphone.Tests
     /// not cover it, by another key than its ticket issuer's, an hour off, or
     /// with the phone's own signature replaced; a stop countersigned with
     /// another token than its start's - or it refuses the start, or knows of
-    /// none, as the EMSP does not yet.
+    /// none, as an EMSP from before start requests.
     /// </remarks>
     public sealed class TestEMSP : IAsyncDisposable
     {
