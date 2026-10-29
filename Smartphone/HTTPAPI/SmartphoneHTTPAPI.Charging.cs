@@ -168,41 +168,44 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// GET /api/v1/charging/sessions: every charging session of this phone,
-        /// the newest first - "?active=true" for those still charging.
+        /// the newest first - "?active=true" for those still starting or
+        /// charging. Those started through the e-mobility provider as it
+        /// reports them now.
         /// </summary>
-        private Task<HTTPResponse> GetChargingSessions(HTTPRequest Request)
+        private async Task<HTTPResponse> GetChargingSessions(HTTPRequest Request)
         {
 
             if (!TryAuthorize(Request, Permission.Read(SmartphoneAccess.Charging), false, out _, out var refused))
-                return Task.FromResult(refused);
+                return refused;
 
             var onlyActive = String.Equals(Request.QueryString.GetString("active"), "true", StringComparison.OrdinalIgnoreCase);
 
-            return Task.FromResult(
-                       JSONResponse(Request, HTTPStatusCode.OK, Smartphone.SessionsJSON(onlyActive))
-                   );
+            await Smartphone.ReportsFromProviderAsync(Smartphone.Sessions.All());
+
+            return JSONResponse(Request, HTTPStatusCode.OK, Smartphone.SessionsJSON(onlyActive));
 
         }
 
         /// <summary>
         /// GET /api/v1/charging/sessions/{id}: one charging session, as it is
-        /// now.
+        /// now - as the e-mobility provider reports it, where it was started
+        /// through one.
         /// </summary>
-        private Task<HTTPResponse> GetChargingSession(HTTPRequest Request)
+        private async Task<HTTPResponse> GetChargingSession(HTTPRequest Request)
         {
 
             if (!TryAuthorize(Request, Permission.Read(SmartphoneAccess.Charging), false, out _, out var refused))
-                return Task.FromResult(refused);
+                return refused;
 
             var id       = IdOf(Request);
             var session  = Smartphone.Sessions.Get(id);
 
             if (session is null)
-                return Task.FromResult(ErrorJSON(Request, HTTPStatusCode.NotFound, $"There is no charging session '{id}' on this phone."));
+                return ErrorJSON(Request, HTTPStatusCode.NotFound, $"There is no charging session '{id}' on this phone.");
 
-            return Task.FromResult(
-                       JSONResponse(Request, HTTPStatusCode.OK, session.ToJSON(Smartphone.TimeProvider.GetUtcNow()))
-                   );
+            await Smartphone.ReportsFromProviderAsync([ session ]);
+
+            return JSONResponse(Request, HTTPStatusCode.OK, (Smartphone.Sessions.Get(id) ?? session).ToJSON(Smartphone.TimeProvider.GetUtcNow()));
 
         }
 

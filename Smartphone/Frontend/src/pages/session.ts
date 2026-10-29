@@ -1,6 +1,6 @@
 import { api, type ChargingSession } from '../api/client';
 import { auth } from '../auth';
-import { dayAndTime, duration, money, sessionStatusClass, sessionStatusWord, withUnit } from '../charging/words';
+import { dayAndTime, duration, isRunning, money, reportedInWords, sessionStatusClass, sessionStatusWord, withUnit } from '../charging/words';
 import { standardWord } from '../map/stations';
 import { toURL } from '@node/basePath';
 import type { Page } from '@node/router';
@@ -11,8 +11,9 @@ import { html, nothing, render, type TemplateResult } from '@node/view';
 /**
  * One charging session, with everything there is to know about it: where,
  * at which charge point, from when to when, what it charged and what it
- * cost - and, while it still charges, its figures counting on every two
- * seconds and Stop.
+ * cost - and, while it still starts or charges, its figures asked for again
+ * every two seconds and Stop. A session the e-mobility provider reports has
+ * no power, no target and no time it is full at: OCPI tells none of them.
  */
 export const sessionPage: Page = {
 
@@ -48,7 +49,8 @@ export const sessionPage: Page = {
 
         function draw(session: ChargingSession): void {
 
-            const charging = session.status === 'charging';
+            const charging  = session.status === 'charging';
+            const running   = isRunning(session);
 
             render(content, html`
 
@@ -65,19 +67,25 @@ export const sessionPage: Page = {
 
                         <div class="kv-list">
                             ${kv('Energy',     withUnit(session.energyKWh, 'kWh', 3))}
-                            ${kv('Power',      charging ? withUnit(session.powerKW, 'kW') : 'none - it is over')}
+                            ${session.powerKW !== undefined
+                                  ? kv('Power', charging ? withUnit(session.powerKW, 'kW') : 'none - it is over')
+                                  : nothing}
                             ${kv('Duration',   duration(session.durationSeconds))}
                             ${kv('Cost',       html`${money(session.cost.amount, session.cost.currency)}
-                                                    <span class="muted">(${money(session.cost.pricePerKWh, session.cost.currency)} per kWh)</span>`)}
-                            ${kv('Progress',   html`${withUnit(session.progressPercent, '%')} of ${withUnit(session.targetEnergyKWh, 'kWh')}`)}
+                                                    <span class="muted">${session.cost.reported === true
+                                                                              ? '(as the operator reports it)'
+                                                                              : `(${money(session.cost.pricePerKWh, session.cost.currency)} per kWh)`}</span>`)}
+                            ${session.progressPercent !== undefined && session.targetEnergyKWh !== undefined
+                                  ? kv('Progress', html`${withUnit(session.progressPercent, '%')} of ${withUnit(session.targetEnergyKWh, 'kWh')}`)
+                                  : nothing}
                         </div>
 
-                        ${charging ? html`
+                        ${charging && session.progressPercent !== undefined ? html`
                             <progress class="session-progress" max="100" .value=${session.progressPercent}
                                       aria-label="How far it has charged"></progress>
                         ` : nothing}
 
-                        ${charging && mayStop ? html`
+                        ${running && mayStop ? html`
                             <div class="form-actions">
                                 <button type="button" class="btn danger" ?disabled=${stopping} @click=${() => void stop()}>
                                     <i class="fa-solid fa-stop"></i> ${stopping ? 'Stopping ...' : 'Stop charging'}
@@ -109,16 +117,22 @@ export const sessionPage: Page = {
                         <div class="kv-list">
                             ${kv('Started',     dayAndTime(session.startedAt))}
                             ${kv('Started by',  session.startedBy)}
-                            ${kv(charging ? 'Full at' : 'Ended',
-                                 charging ? dayAndTime(session.fullAt) : dayAndTime(session.endedAt ?? session.fullAt))}
+                            ${session.chargingSince !== undefined ? kv('Charging since', dayAndTime(session.chargingSince)) : nothing}
+                            ${running
+                                  ? session.fullAt !== undefined ? kv('Full at', dayAndTime(session.fullAt)) : nothing
+                                  : kv('Ended', dayAndTime(session.endedAt ?? session.fullAt ?? ''))}
                             ${session.stoppedBy !== undefined ? kv('Stopped by', session.stoppedBy) : nothing}
                             ${kv('Session',     html`<span class="mono">${session.id}</span>`)}
                         </div>
 
+                        ${!session.simulated && session.provider !== undefined ? html`
+                            <p class="small muted session-reported">${reportedInWords(session)}</p>
+                        ` : nothing}
+
                         ${session.simulated ? html`
                             <p class="small muted">
                                 ${session.start !== undefined
-                                      ? 'Started through the e-mobility provider, which countersigned the start. What it charged is simulated: no meter values reach this phone yet.'
+                                      ? 'Started through the e-mobility provider, which countersigned the start. What it charged is simulated: the provider reports nothing of it.'
                                       : `Simulated: ${session.ticket !== undefined
                                                           ? 'the e-mobility provider issued its ticket, and took no start request'
                                                           : 'no e-mobility provider was asked'}, and nothing was charged for real.`}
@@ -224,7 +238,7 @@ export const sessionPage: Page = {
 
                 draw(session);
 
-                if (session.status === 'charging')
+                if (isRunning(session))
                     timer = setTimeout(() => void load(), 2_000);
 
             }

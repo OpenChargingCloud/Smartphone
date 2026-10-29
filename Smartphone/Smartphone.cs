@@ -280,7 +280,7 @@ namespace cloud.charging.open.Smartphone
                               "map");
 
             this.Log.Info($"{Sessions.All().Count} charging session(s) are kept in '{Sessions.FilePath}'. " +
-                           "Charging is simulated: no e-mobility provider takes a start request yet.",
+                           "Charging is simulated without an account at an e-mobility provider, and where the provider reports nothing of a session.",
                           "charging");
 
             #endregion

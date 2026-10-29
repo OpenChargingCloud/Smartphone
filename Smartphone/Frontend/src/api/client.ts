@@ -234,8 +234,21 @@ export interface MapSettings {
     file:          string;
 }
 
-/** What a charging session is doing. */
-export type ChargingSessionStatus = 'charging' | 'stopped' | 'finished';
+/** What a charging session is doing: 'starting' and 'failed' only where the e-mobility provider reports it. */
+export type ChargingSessionStatus = 'starting' | 'charging' | 'stopped' | 'finished' | 'failed';
+
+/** What the e-mobility provider reported of a session started through it, the last time it was asked. */
+export interface ProviderReport {
+    /** The provider's state of the start: sent, started, refused, failed, stopped, ended or expired. */
+    state:           string;
+    receivedAt:      string;
+    /** Whether the charge point operator's charge detail record came. */
+    cdr:             boolean;
+    /** What the operator's CommandResult of the start said: ACCEPTED, EVSE_OCCUPIED, ... */
+    result?:         string;
+    /** The status of the operator's session: PENDING, ACTIVE, COMPLETED, INVALID, RESERVATION. */
+    sessionStatus?:  string;
+}
 
 /** The charging ticket a session was started with: which, good when, and whose keys - nothing secret. */
 export interface ChargingTicketReference {
@@ -287,7 +300,11 @@ export interface ProviderSettings {
     directory:       string;
 }
 
-/** One charging session of this phone, as it is now. */
+/**
+ * One charging session of this phone, as it is now: simulated - with a power,
+ * a target and when it is full - or as the e-mobility provider reports it,
+ * which tells none of these three.
+ */
 export interface ChargingSession {
     id:               string;
     status:           ChargingSessionStatus;
@@ -297,14 +314,19 @@ export interface ChargingSession {
     startedAt:        string;
     startedBy:        string;
     endedAt:          string | null;
-    fullAt:           string;
+    /** When the charge point operator says charging began, where it reported a session. */
+    chargingSince?:   string;
+    fullAt?:          string;
     durationSeconds:  number;
-    powerKW:          number;
+    powerKW?:         number;
     energyKWh:        number;
-    targetEnergyKWh:  number;
-    progressPercent:  number;
-    cost:             { amount: number; pricePerKWh: number; currency: string };
+    targetEnergyKWh?: number;
+    progressPercent?: number;
+    /** What it costs: as the operator reported it, where it did ("reported"), else charged times the price. */
+    cost:             { amount: number; pricePerKWh: number; currency: string; reported?: boolean };
     stoppedBy?:       string;
+    /** What the e-mobility provider reported of it, once it did. */
+    provider?:        ProviderReport;
     /** The charging ticket it was started with, where the phone has an e-mobility provider. */
     ticket?:          ChargingTicketReference;
     start?:           ChargingStartReference;

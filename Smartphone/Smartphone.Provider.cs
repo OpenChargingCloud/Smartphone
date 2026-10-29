@@ -63,6 +63,24 @@ namespace cloud.charging.open.Smartphone
         /// </summary>
         private          EMSPClient?       providerClient;
 
+        /// <summary>
+        /// How long after its ticket ran out the provider is still asked what
+        /// became of a start: long enough for the operator's charge detail
+        /// record, not for ever.
+        /// </summary>
+        public static readonly TimeSpan  ProviderReportWindow  = TimeSpan.FromDays(1);
+
+        /// <summary>
+        /// How long a page waits at most for what the provider says: an answer
+        /// that takes longer is kept when it comes, and shown on the next ask.
+        /// </summary>
+        public static readonly TimeSpan  ProviderReportWait    = TimeSpan.FromSeconds(2);
+
+        /// <summary>
+        /// When the provider was last asked of each session, by its id.
+        /// </summary>
+        private readonly Dictionary<String, DateTimeOffset>  reportsAsked  = [];
+
         #endregion
 
         #region Properties
@@ -78,6 +96,12 @@ namespace cloud.charging.open.Smartphone
         /// </summary>
         public ProviderAccount?  ProviderAccount
             => provider;
+
+        /// <summary>
+        /// How often the provider is asked at most what became of one session
+        /// started through it: every 15 seconds, while its pages ask.
+        /// </summary>
+        public TimeSpan          ProviderReportInterval    { get; set; } = TimeSpan.FromSeconds(15);
 
         private String ProviderAccountFile
             => Path.Combine(ProviderPath, "account.json");
@@ -569,6 +593,109 @@ namespace cloud.charging.open.Smartphone
                         StopCountersignedAt  = countersignature.SignedAt
                     },
                     null);
+
+        }
+
+        #endregion
+
+        #region ReportsFromProviderAsync(Sessions, CancellationToken)
+
+        /// <summary>
+        /// What the e-mobility provider says now of those of the given sessions
+        /// that were started through it, kept with each: asked at most every
+        /// <see cref="ProviderReportInterval"/> per session, and only while
+        /// something of it is still to come - until the operator's charge
+        /// detail record came or the start failed, and no longer than
+        /// <see cref="ProviderReportWindow"/> after its ticket ran out. A
+        /// provider that knows nothing of a start leaves it as it was. Waited
+        /// for no longer than <see cref="ProviderReportWait"/>: a slow provider
+        /// does not hold up the page, and what it says comes with the next.
+        /// </summary>
+        /// <param name="Sessions">The sessions a page is about to show.</param>
+        /// <param name="CancellationToken">To stop waiting for the provider.</param>
+        public async Task ReportsFromProviderAsync(IEnumerable<ChargingSession>  Sessions,
+                                                   CancellationToken             CancellationToken = default)
+        {
+
+            if (provider is not ProviderAccount account)
+                return;
+
+            var now  = TimeProvider.GetUtcNow();
+            var due  = Sessions.Where(session => session.Ticket is ChargingTicketReference ticket &&
+                                                 session.Start  is not null                       &&
+                                                 ticket.Party   == account.Party                  &&
+                                                 now <= ticket.NotAfter + ProviderReportWindow    &&
+                                                 session.Report?.IsFinal != true                  &&
+                                                 IsReportDue(session.Id, now)).
+                                ToArray();
+
+            if (due.Length == 0)
+                return;
+
+            // Not cancelled with the page: an answer that comes late is still
+            // kept, and nothing of it throws.
+            var asking = Task.WhenAll(due.Select(session => ReportFromProviderAsync(account, session)));
+
+            try
+            {
+                await Task.WhenAny(asking, Task.Delay(ProviderReportWait, CancellationToken));
+            }
+            catch (OperationCanceledException)
+            {
+                // The page went away: what the provider says is kept all the same.
+            }
+
+        }
+
+        /// <summary>
+        /// Whether the provider may be asked of the given session now - and if
+        /// so, that it is being asked, so that nobody else asks at once.
+        /// </summary>
+        private Boolean IsReportDue(String Id, DateTimeOffset Now)
+        {
+            lock (reportsAsked)
+            {
+
+                if (reportsAsked.TryGetValue(Id, out var asked) && Now - asked < ProviderReportInterval)
+                    return false;
+
+                reportsAsked[Id] = Now;
+                return true;
+
+            }
+        }
+
+        /// <summary>
+        /// What the provider says of one session, kept with it - and said in the
+        /// log where it says something new.
+        /// </summary>
+        private async Task ReportFromProviderAsync(ProviderAccount  Account,
+                                                   ChargingSession  Session)
+        {
+
+            var answer = await ClientOf(Account).StartsOfTicketAsync(Session.Ticket!.Id);
+
+            // 404 or 405: a provider that knows nothing of the start, or does not
+            // tell yet - the session stays as it is, simulated where it was.
+            if (!answer.Success || answer.JSON is null)
+                return;
+
+            var report = ProviderReport.Of(answer.JSON, Session.Start!, TimeProvider.GetUtcNow(), out var problem);
+
+            if (problem is not null)
+                Log.Warning($"{Account.Party} answered what became of the session {Session.Id} ({Session.Start!.Token}) with what does not fit it: {problem}", "provider", "charging");
+
+            if (report is null)
+                return;
+
+            if (!Sessions.TryReport(Session.Id, report, out _, out var error))
+            {
+                Log.Warning($"{Account.Party} reported of the session {Session.Id} that {report.InWords}, and this phone could not keep it: {error}", "provider", "charging");
+                return;
+            }
+
+            if (Session.Report?.InWords != report.InWords)
+                Log.Info($"{Account.Party} reports of the session {Session.Id} ({Session.Start!.Token}) at {Session.EVSEId}: {report.InWords}.", "provider", "charging");
 
         }
 

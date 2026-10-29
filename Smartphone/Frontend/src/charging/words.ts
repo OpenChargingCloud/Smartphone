@@ -59,10 +59,47 @@ export function duration(Seconds: number): string {
 /** What a session is doing, as a person reads it. */
 export function sessionStatusWord(Status: ChargingSessionStatus): string {
     switch (Status) {
+        case 'starting':  return 'starting';
         case 'charging':  return 'charging';
         case 'stopped':   return 'stopped';
         case 'finished':  return 'finished';
+        case 'failed':    return 'failed';
     }
+}
+
+
+/** Whether a session may still be stopped: starting or charging. */
+export function isRunning(Session: ChargingSession): boolean {
+    return Session.status === 'starting' || Session.status === 'charging';
+}
+
+
+/**
+ * Where the figures of a session the e-mobility provider reported come from,
+ * in a sentence: what the charge point operator told it, and when the phone
+ * last heard of it.
+ */
+export function reportedInWords(Session: ChargingSession): string {
+
+    const report = Session.provider;
+
+    if (report === undefined)
+        return '';
+
+    const what = Session.status === 'failed'
+                     ? `The charge point operator did not start it${report.result !== undefined && report.result !== 'ACCEPTED' ? `: it answered ${report.result}` : ''}.`
+                     : Session.status === 'starting'
+                           ? 'The charge point operator took the start, and has not reported charging yet.'
+                           : report.cdr
+                                 ? "The figures are the charge point operator's, from its charge detail record."
+                                 : `The figures are the charge point operator's, as it reports the session${Session.status === 'charging' ? '' : ' - its charge detail record has not come yet'}.`;
+
+    const cost = report.sessionStatus !== undefined && Session.cost.reported !== true
+                     ? ' It says nothing of the cost: that is what was charged, times the price per kWh.'
+                     : '';
+
+    return `${what}${cost} Last heard from the e-mobility provider at ${clock(report.receivedAt)}.`;
+
 }
 
 

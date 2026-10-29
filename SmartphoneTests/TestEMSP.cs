@@ -45,7 +45,10 @@ namespace cloud.charging.open.Smartphone.Tests
     /// its ticket issuer's - and countersigns start and stop requests made with
     /// them, as docs/RemoteStartWithChargingTickets.md says, with a token of
     /// each start alone: all of it with the CBOR and COSE of Styx. It starts
-    /// nothing anywhere: there is no charge point operator behind it.
+    /// nothing anywhere: the charge point operator behind it is what a test
+    /// says it reported - a CommandResult, a session, a charge detail record -
+    /// and the EMSP tells it, asked for a ticket, as the draft's "After the
+    /// start" says.
     /// </summary>
     /// <remarks>
     /// Where told to misbehave, it sends back what a phone has to refuse: a
@@ -54,7 +57,9 @@ namespace cloud.charging.open.Smartphone.Tests
     /// not cover it, by another key than its ticket issuer's, an hour off, or
     /// with the phone's own signature replaced; a stop countersigned with
     /// another token than its start's - or it refuses the start, or knows of
-    /// none, as an EMSP from before start requests.
+    /// none, as an EMSP from before start requests; or tells of a start with
+    /// another token, of a session of another start, or of nothing at all, as
+    /// an EMSP from before it told what became of a start.
     /// </remarks>
     public sealed class TestEMSP : IAsyncDisposable
     {
@@ -79,6 +84,8 @@ namespace cloud.charging.open.Smartphone.Tests
         private readonly ConcurrentQueue<StartOrStop>                                                               starts       = new();
         private readonly ConcurrentQueue<StartOrStop>                                                               stops        = new();
         private readonly ConcurrentDictionary<String, StartOrStop>                                                  started      = new();
+        private readonly ConcurrentDictionary<String, Reported>                                                     reported     = new();
+        private          Int32                                                                                      ticketReads;
 
         #endregion
 
@@ -96,7 +103,9 @@ namespace cloud.charging.open.Smartphone.Tests
         /// ticket; "takesNoStarts", "refuseStart", "countersignUnprotected",
         /// "countersignWithOtherKey", "countersignAnHourOff" or "replaceOwnSignature"
         /// with a start;
-        /// "otherTokenOnStop" with a stop - or not at all.
+        /// "otherTokenOnStop" with a stop; "reportsNothing", "reportOtherToken",
+        /// "reportOtherAuthRef" or "reportsSlowly" - four seconds late - asked
+        /// what became of a start; or not at all.
         /// </summary>
         public String? Misbehave  { get; set; }
 
@@ -129,6 +138,12 @@ namespace cloud.charging.open.Smartphone.Tests
         /// </summary>
         public Int32 SignIns
             => signIns;
+
+        /// <summary>
+        /// How often somebody asked what became of the starts of a ticket.
+        /// </summary>
+        public Int32 TicketReads
+            => ticketReads;
 
         /// <summary>
         /// The certificate of its ticket issuer.
@@ -172,6 +187,7 @@ namespace cloud.charging.open.Smartphone.Tests
             api.AddHandler(HTTPPath.Parse("/api/v1/tickets"),                   request => Task.FromResult(emsp.PostTicket(request)),    HTTPMethod.POST);
             api.AddHandler(HTTPPath.Parse("/api/v1/account-keys"),              request => Task.FromResult(emsp.PostAccountKey(request)), HTTPMethod.POST);
             api.AddHandler(HTTPPath.Parse("/api/v1/account-keys/{id}/revoke"),  request => Task.FromResult(emsp.RevokeKey(request)),     HTTPMethod.POST);
+            api.AddHandler(HTTPPath.Parse("/api/v1/tickets/{id}"),              request => emsp.GetTicketAsync(request),                 HTTPMethod.GET);
             api.AddHandler(HTTPPath.Parse("/api/v1/tickets/{id}/start"),        request => Task.FromResult(emsp.PostStart(request)),     HTTPMethod.POST);
             api.AddHandler(HTTPPath.Parse("/api/v1/tickets/{id}/stop"),         request => Task.FromResult(emsp.PostStop(request)),      HTTPMethod.POST);
 
@@ -198,6 +214,141 @@ namespace cloud.charging.open.Smartphone.Tests
         public void EndSessions()
 
             => sessions.Clear();
+
+        #endregion
+
+        #region OperatorResult(Token, Result) / OperatorSession(Token, Status, KWh, Cost) / OperatorCDR(Token, KWh, Cost, End)
+
+        /// <summary>
+        /// The charge point operator's CommandResult of the start of the given
+        /// token - come now, or the given time after the start: anything but
+        /// ACCEPTED fails the start, as the EMSP has it.
+        /// </summary>
+        public void OperatorResult(String Token, String Result, TimeSpan? After = null)
+        {
+
+            var start  = reported[Token];
+            var at     = After is TimeSpan after ? start.StartedAt + after : DateTimeOffset.UtcNow;
+
+            start.Result = new JObject(
+                               new JProperty("result",      Result),
+                               new JProperty("message",     new JArray()),
+                               new JProperty("receivedAt",  at.ToString("o"))
+                           );
+
+            if (Result != "ACCEPTED")
+            {
+                start.State    = "failed";
+                start.EndedAt  = at;
+            }
+
+        }
+
+        /// <summary>
+        /// The session the charge point operator pushed for the start of the
+        /// given token, as OCPI 2.2.1 writes one: its status, what it charged,
+        /// and - where said - what that costs with VAT.
+        /// </summary>
+        public void OperatorSession(String Token, String Status, Decimal KWh, Decimal? Cost = null)
+        {
+
+            var start    = reported[Token];
+            var session  = new JObject(
+                               new JProperty("country_code",             "DE"),
+                               new JProperty("party_id",                 "GEF"),
+                               new JProperty("id",                       "S-" + Token),
+                               new JProperty("start_date_time",          OCPITime(start.StartedAt + TimeSpan.FromSeconds(5))),
+                               new JProperty("kwh",                      KWh),
+                               new JProperty("cdr_token",                TokenOf(start)),
+                               new JProperty("auth_method",              "COMMAND"),
+                               new JProperty("authorization_reference",  start.Of.AuthRef),
+                               new JProperty("location_id",              "LOC1"),
+                               new JProperty("evse_uid",                 "E1"),
+                               new JProperty("connector_id",             "1"),
+                               new JProperty("currency",                 "EUR"),
+                               new JProperty("status",                   Status),
+                               new JProperty("last_updated",             OCPITime(DateTimeOffset.UtcNow))
+                           );
+
+            if (Cost is Decimal cost)
+                session["total_cost"] = PriceOf(cost);
+
+            if (Status == "COMPLETED")
+                session["end_date_time"] = OCPITime(DateTimeOffset.UtcNow);
+
+            start.Session = session;
+
+            if (Status is "COMPLETED" or "INVALID" && start.EndedAt is null)
+            {
+                start.State    = "ended";
+                start.EndedAt  = DateTimeOffset.UtcNow;
+            }
+
+        }
+
+        /// <summary>
+        /// The charge detail record the charge point operator pushed for the
+        /// start of the given token, as OCPI 2.2.1 writes one - with signed
+        /// meter values, which the phone keeps as they came.
+        /// </summary>
+        public void OperatorCDR(String Token, Decimal KWh, Decimal Cost, DateTimeOffset End)
+        {
+
+            var start = reported[Token];
+
+            start.CDR = new JObject(
+                            new JProperty("country_code",             "DE"),
+                            new JProperty("party_id",                 "GEF"),
+                            new JProperty("id",                       "CDR-" + Token),
+                            new JProperty("start_date_time",          OCPITime(start.StartedAt + TimeSpan.FromSeconds(5))),
+                            new JProperty("end_date_time",            OCPITime(End)),
+                            new JProperty("session_id",               "S-" + Token),
+                            new JProperty("cdr_token",                TokenOf(start)),
+                            new JProperty("auth_method",              "COMMAND"),
+                            new JProperty("authorization_reference",  start.Of.AuthRef),
+                            new JProperty("currency",                 "EUR"),
+                            new JProperty("total_cost",               PriceOf(Cost)),
+                            new JProperty("total_energy",             KWh),
+                            new JProperty("total_time",               1.5m),
+                            new JProperty("signed_data",              new JObject(
+                                new JProperty("encoding_method",  "OCMF"),
+                                new JProperty("signed_values",    new JArray(
+                                    new JObject(
+                                        new JProperty("nature",       "End"),
+                                        new JProperty("plain_data",   SignedMeterValue),
+                                        new JProperty("signed_data",  "MEUCIQDl0Ev9f7A3")
+                                    )
+                                ))
+                            )),
+                            new JProperty("last_updated",             OCPITime(DateTimeOffset.UtcNow))
+                        );
+
+        }
+
+        /// <summary>
+        /// The meter value its charge detail records carry, as an OCMF text.
+        /// </summary>
+        public const String SignedMeterValue = """OCMF|{"FV":"1.0","RD":[{"TM":"2026-10-29T13:30:00,000+0000 S","RV":12.5,"RU":"kWh"}]}""";
+
+        private static String OCPITime(DateTimeOffset Time)
+            => Time.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture);
+
+        private static JObject TokenOf(Reported Start)
+
+            => new (
+                   new JProperty("country_code",  "DE"),
+                   new JProperty("party_id",      "GDF"),
+                   new JProperty("uid",           Start.Of.Token),
+                   new JProperty("type",          "APP_USER"),
+                   new JProperty("contract_id",   Start.Of.Token)
+               );
+
+        private static JObject PriceOf(Decimal WithVAT)
+
+            => new (
+                   new JProperty("excl_vat",  Math.Round(WithVAT / 1.19m, 2)),
+                   new JProperty("incl_vat",  WithVAT)
+               );
 
         #endregion
 
@@ -484,7 +635,7 @@ namespace cloud.charging.open.Smartphone.Tests
                     if (!TryRequestOf(request, StartRequests.StartContentType, StartRequests.StartType, ticket, ticketKey, out var start, out var payload, out refusal))
                         return Refused(Request, refusal);
 
-                    if (payload.TryGetValue(CBORValue.FromText("evse"), out var evse) is false || !evse.TryGetText(out _))
+                    if (payload.TryGetValue(CBORValue.FromText("evse"), out var evse) is false || !evse.TryGetText(out var evseId))
                         return Refused(Request, "A start request names its EVSE.");
 
                     var token          = "T-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(8));
@@ -492,8 +643,12 @@ namespace cloud.charging.open.Smartphone.Tests
                     var countersigned  = Countersign(start, ticketKey, token, authRef);
                     var done           = new StartOrStop(user, request, countersigned, token, authRef);
 
+                    var digest         = Convert.ToHexStringLower(SHA256.HashData(countersigned));
+
                     starts.Enqueue(done);
-                    started[Convert.ToHexStringLower(SHA256.HashData(countersigned))] = done;
+                    started[digest] = done;
+
+                    reported[token] = new Reported((Request.ParsedURLParameters.ElementAtOrDefault(0) ?? "").ToLowerInvariant(), digest, done, evseId, DateTimeOffset.UtcNow);
 
                     return JSON(Request, HTTPStatusCode.OK, new JObject(
                                new JProperty("message",  "Countersigned, and sent to the charge point operator."),
@@ -557,6 +712,12 @@ namespace cloud.charging.open.Smartphone.Tests
 
                     stops.Enqueue(new StartOrStop(user, request, countersigned, token, ofStart.AuthRef));
 
+                    if (reported.TryGetValue(ofStart.Token, out var ofReport) && ofReport.EndedAt is null)
+                    {
+                        ofReport.State    = "stopped";
+                        ofReport.EndedAt  = DateTimeOffset.UtcNow;
+                    }
+
                     return JSON(Request, HTTPStatusCode.OK, new JObject(
                                new JProperty("message",  "Countersigned, and sent to the charge point operator."),
                                new JProperty("request",  Convert.ToBase64String(countersigned))
@@ -569,6 +730,48 @@ namespace cloud.charging.open.Smartphone.Tests
             {
                 return Refused(Request, "No stop request with its ticket and its start: " + e.Message);
             }
+
+        }
+
+        #endregion
+
+        #region (private) GetTicketAsync(Request)
+
+        /// <summary>
+        /// What became of the starts made with a ticket this EMSP issued to
+        /// whoever asks: its state of each, and what the charge point operator
+        /// reported of it - 404 for a ticket of another, as for none.
+        /// </summary>
+        private async Task<HTTPResponse> GetTicketAsync(HTTPRequest Request)
+        {
+
+            if (WhoIs(Request) is not String user)
+                return Unauthorized(Request);
+
+            Interlocked.Increment(ref ticketReads);
+
+            if (Misbehave == "reportsSlowly")
+                await Task.Delay(TimeSpan.FromSeconds(4));
+
+            // As an EMSP answers that has no such route.
+            if (Misbehave == "reportsNothing")
+                return new HTTPResponse.Builder(Request) {
+                           HTTPStatusCode  = HTTPStatusCode.NotFound,
+                           Connection      = ConnectionType.Close
+                       };
+
+            var id = (Request.ParsedURLParameters.ElementAtOrDefault(0) ?? "").ToLowerInvariant();
+
+            if (!ticketIds.TryGetValue(id, out var owner) || owner != user)
+                return JSON(Request, HTTPStatusCode.NotFound, new JObject(new JProperty("error", $"This EMSP issued you no ticket '{id}'.")));
+
+            return JSON(Request, HTTPStatusCode.OK, new JObject(
+                       new JProperty("id",      id),
+                       new JProperty("starts",  new JArray(reported.Values.
+                                                               Where            (start => start.TicketId == id).
+                                                               OrderByDescending(start => start.StartedAt).
+                                                               Select           (start => start.ToJSON(Misbehave))))
+                   ));
 
         }
 
@@ -818,5 +1021,69 @@ namespace cloud.charging.open.Smartphone.Tests
                                      Byte[]  Countersigned,
                                      String  Token,
                                      String  AuthRef);
+
+
+    /// <summary>
+    /// A start the test EMSP countersigned, and what became of it as the EMSP
+    /// tells it: its state, and what the charge point operator reported.
+    /// </summary>
+    internal sealed class Reported(String          TicketId,
+                                   String          Start,
+                                   StartOrStop     Of,
+                                   String          EVSE,
+                                   DateTimeOffset  StartedAt)
+    {
+
+        public String           TicketId    { get; }      = TicketId;
+        public String           Start       { get; }      = Start;
+        public StartOrStop      Of          { get; }      = Of;
+        public String           EVSE        { get; }      = EVSE;
+        public DateTimeOffset   StartedAt   { get; }      = StartedAt;
+        public String           State       { get; set; } = "started";
+        public DateTimeOffset?  EndedAt     { get; set; }
+        public JObject?         Result      { get; set; }
+        public JObject?         Session     { get; set; }
+        public JObject?         CDR         { get; set; }
+
+        /// <summary>
+        /// The start as GET /api/v1/tickets/{id} tells it - with another token,
+        /// or its session of another start, where told to misbehave.
+        /// </summary>
+        public JObject ToJSON(String? Misbehave)
+        {
+
+            var json = new JObject(
+                           new JProperty("start",      Start),
+                           new JProperty("token",      Misbehave == "reportOtherToken" ? "T-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(8)) : Of.Token),
+                           new JProperty("authRef",    Of.AuthRef),
+                           new JProperty("evse",       EVSE),
+                           new JProperty("state",      State),
+                           new JProperty("startedAt",  StartedAt.ToString("o")),
+                           new JProperty("endedAt",    EndedAt?.ToString("o"))
+                       );
+
+            if (Result is not null)
+                json["result"] = Result.DeepClone();
+
+            if (Session is not null)
+            {
+
+                var session = (JObject) Session.DeepClone();
+
+                if (Misbehave == "reportOtherAuthRef")
+                    session["authorization_reference"] = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+
+                json["session"] = session;
+
+            }
+
+            if (CDR is not null)
+                json["cdr"] = CDR.DeepClone();
+
+            return json;
+
+        }
+
+    }
 
 }

@@ -86,6 +86,38 @@ export function session(more: Partial<ChargingSession> = {}): ChargingSession {
     };
 }
 
+/**
+ * The session at the Holzmarkt as the e-mobility provider reports it: started
+ * through it, the charge point operator's figures - and no power, no target
+ * and no time it is full at, which OCPI does not tell.
+ */
+export function reportedSession(more: Partial<ChargingSession> = {}): ChargingSession {
+
+    const reported: ChargingSession = {
+        ...session(),
+        simulated:      false,
+        chargingSince:  '2026-10-10T08:00:07Z',
+        energyKWh:      4.2,
+        cost:           { amount: 2.73, pricePerKWh: 0.49, currency: 'EUR', reported: true },
+        ticket:         { id: '9f2c41d08a7e3b65c0ffee0123456789', party: 'DE*GDF',
+                          notBefore: '2026-10-10T08:00:00Z', notAfter: '2026-10-10T09:00:00Z',
+                          keyThumbprint: '6cab95a41a13b2c42f552b7c81248078b3f319afe7d3caf133bc4b4dbead1605',
+                          issuerFingerprint: '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0' },
+        start:          { token: 'T-9F2C41D08A7E3B65', authorizationReference: '8e1c0ffee0123456789abcdef0123456',
+                          requestDigest: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
+                          countersignedAt: '2026-10-10T08:00:02Z' },
+        provider:       { state: 'started', receivedAt: '2026-10-10T08:10:00Z', cdr: false, result: 'ACCEPTED', sessionStatus: 'ACTIVE' }
+    };
+
+    delete reported.fullAt;
+    delete reported.powerKW;
+    delete reported.targetEnergyKWh;
+    delete reported.progressPercent;
+
+    return { ...reported, ...more };
+
+}
+
 
 /** A charging pool of a roaming network, as the map lists it: its two EVSEs of a status not known, and no price yet. */
 export function paradies(more: Partial<ChargingLocation> = {}): ChargingLocation {

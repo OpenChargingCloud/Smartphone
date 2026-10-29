@@ -1,12 +1,13 @@
 /**
  * What this phone is charging, drawn in a document of happy-dom against a
  * stand-in smartphone: a card per running session with its figures, the one
- * just started marked, Stop asking the smartphone, and a page with nothing
- * charging pointing at the map.
+ * just started marked, one the e-mobility provider reports without what OCPI
+ * does not tell, Stop asking the smartphone, and a page with nothing charging
+ * pointing at the map.
  */
 
 import { asked, leave, open, refused, until, type Asked } from '../../test/smartphone.ts';
-import { session } from '../../test/charging.ts';
+import { reportedSession, session } from '../../test/charging.ts';
 
 import { strict as assert }    from 'node:assert';
 import { after, describe, it } from 'node:test';
@@ -22,7 +23,8 @@ let stopAnswer: unknown = undefined;
 function smartphone({ method, path, query }: Asked): unknown {
 
     if (method === 'GET' && path === '/charging/sessions' && query.get('active') === 'true')
-        return { timestamp: '2026-10-10T08:10:00Z', simulated: true, active: running.length, total: running.length + 3, sessions: running };
+        return { timestamp: '2026-10-10T08:10:00Z', simulated: running.length === 0 || running.some(one => one.simulated),
+                 active: running.length, total: running.length + 3, sessions: running };
 
     if (method === 'POST' && path.endsWith('/stop'))
         return stopAnswer ?? { ...running[0], status: 'stopped' };
@@ -52,6 +54,25 @@ describe('the charging page', () => {
 
         assert.match(root.textContent!, /Simulated/);
         assert.match(root.textContent!, /5 in all/);
+
+    });
+
+    it('draws a session the provider reports without a power or a progress, saying whose figures they are', async () => {
+
+        running    = [ reportedSession() ];
+        stopAnswer = undefined;
+
+        const root = await open(chargingPage, '/charging', [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.session-card .session-reported') !== null);
+
+        const card = root.querySelector<HTMLElement>('.session-card')!;
+
+        assert.match(card.textContent!, /4[.,]20 kWh/);
+        assert.match(card.textContent!, /The figures are the charge point operator's/);
+        assert.doesNotMatch(card.textContent!, /now|full at/);
+        assert.equal(card.querySelector('progress'), null, 'a progress of what OCPI does not tell');
+        assert.doesNotMatch(root.textContent!, /Simulated/);
+        assert.ok(card.querySelector('.btn.danger'));
 
     });
 

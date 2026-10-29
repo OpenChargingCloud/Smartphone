@@ -86,8 +86,8 @@ namespace cloud.charging.open.Smartphone
         /// e-mobility provider, simulated. With one, through it: a charging
         /// ticket of its own, asked for right before the start, and a start
         /// request signed by the ticket's key, which the provider countersigns
-        /// and sends the charge point operator - the session's figures
-        /// simulated, for as long as no meter values reach the phone.
+        /// and sends the charge point operator - the session as the provider
+        /// reports it from then on, simulated for as long as it reports nothing.
         /// </summary>
         /// <param name="LocationId">The station, by the id the map gave it.</param>
         /// <param name="EVSEUid">Its EVSE, by the uid the map gave it.</param>
@@ -205,7 +205,7 @@ namespace cloud.charging.open.Smartphone
             Log.Notice($"'{Who}' started charging at {location.Name}, {evse.EVSEId}, with {session.PowerKW:0.#} kW until {session.TargetEnergyKWh:0.#} kWh" +
                        (anchor is not null ? $" for {session.PricePerKWh:0.00##} {session.Currency} per kWh, as its checked proof says" : "") +
                        (ticket is not null && start is not null
-                            ? $", through {ticket.Party} with the charging ticket {ticket.Id} and the token {start.Token} - its figures simulated, as no meter values reach this phone yet"
+                            ? $", through {ticket.Party} with the charging ticket {ticket.Id} and the token {start.Token} - as {ticket.Party} reports it, simulated until it does"
                             :  " - simulated: no e-mobility provider was asked") +
                        $". The session is {session.Id}.",
                        "charging", "web");
@@ -277,7 +277,8 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// The charging sessions of this phone, the newest first - or only the
-        /// ones still charging.
+        /// ones still starting or charging. Simulated, where one of them is,
+        /// or where none is shown and a start now would be.
         /// </summary>
         public JObject SessionsJSON(Boolean OnlyActive = false)
         {
@@ -288,7 +289,9 @@ namespace cloud.charging.open.Smartphone
 
             return new JObject(
                        new JProperty("timestamp",  now.ToString("o")),
-                       new JProperty("simulated",  true),
+                       new JProperty("simulated",  shown.Count > 0
+                                                       ? shown.Any(session => session.IsSimulated)
+                                                       : ProviderAccount is null),
                        new JProperty("active",     all.Count(session => session.IsActiveAt(now))),
                        new JProperty("total",      all.Count),
                        new JProperty("sessions",   new JArray(shown.Select(session => session.ToJSON(now))))

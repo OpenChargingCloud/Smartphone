@@ -1,6 +1,6 @@
 import { api, type ChargingSession, type ChargingSessions } from '../api/client';
 import { auth } from '../auth';
-import { clock, duration, money, sessionStatusClass, sessionStatusWord, withUnit } from '../charging/words';
+import { clock, duration, money, reportedInWords, sessionStatusClass, sessionStatusWord, withUnit } from '../charging/words';
 import { standardWord } from '../map/stations';
 import { toURL } from '@node/basePath';
 import type { Page } from '@node/router';
@@ -11,7 +11,9 @@ import { html, nothing, render, repeat, type TemplateResult } from '@node/view';
 /**
  * What this phone is charging right now - one card per session, as several
  * may run at once at different stations - with what each has charged, how
- * fast, for how long, what it costs so far, and Stop.
+ * fast, for how long, what it costs so far, and Stop. How fast, and how full,
+ * only where it is simulated: of a session the e-mobility provider reports,
+ * OCPI tells neither.
  *
  * Asked again every two seconds while something charges, and every ten while
  * nothing does, so that a session started from the map or over SSH shows up
@@ -64,7 +66,7 @@ export const chargingPage: Page = {
                 ${current?.simulated ? html`
                     <div class="notice small">
                         ${active.some(session => session.start !== undefined)
-                              ? 'Simulated figures: no meter values reach this phone yet. A session not started through an e-mobility provider charges nothing for real.'
+                              ? 'Simulated figures, where the e-mobility provider reports nothing of a session. A session not started through an e-mobility provider charges nothing for real.'
                               : 'Simulated: no e-mobility provider is asked yet, and nothing is charged for real.'}
                     </div>
                 ` : nothing}
@@ -118,18 +120,26 @@ export const chargingPage: Page = {
 
                     <div class="session-figures">
                         <div><span class="figure">${withUnit(session.energyKWh, 'kWh', 2)}</span><span class="small muted">charged</span></div>
-                        <div><span class="figure">${withUnit(session.powerKW, 'kW')}</span><span class="small muted">now</span></div>
-                        <div><span class="figure">${duration(session.durationSeconds)}</span><span class="small muted">since ${clock(session.startedAt)}</span></div>
+                        ${session.powerKW !== undefined ? html`
+                            <div><span class="figure">${withUnit(session.powerKW, 'kW')}</span><span class="small muted">now</span></div>
+                        ` : nothing}
+                        <div><span class="figure">${duration(session.durationSeconds)}</span><span class="small muted">since ${clock(session.chargingSince ?? session.startedAt)}</span></div>
                         <div><span class="figure">${money(session.cost.amount, session.cost.currency)}</span><span class="small muted">so far</span></div>
                     </div>
 
-                    <progress class="session-progress" max="100" .value=${session.progressPercent}
-                              aria-label="How far it has charged"></progress>
+                    ${session.progressPercent !== undefined && session.targetEnergyKWh !== undefined && session.fullAt !== undefined ? html`
 
-                    <div class="small muted">
-                        ${withUnit(session.progressPercent, '%')} of ${withUnit(session.targetEnergyKWh, 'kWh')} -
-                        full at ${clock(session.fullAt)}, if nobody stops it first.
-                    </div>
+                        <progress class="session-progress" max="100" .value=${session.progressPercent}
+                                  aria-label="How far it has charged"></progress>
+
+                        <div class="small muted">
+                            ${withUnit(session.progressPercent, '%')} of ${withUnit(session.targetEnergyKWh, 'kWh')} -
+                            full at ${clock(session.fullAt)}, if nobody stops it first.
+                        </div>
+
+                    ` : html`
+                        <div class="small muted session-reported">${reportedInWords(session)}</div>
+                    `}
 
                     ${mayStop ? html`
                         <div class="form-actions">

@@ -285,6 +285,20 @@ namespace cloud.charging.open.Smartphone.Provider
 
         #endregion
 
+        #region StartsOfTicketAsync(TicketId)
+
+        /// <summary>
+        /// GET /api/v1/tickets/{id}: the ticket as the provider keeps it, and
+        /// what became of each start made with it - the provider's state of it,
+        /// the operator's answers to the commands, and the session and the
+        /// charge detail record the operator pushed for it.
+        /// </summary>
+        public Task<EMSPAnswer> StartsOfTicketAsync(String TicketId)
+
+            => SignedInAsync(HTTPMethod.GET, $"api/v1/tickets/{TicketId}", null);
+
+        #endregion
+
 
         #region (private) SignedInAsync(Method, Path, Body)
 
@@ -387,7 +401,14 @@ namespace cloud.charging.open.Smartphone.Provider
                 {
                     try
                     {
-                        json = JObject.Parse(text);
+
+                        // Times stay text, with their offsets, as the provider
+                        // wrote them - a session or a CDR of the operator is
+                        // kept as it came.
+                        using var reader = new JsonTextReader(new StringReader(text)) { DateParseHandling = DateParseHandling.None };
+
+                        json = JObject.Load(reader);
+
                     }
                     catch (JsonException)
                     {

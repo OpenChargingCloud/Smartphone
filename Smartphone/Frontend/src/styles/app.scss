@@ -365,9 +365,11 @@ ul.price-statements {
     vertical-align:  middle;
     border:          1px solid currentColor;
 
+    &.session-starting  { color: map.get($status-colours, reserved); }
     &.session-charging  { color: map.get($status-colours, charging); }
     &.session-stopped   { color: $color-muted; }
     &.session-finished  { color: map.get($status-colours, available); }
+    &.session-failed    { color: map.get($status-colours, outoforder); }
 
 }
 

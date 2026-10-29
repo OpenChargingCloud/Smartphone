@@ -35,6 +35,7 @@ using org.GraphDefined.Vanaheimr.Hermod.Mail;
 using cloud.charging.open.protocols.WWCP.Node.Configuration;
 using cloud.charging.open.protocols.WWCP.Node.TestKit;
 
+using cloud.charging.open.Smartphone.Charging;
 using cloud.charging.open.Smartphone.Map;
 using cloud.charging.open.Smartphone.Provider;
 
@@ -51,7 +52,8 @@ namespace cloud.charging.open.Smartphone.Tests
     /// which comes back without the account's signature in it, or is refused;
     /// a start and a stop request signed by the ticket's key, which come back
     /// countersigned by the provider, or are refused; signed in with a
-    /// session, as the provider's web interface is, and anew where it is over.
+    /// session, as the provider's web interface is, and anew where it is over;
+    /// and the session as the provider reports it, once it does.
     /// </summary>
     public class ProviderTests
     {
@@ -223,6 +225,10 @@ namespace cloud.charging.open.Smartphone.Tests
             var (status, signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp!.URL, username = "phone1", email = "phone1@example.org" });
 
             Assert.That(status, Is.EqualTo(HttpStatusCode.OK), signedUp.ToString());
+
+            // Every page asks the provider anew, so that a test sees at once
+            // what it had the operator report.
+            smartphone!.ProviderReportInterval = TimeSpan.Zero;
 
             return (admin, driver);
 
@@ -548,8 +554,8 @@ namespace cloud.charging.open.Smartphone.Tests
 
         /// <summary>
         /// A stop the provider countersigns with another token than its start's
-        /// is refused: the session goes on charging, and is stopped by the next
-        /// stop that holds.
+        /// is refused: the session goes on charging, as the operator reports it,
+        /// and is stopped by the next stop that holds.
         /// </summary>
         [Test]
         public async Task AStopThatDoesNotHoldLeavesTheSessionCharging()
@@ -566,7 +572,8 @@ namespace cloud.charging.open.Smartphone.Tests
 
             Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
 
-            emsp!.Misbehave = "otherTokenOnStop";
+            emsp!.OperatorSession(emsp.Starts.Single().Token, "ACTIVE", 1.5m);
+            emsp.Misbehave = "otherTokenOnStop";
 
             (status, var refused) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{session["id"]}/stop");
             (_,      var still)   = await Send(driver, HttpMethod.Get,  $"api/v1/charging/sessions/{session["id"]}");
@@ -584,6 +591,285 @@ namespace cloud.charging.open.Smartphone.Tests
 
             Assert.That(status,                               Is.EqualTo(HttpStatusCode.OK), stopped.ToString());
             Assert.That(stopped["status"]!.Value<String>(),   Is.EqualTo("stopped"));
+
+        }
+
+        #endregion
+
+        #region WhatTheProviderReportsIsWhatThePhoneShows()
+
+        /// <summary>
+        /// From the provider's first report on, the session is what the charge
+        /// point operator told it, and nothing simulated: starting while it
+        /// reported no session, charging with the session's kWh and cost, and
+        /// finished with the figures of its charge detail record - whose signed
+        /// meter values are kept as they came. So it is after a restart, and the
+        /// provider is not asked again of a session whose record came.
+        /// </summary>
+        [Test]
+        public async Task WhatTheProviderReportsIsWhatThePhoneShows()
+        {
+
+            var (admin, driver) = await WithAnAccount();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            var point = FreePoints().First();
+
+            var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = point.Location.Id, evseUid = point.EVSE.Uid });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            var id     = session["id"]!.Value<String>()!;
+            var token  = emsp!.Starts.Single().Token;
+
+            (_, var starting) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+            emsp.OperatorResult (token, "ACCEPTED");
+            emsp.OperatorSession(token, "ACTIVE", 4.2m, 2.73m);
+
+            (_, var charging) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+            (_, var active)   = await Send(driver, HttpMethod.Get, "api/v1/charging/sessions?active=true");
+
+            var end = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+
+            emsp.OperatorSession(token, "COMPLETED", 12.5m, 8.13m);
+            emsp.OperatorCDR    (token, 12.5m, 8.13m, end);
+
+            (_, var finished) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+            var kept = JArray.Parse(File.ReadAllText(Path.Combine(directory, ChargingSessions.DefaultFileName))).Single()["report"]!;
+
+            using (Assert.EnterMultipleScope())
+            {
+
+                Assert.That(session ["simulated"]!.Value<Boolean>(),                   Is.True,  "the provider was asked nothing yet");
+
+                Assert.That(starting["status"]!.Value<String>(),                       Is.EqualTo("starting"), starting.ToString());
+                Assert.That(starting["simulated"]!.Value<Boolean>(),                   Is.False);
+                Assert.That(starting["energyKWh"]!.Value<Decimal>(),                   Is.Zero);
+                Assert.That(starting["provider"]!["state"]!.Value<String>(),           Is.EqualTo("started"));
+                Assert.That(starting["powerKW"],                                       Is.Null, "OCPI tells no power, and none is simulated");
+
+                Assert.That(charging["status"]!.Value<String>(),                       Is.EqualTo("charging"), charging.ToString());
+                Assert.That(charging["energyKWh"]!.Value<Decimal>(),                   Is.EqualTo(4.2m));
+                Assert.That(charging["cost"]!["amount"]!.Value<Decimal>(),             Is.EqualTo(2.73m));
+                Assert.That(charging["cost"]!["reported"]!.Value<Boolean>(),           Is.True);
+                Assert.That(charging["provider"]!["result"]!.Value<String>(),          Is.EqualTo("ACCEPTED"));
+                Assert.That(charging["provider"]!["sessionStatus"]!.Value<String>(),   Is.EqualTo("ACTIVE"));
+                Assert.That(charging["chargingSince"],                                 Is.Not.Null);
+                Assert.That(active  ["active"]!.Value<Int32>(),                        Is.EqualTo(1));
+                Assert.That(active  ["simulated"]!.Value<Boolean>(),                   Is.False);
+
+                Assert.That(finished["status"]!.Value<String>(),                       Is.EqualTo("finished"), finished.ToString());
+                Assert.That(finished["energyKWh"]!.Value<Decimal>(),                   Is.EqualTo(12.5m));
+                Assert.That(finished["cost"]!["amount"]!.Value<Decimal>(),             Is.EqualTo(8.13m));
+                Assert.That(finished["provider"]!["cdr"]!.Value<Boolean>(),            Is.True);
+                Assert.That(new DateTimeOffset(finished["endedAt"]!.Value<DateTime>()), Is.EqualTo(end), "it ended when the charge detail record says");
+
+                Assert.That(kept["cdr"]!["signed_data"]!["signed_values"]![0]!["plain_data"]!.Value<String>(), Is.EqualTo(TestEMSP.SignedMeterValue), "the signed meter values are not kept as they came");
+
+            }
+
+            var reads = emsp.TicketReads;
+
+            await smartphone!.DisposeAsync();
+            smartphone = null;
+
+            await TestPorts.StartedOnFreshPorts(SmartphoneFrom);
+
+            smartphone!.ProviderReportInterval = TimeSpan.Zero;
+
+            using var again = await SignedInAs("driver2", "driver");
+
+            (_, var read) = await Send(again, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(read["status"]!.Value<String>(),     Is.EqualTo("finished"), read.ToString());
+                Assert.That(read["energyKWh"]!.Value<Decimal>(), Is.EqualTo(12.5m));
+                Assert.That(emsp.TicketReads,                    Is.EqualTo(reads), "the provider was asked again of a session whose record came");
+            }
+
+        }
+
+        #endregion
+
+        #region AStartTheOperatorDidNotTakeFailsAndFreesTheEVSE()
+
+        /// <summary>
+        /// A start the operator answers with another CommandResult than ACCEPTED
+        /// failed: the session says so and why, cannot be stopped, and the EVSE
+        /// is free for the next start.
+        /// </summary>
+        [Test]
+        public async Task AStartTheOperatorDidNotTakeFailsAndFreesTheEVSE()
+        {
+
+            var (admin, driver) = await WithAnAccount();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            var point = FreePoints().First();
+
+            var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = point.Location.Id, evseUid = point.EVSE.Uid });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            emsp!.OperatorResult(emsp.Starts.Single().Token, "EVSE_OCCUPIED", After: TimeSpan.FromMinutes(1));
+
+            (_,      var failed)      = await Send(driver, HttpMethod.Get,  $"api/v1/charging/sessions/{session["id"]}");
+            (status, var notStopped)  = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{session["id"]}/stop");
+
+            var stopStatus = status;
+
+            (status, var next) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = point.Location.Id, evseUid = point.EVSE.Uid });
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(failed["status"]!.Value<String>(),               Is.EqualTo("failed"), failed.ToString());
+                Assert.That(failed["provider"]!["state"]!.Value<String>(),   Is.EqualTo("failed"));
+                Assert.That(failed["provider"]!["result"]!.Value<String>(),  Is.EqualTo("EVSE_OCCUPIED"));
+                Assert.That(failed["endedAt"],                               Is.Not.Null);
+                Assert.That(failed["durationSeconds"]!.Value<Int64>(),       Is.Zero, "a start that failed charged for a while");
+                Assert.That(stopStatus,                                      Is.EqualTo(HttpStatusCode.Conflict), notStopped.ToString());
+                Assert.That(emsp.Stops,                                      Is.Empty, "a failed start was stopped at the provider");
+                Assert.That(status,                                          Is.EqualTo(HttpStatusCode.Created), next.ToString());
+                Assert.That(emsp.Starts,                                     Has.Count.EqualTo(2));
+            }
+
+        }
+
+        #endregion
+
+        #region WhatIsNotOfTheStartIsNotTaken(How, Simulated, Shown)
+
+        /// <summary>
+        /// A provider that tells nothing of the start leaves its session
+        /// simulated, as before; one that tells of it with another token is not
+        /// believed at all; and a session the operator pushed for another start
+        /// is left out, the start then as far as the provider got without it.
+        /// </summary>
+        [TestCase("reportsNothing",      true,   "charging")]
+        [TestCase("reportOtherToken",    true,   "charging")]
+        [TestCase("reportOtherAuthRef",  false,  "starting")]
+        public async Task WhatIsNotOfTheStartIsNotTaken(String How, Boolean Simulated, String Shown)
+        {
+
+            var (admin, driver) = await WithAnAccount();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            var point = FreePoints().First();
+
+            var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = point.Location.Id, evseUid = point.EVSE.Uid });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            emsp!.OperatorSession(emsp.Starts.Single().Token, "ACTIVE", 4.2m, 2.73m);
+            emsp.Misbehave = How;
+
+            (_, var read) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{session["id"]}");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(read["simulated"]!.Value<Boolean>(),  Is.EqualTo(Simulated), read.ToString());
+                Assert.That(read["status"]!.Value<String>(),      Is.EqualTo(Shown));
+                Assert.That(read["energyKWh"]!.Value<Decimal>(),  Is.Not.EqualTo(4.2m), "what is not of the start was taken");
+                Assert.That(emsp.TicketReads,                     Is.EqualTo(1));
+            }
+
+        }
+
+        #endregion
+
+        #region ASlowProviderDoesNotHoldUpThePage()
+
+        /// <summary>
+        /// A provider that takes longer to answer than a page waits does not
+        /// hold the page up: it is shown as it was, and what the provider says
+        /// is kept when it comes, and shown on the next ask.
+        /// </summary>
+        [Test]
+        public async Task ASlowProviderDoesNotHoldUpThePage()
+        {
+
+            var (admin, driver) = await WithAnAccount();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            // Asked once: what comes late is kept, and not asked for again.
+            smartphone!.ProviderReportInterval = TimeSpan.FromSeconds(30);
+
+            var point = FreePoints().First();
+
+            var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = point.Location.Id, evseUid = point.EVSE.Uid });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            emsp!.OperatorSession(emsp.Starts.Single().Token, "ACTIVE", 4.2m, 2.73m);
+            emsp.Misbehave = "reportsSlowly";
+
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+
+            (_, var first) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{session["id"]}");
+
+            var waited = watch.Elapsed;
+
+            JObject later;
+
+            do
+            {
+                await Task.Delay(250);
+                (_, later) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{session["id"]}");
+            }
+            while (later["simulated"]!.Value<Boolean>() && watch.Elapsed < TimeSpan.FromSeconds(15));
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(waited,                                Is.LessThan(TimeSpan.FromSeconds(3.5)), "the page waited for the provider");
+                Assert.That(first["simulated"]!.Value<Boolean>(),  Is.True, first.ToString());
+                Assert.That(later["status"]!.Value<String>(),      Is.EqualTo("charging"), later.ToString());
+                Assert.That(later["energyKWh"]!.Value<Decimal>(),  Is.EqualTo(4.2m), "what came late was not kept");
+                Assert.That(emsp.TicketReads,                      Is.EqualTo(1));
+            }
+
+        }
+
+        #endregion
+
+        #region TheProviderIsAskedAtMostEveryFifteenSeconds()
+
+        /// <summary>
+        /// However often the pages ask, the provider is asked of one session at
+        /// most every 15 seconds.
+        /// </summary>
+        [Test]
+        public async Task TheProviderIsAskedAtMostEveryFifteenSeconds()
+        {
+
+            var (admin, driver) = await WithAnAccount();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            smartphone!.ProviderReportInterval = TimeSpan.FromSeconds(15);
+
+            var point = FreePoints().First();
+
+            var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = point.Location.Id, evseUid = point.EVSE.Uid });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{session["id"]}");
+            await Send(driver, HttpMethod.Get, "api/v1/charging/sessions");
+            await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{session["id"]}");
+
+            Assert.That(emsp!.TicketReads, Is.EqualTo(1));
 
         }
 

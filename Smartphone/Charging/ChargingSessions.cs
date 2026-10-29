@@ -281,6 +281,51 @@ namespace cloud.charging.open.Smartphone.Charging
 
         #endregion
 
+        #region TryReport(Id, Report, out Session, out Error)
+
+        /// <summary>
+        /// What the e-mobility provider reported of a session started through
+        /// it, kept with the session in place of what it reported before.
+        /// </summary>
+        public Boolean TryReport(String                                     Id,
+                                 ProviderReport                             Report,
+                                 [NotNullWhen(true)]  out ChargingSession?  Session,
+                                 [NotNullWhen(false)] out String?           Error)
+        {
+
+            Session = null;
+
+            lock (sync)
+            {
+
+                var index = sessions.FindIndex(session => session.Id == Id);
+
+                if (index < 0)
+                {
+                    Error = $"There is no charging session '{Id}' on this phone.";
+                    return false;
+                }
+
+                var before    = sessions[index];
+                var reported  = before with { Report = Report };
+
+                sessions[index] = reported;
+
+                if (!TrySave(out Error))
+                {
+                    sessions[index] = before;
+                    return false;
+                }
+
+                Session = reported;
+                return true;
+
+            }
+
+        }
+
+        #endregion
+
 
         #region (private) NewId()
 

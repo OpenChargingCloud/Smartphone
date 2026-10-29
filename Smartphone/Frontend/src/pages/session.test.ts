@@ -1,11 +1,13 @@
 /**
  * One charging session, drawn in a document of happy-dom against a stand-in
- * smartphone: what it charged and where, Stop while it charges and not after,
- * and a session that is not there said so.
+ * smartphone: what it charged and where, Stop while it starts or charges and
+ * not after, one the e-mobility provider reports with the operator's figures
+ * and without what OCPI does not tell, and a session that is not there said
+ * so.
  */
 
 import { asked, leave, open, refused, until, type Asked } from '../../test/smartphone.ts';
-import { session } from '../../test/charging.ts';
+import { reportedSession, session } from '../../test/charging.ts';
 
 import { strict as assert }    from 'node:assert';
 import { after, describe, it } from 'node:test';
@@ -106,6 +108,79 @@ describe('a charging session', () => {
         assert.match(start, /ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100/);
         assert.match(root.textContent!, /Started through the e-mobility provider, which countersigned the start/);
         assert.doesNotMatch(root.textContent!, /nothing was charged for real/);
+
+    });
+
+    it("shows a session the provider reports with the operator's figures, and no power, target or time it is full at", async () => {
+
+        current = reportedSession();
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.session-reported') !== null);
+
+        const text = root.textContent!;
+
+        assert.match(root.querySelector('.session-status')!.textContent!, /charging/);
+        assert.match(text, /as the operator reports it/);
+        assert.match(text, /The figures are the charge point operator's, as it reports the session\./);
+        assert.match(text, /Charging since/);
+        assert.doesNotMatch(text, /Power/);
+        assert.doesNotMatch(text, /Progress|Full at/);
+        assert.doesNotMatch(text, /simulated/i);
+        assert.equal(root.querySelector('progress.session-progress'), null, 'a progress of what OCPI does not tell');
+        assert.ok(root.querySelector('.btn.danger'), 'no Stop for a session that charges');
+
+    });
+
+    it('offers Stop while the operator has not reported charging yet', async () => {
+
+        current = reportedSession({ status: 'starting', energyKWh: 0, durationSeconds: 0,
+                                    cost: { amount: 0, pricePerKWh: 0.49, currency: 'EUR', reported: false },
+                                    provider: { state: 'started', receivedAt: '2026-10-10T08:00:05Z', cdr: false } });
+
+        delete current.chargingSince;
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.session-reported') !== null);
+
+        assert.match(root.querySelector('.session-status')!.textContent!, /starting/);
+        assert.match(root.textContent!, /has not reported charging yet/);
+        assert.doesNotMatch(root.textContent!, /says nothing of the cost/, 'no cost to say nothing of before there is a session');
+        assert.ok(root.querySelector('.btn.danger'), 'no Stop for a session that starts');
+
+    });
+
+    it('says why a start failed, and offers no Stop', async () => {
+
+        current = reportedSession({ status: 'failed', energyKWh: 0, durationSeconds: 0, endedAt: '2026-10-10T08:00:09Z',
+                                    cost: { amount: 0, pricePerKWh: 0.49, currency: 'EUR', reported: false },
+                                    provider: { state: 'failed', receivedAt: '2026-10-10T08:00:10Z', cdr: false, result: 'EVSE_OCCUPIED' } });
+
+        delete current.chargingSince;
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.session-reported') !== null);
+
+        assert.match(root.querySelector('.session-status')!.textContent!, /failed/);
+        assert.match(root.textContent!, /did not start it: it answered EVSE_OCCUPIED/);
+        assert.match(root.textContent!, /Ended/);
+        assert.equal(root.querySelector('.btn.danger'), null, 'Stop for a start that failed');
+
+    });
+
+    it('says the figures are of the charge detail record once it came, and its cost where the operator says none', async () => {
+
+        current = reportedSession({ status: 'finished', energyKWh: 12.5, endedAt: '2026-10-10T09:30:00Z',
+                                    cost: { amount: 6.13, pricePerKWh: 0.49, currency: 'EUR', reported: false },
+                                    provider: { state: 'ended', receivedAt: '2026-10-10T09:31:00Z', cdr: true, result: 'ACCEPTED', sessionStatus: 'COMPLETED' } });
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.session-reported') !== null);
+
+        assert.match(root.textContent!, /from its charge detail record/);
+        assert.match(root.textContent!, /says nothing of the cost: that is what was charged, times the price per kWh/);
+        assert.match(root.textContent!, /per kWh\)/);
+        assert.equal(root.querySelector('.btn.danger'), null);
 
     });
 

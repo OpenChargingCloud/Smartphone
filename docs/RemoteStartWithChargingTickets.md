@@ -271,6 +271,88 @@ The CDR comes back to the EMSP with the start's token (`cdr_token`); the EMSP
 knows its account and bills it. The CPO's CDR names no account.
 
 
+## 9. After the start: what the app learns of it
+
+The EMSP's `200` says that the CPO took the command, not that anything
+charges. What became of the start reaches the EMSP afterwards, from the CPO:
+OCPI's asynchronous `CommandResult` at the command's `response_url`, the
+session the CPO pushes and updates, and at its end the CDR. The app asks the
+EMSP for all of it by the ticket, signed in as the account the ticket was
+issued to: `GET /api/v1/tickets/{ticketId}`. For any other account, and for a
+ticket the EMSP did not issue, the answer is `404`, the same for both.
+
+```json
+{ "id":        "3f6c…",
+  "notBefore": "2026-10-29T12:00:00Z",
+  "notAfter":  "2026-10-29T13:00:00Z",
+  "starts": [
+    { "start":      "<SHA-256 of the start request as the EMSP countersigned it, lower-case hex>",
+      "token":      "T-9F2C41D08A7E3B65",
+      "authRef":    "8e1c…",
+      "evse":       "DE*GEF*E2*1",
+      "state":      "started",
+      "startedAt":  "2026-10-29T12:00:02Z",
+      "endedAt":    null,
+      "result":     { "result": "ACCEPTED", "message": [], "receivedAt": "2026-10-29T12:00:09Z" },
+      "stopResult": null,
+      "session":    { "id": "S1", "status": "ACTIVE", "kwh": 4.2, "…": "…" },
+      "cdr":        null }
+  ] }
+```
+
+- **`starts`** are the starts made with this ticket, the newest first: one,
+  where the app keeps to one ticket per start. `evse` is the EVSE as the
+  start request names it, for showing: what binds the start to it is the
+  request, which `start` names.
+- **`state`** is the EMSP's own:
+  - `sent`: countersigned, the command on its way;
+  - `started`: the CPO took the command;
+  - `refused`: it did not take it;
+  - `failed`: its `CommandResult` said anything but `ACCEPTED`;
+  - `stopped`: stopped by the holder of the ticket;
+  - `ended`: the CPO reported the session `COMPLETED` or `INVALID`;
+  - `expired`: the ticket ran out first.
+
+  From `refused` on, the token is `BLOCKED`, and `endedAt` says since when.
+- **`result`** and **`stopResult`** are the `CommandResult`s of
+  `START_SESSION` and `STOP_SESSION` as the CPO sent them, and when the EMSP
+  took them. Each is absent until the CPO sent it. The EMSP keeps them with
+  the start, so that they outlast a restart.
+- **`session`** and **`cdr`** are what the CPO pushed for the start's
+  `authorization_reference`, as OCPI writes them, as last pushed. Each is
+  absent until the CPO pushed it. Of a session the app reads `status`,
+  `start_date_time`, `end_date_time`, `kwh`, `total_cost` and `currency`; of a
+  CDR its times, `total_energy`, `total_cost`, `currency` and `signed_data`.
+
+**The app asks** while a session started through the EMSP is shown and not
+over: when its pages ask for it, at most every 15 seconds. Once the session is
+over, it asks on in the same way until the CDR came - and no longer than a
+day after the ticket ran out. It takes a start of the
+answer only where `start`, `token` and `authRef` are those of the start it
+keeps. It takes a session or a CDR only where its `authorization_reference` is
+the start's and its `cdr_token.uid` is the start's token.
+
+It keeps the last answer it took with the session. From the first one on,
+what the app shows is what the EMSP says, and nothing simulated:
+
+| the EMSP says | the app shows |
+|---|---|
+| no session yet, `sent` or `started` | starting |
+| a session `PENDING` or `RESERVATION` | starting |
+| a session `ACTIVE` | charging, with its `kwh` and `total_cost` |
+| a session `COMPLETED`, or a CDR | stopped where the app stopped it, else finished, with the CDR's figures once it came |
+| `failed`, or a session `INVALID` | failed, with the `CommandResult`'s `result` |
+| `expired` without a session | failed: the CPO never reported one |
+
+An EMSP that answers `404` or `405` to the request knows nothing of the
+start, or does not answer it yet. For such an EMSP the app simulates the
+figures, as before, and says so.
+
+The meter values are the CDR's `signed_data`. The app checks them against
+the key of the energy meter that the station's proof gave (step 6) in a later
+step: until then it keeps them, and shows the CDR's figures as the CPO's.
+
+
 ## What it hides, and what it does not
 
 - **From the CPO:** who the driver is, and that two sessions were the same
@@ -326,9 +408,9 @@ bytes, and its signature then no longer holds. Payloads are deterministic CBOR
   EMSP's protected header, or registered integers.
 - **Clocks.** How many minutes `at` may be off, at the EMSP and at the CPO;
   the app takes five for the EMSP's `iat`.
-- **After the start.** How the app learns what became of it - OCPI's
-  asynchronous `CommandResult`, the session the CPO reports, and its meter
-  values - from the EMSP: e.g. `GET /api/v1/tickets/{ticketId}`.
+- **After the start.** The app asks the EMSP, as section 9 says, and is not
+  told: whether the EMSP should push it, and how. How the app checks the
+  CDR's signed meter values against the station's energy meter.
 - **Offline.** A station that checks tickets itself, without its CSMS.
 
 
@@ -336,8 +418,8 @@ bytes, and its signature then no longer holds. Payloads are deterministic CBOR
 
 | | |
 |---|---|
-| EMSP | self sign-up; account keys from a PKCS#10 request; tickets issued from a request signed by the ticket key and an account key, the account's signature taken off - with Styx's CBOR and COSE in place of its own; start and stop requests (`POST /api/v1/tickets/{id}/start` and `/stop`) checked and countersigned with a token per start - `token`, `authRef` and `iat` as text labels - and sent on as OCPI `START_SESSION` / `STOP_SESSION` on 2.2.1 and 2.3.0; the token `ALLOWED` while its ticket is good, `BLOCKED` once its session is over |
-| EMSP, missing | the token `ALLOWED` for the location and EVSE of its start alone: WWCP_OCPI's real-time authorization has no hook for that yet |
+| EMSP | self sign-up; account keys from a PKCS#10 request; tickets issued from a request signed by the ticket key and an account key, the account's signature taken off - with Styx's CBOR and COSE in place of its own; start and stop requests (`POST /api/v1/tickets/{id}/start` and `/stop`) checked and countersigned with a token per start - `token`, `authRef` and `iat` as text labels - and sent on as OCPI `START_SESSION` / `STOP_SESSION` on 2.2.1 and 2.3.0; the token `ALLOWED` while its ticket is good, and only at the location and EVSE of its start and for the CPO it went to - through WWCP_OCPI's `OnLocalTokenAuthorization` - and `BLOCKED` once its session is over |
+| EMSP, missing | what became of a start, told as section 9 says (`GET /api/v1/tickets/{id}`) |
 | CSMS / CPO, missing | checking a ticket and a start request, limits as a charging profile, the token in the OCMF identification |
-| Smartphone | the station's proof checked against the trust anchor, its tariff, and its energy meter's key; an account at an EMSP, signed up or in with a session; an account key from a PKCS#10 request; a ticket per start, built, signed and checked with Styx - against the EMSP as committed and as moved to Styx; start and stop requests, signed by the ticket key and their countersignature checked - against a stand-in EMSP of its tests, which countersigns as this draft says; against the EMSP as far as it goes without a CPO, ticket and start request taken and the EVSE unknown to it |
-| Smartphone, missing | what became of a start, and its meter values: a session's figures are simulated |
+| Smartphone | the station's proof checked against the trust anchor, its tariff, and its energy meter's key; an account at an EMSP, signed up or in with a session; an account key from a PKCS#10 request; a ticket per start, built, signed and checked with Styx - against the EMSP as committed and as moved to Styx; start and stop requests, signed by the ticket key and their countersignature checked - against a stand-in EMSP of its tests, which countersigns as this draft says; against the EMSP as far as it goes without a CPO, ticket and start request taken and the EVSE unknown to it; what became of a start, asked for as section 9 says and taken only where it is of that start - the session as the stand-in tells it, simulated where a provider tells nothing |
+| Smartphone, missing | the signed meter values of a charge detail record checked against the energy meter's key: kept as they came, not checked yet |

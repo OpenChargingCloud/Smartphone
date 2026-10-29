@@ -30,21 +30,26 @@ namespace cloud.charging.open.Smartphone.Charging
 {
 
     /// <summary>
-    /// What a charging session is doing: still charging, stopped by whoever
-    /// started it, or finished because the vehicle is as full as it wanted.
+    /// What a charging session is doing: started and not charging yet, still
+    /// charging, stopped by whoever started it, finished because the vehicle
+    /// is as full as it wanted or the charge point operator says it is over -
+    /// or failed, where the operator did not start it after all.
     /// </summary>
     public enum ChargingSessionStatus
     {
+        Starting,
         Charging,
         Stopped,
-        Finished
+        Finished,
+        Failed
     }
 
 
     /// <summary>
     /// One charging session of this phone - simulated where there is no
-    /// e-mobility provider to start a real one at; and where there is one, its
-    /// figures simulated, for as long as no meter values reach the phone.
+    /// e-mobility provider to start a real one at; and where there is one, as
+    /// the provider reports it, its figures simulated for as long as it
+    /// reports nothing of it.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -60,6 +65,13 @@ namespace cloud.charging.open.Smartphone.Charging
     /// <see cref="VehicleMaxACPowerKW"/> on AC and <see cref="VehicleMaxDCPowerKW"/>
     /// on DC, at that power until <see cref="TargetEnergyKWh"/> are in the
     /// battery. That is arithmetic, not a charging curve.
+    /// </para>
+    /// <para>
+    /// From the first report of the provider on (<see cref="Report"/>), the
+    /// session is what the charge point operator told the provider: its status,
+    /// what it charged and what that costs, and nothing simulated - starting
+    /// while the operator reported no session yet, and with no power and no
+    /// target, which OCPI does not tell.
     /// </para>
     /// </remarks>
     public sealed record ChargingSession(String           Id,
@@ -81,7 +93,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                          DateTimeOffset?  StoppedAt  = null,
                                          String?          StoppedBy  = null,
                                          ChargingTicketReference?  Ticket  = null,
-                                         ChargingStartReference?   Start   = null)
+                                         ChargingStartReference?   Start   = null,
+                                         ProviderReport?           Report  = null)
     {
 
         #region Data
@@ -117,6 +130,13 @@ namespace cloud.charging.open.Smartphone.Charging
         /// </summary>
         public DateTimeOffset FullAt
             => StartedAt + TimeSpan.FromHours((Double) (TargetEnergyKWh / PowerKW));
+
+        /// <summary>
+        /// Whether its figures are simulated: no provider reported anything of
+        /// it.
+        /// </summary>
+        public Boolean IsSimulated
+            => Report is null;
 
         #endregion
 
@@ -165,40 +185,90 @@ namespace cloud.charging.open.Smartphone.Charging
         /// What it is doing at the given time.
         /// </summary>
         public ChargingSessionStatus StatusAt(DateTimeOffset Now)
+        {
 
-            => StoppedAt is DateTimeOffset stopped && stopped < FullAt
-                   ? ChargingSessionStatus.Stopped
-                   : Now >= FullAt
-                         ? ChargingSessionStatus.Finished
-                         : ChargingSessionStatus.Charging;
+            if (Report is ProviderReport report)
+                return StoppedAt is not null
+                           ? ChargingSessionStatus.Stopped
+                           : StatusOf(report);
+
+            return StoppedAt is DateTimeOffset stopped && stopped < FullAt
+                       ? ChargingSessionStatus.Stopped
+                       : Now >= FullAt
+                             ? ChargingSessionStatus.Finished
+                             : ChargingSessionStatus.Charging;
+
+        }
 
         /// <summary>
-        /// When it ended, as seen at the given time - or null while it charges.
+        /// What a report of the provider says the session is doing: what the
+        /// operator's session says, where it reported one, else what the
+        /// provider says of the start.
+        /// </summary>
+        private static ChargingSessionStatus StatusOf(ProviderReport Report)
+
+            => Report.CDR is not null
+                   ? ChargingSessionStatus.Finished
+                   : Report.SessionStatus switch {
+                         "ACTIVE"                    => ChargingSessionStatus.Charging,
+                         "COMPLETED"                 => ChargingSessionStatus.Finished,
+                         "INVALID"                   => ChargingSessionStatus.Failed,
+                         "PENDING" or "RESERVATION"  => ChargingSessionStatus.Starting,
+                         _                           => Report.State switch {
+                                                            "stopped"                                       => ChargingSessionStatus.Stopped,
+                                                            "refused" or "failed" or "expired" or "ended"   => ChargingSessionStatus.Failed,
+                                                            _                                               => Report.ResultType is String result && result != "ACCEPTED"
+                                                                                                                   ? ChargingSessionStatus.Failed
+                                                                                                                   : ChargingSessionStatus.Starting
+                                                        }
+                     };
+
+        /// <summary>
+        /// When it ended, as seen at the given time - or null while it starts
+        /// or charges.
         /// </summary>
         public DateTimeOffset? EndedAt(DateTimeOffset Now)
+        {
 
-            => StatusAt(Now) switch {
-                   ChargingSessionStatus.Stopped   => StoppedAt,
-                   ChargingSessionStatus.Finished  => FullAt,
-                   _                               => null
-               };
+            var status = StatusAt(Now);
+
+            if (Report is ProviderReport report)
+                return status switch {
+                           ChargingSessionStatus.Stopped   => StoppedAt ?? report.ChargingUntil ?? report.EndedAt ?? report.ReceivedAt,
+                           ChargingSessionStatus.Finished  => report.ChargingUntil ?? report.EndedAt ?? report.ReceivedAt,
+                           ChargingSessionStatus.Failed    => report.EndedAt ?? report.ReceivedAt,
+                           _                               => null
+                       };
+
+            return status switch {
+                       ChargingSessionStatus.Stopped   => StoppedAt,
+                       ChargingSessionStatus.Finished  => FullAt,
+                       _                               => null
+                   };
+
+        }
 
         /// <summary>
-        /// Whether it is still charging at the given time.
+        /// Whether it is still starting or charging at the given time: a
+        /// session that may be stopped, and an EVSE this phone is busy at.
         /// </summary>
         public Boolean IsActiveAt(DateTimeOffset Now)
 
-            => StatusAt(Now) == ChargingSessionStatus.Charging;
+            => StatusAt(Now) is ChargingSessionStatus.Starting or ChargingSessionStatus.Charging;
 
         #endregion
 
         #region EnergyAt(Now)
 
         /// <summary>
-        /// What it has charged by the given time, in kWh.
+        /// What it has charged by the given time, in kWh: what the provider
+        /// reported, or what the simulated vehicle took.
         /// </summary>
         public Decimal EnergyAt(DateTimeOffset Now)
         {
+
+            if (Report is ProviderReport report)
+                return report.EnergyKWh ?? 0m;
 
             var until  = EndedAt(Now) ?? Now;
             var hours  = Math.Max(0, (until - StartedAt).TotalHours);
@@ -213,10 +283,15 @@ namespace cloud.charging.open.Smartphone.Charging
         #region ToJSON(Now)
 
         /// <summary>
-        /// The session as the pages show it, at the given time.
+        /// The session as the pages show it, at the given time: as the provider
+        /// reported it, without a power, a target or when it will be full,
+        /// where it reported anything - else simulated.
         /// </summary>
         public JObject ToJSON(DateTimeOffset Now)
         {
+
+            if (Report is ProviderReport report)
+                return ReportedJSON(report, Now);
 
             var status   = StatusAt(Now);
             var ended    = EndedAt(Now);
@@ -256,6 +331,72 @@ namespace cloud.charging.open.Smartphone.Charging
                                new JProperty("currency",     Currency)
                            ))
                        );
+
+            if (status == ChargingSessionStatus.Stopped)
+                json.Add(new JProperty("stoppedBy", StoppedBy));
+
+            if (Ticket is not null)
+                json.Add(new JProperty("ticket", Ticket.ToJSON()));
+
+            if (Start is not null)
+                json.Add(new JProperty("start",  Start. ToJSON()));
+
+            return json;
+
+        }
+
+        /// <summary>
+        /// The session as the provider reported it: its figures the operator's,
+        /// its cost the operator's where it said one, else what the checked
+        /// price makes of what was charged.
+        /// </summary>
+        private JObject ReportedJSON(ProviderReport Report, DateTimeOffset Now)
+        {
+
+            var status   = StatusAt(Now);
+            var ended    = EndedAt(Now);
+            var energy   = EnergyAt(Now);
+            // Charged for as long as the operator says: nothing, where it never
+            // said that charging began - a start that is still starting, or
+            // one that failed.
+            var duration = Report.ChargingSince is DateTimeOffset since && status != ChargingSessionStatus.Starting
+                               ? (ended ?? Now) - since
+                               : TimeSpan.Zero;
+
+            var json = new JObject(
+                           new JProperty("id",                 Id),
+                           new JProperty("status",             status.ToString().ToLowerInvariant()),
+                           new JProperty("simulated",          false),
+                           new JProperty("location",           new JObject(
+                               new JProperty("id",        LocationId),
+                               new JProperty("name",      LocationName),
+                               new JProperty("address",   Address),
+                               new JProperty("city",      City),
+                               new JProperty("operator",  Operator)
+                           )),
+                           new JProperty("evse",               new JObject(
+                               new JProperty("uid",         EVSEUid),
+                               new JProperty("evseId",      EVSEId),
+                               new JProperty("standard",    Standard),
+                               new JProperty("powerType",   PowerType),
+                               new JProperty("maxPowerKW",  MaxPowerKW)
+                           )),
+                           new JProperty("startedAt",          StartedAt.ToString("o")),
+                           new JProperty("startedBy",          StartedBy),
+                           new JProperty("endedAt",            ended?.ToString("o")),
+                           new JProperty("durationSeconds",    (Int64) Math.Max(0, duration.TotalSeconds)),
+                           new JProperty("energyKWh",          energy),
+                           new JProperty("cost",               new JObject(
+                               new JProperty("amount",       Report.Cost ?? Math.Round(energy * PricePerKWh, 2)),
+                               new JProperty("pricePerKWh",  PricePerKWh),
+                               new JProperty("currency",     Report.Cost is not null ? Report.Currency ?? Currency : Currency),
+                               new JProperty("reported",     Report.Cost is not null)
+                           )),
+                           new JProperty("provider",           Report.ToJSON())
+                       );
+
+            if (Report.ChargingSince is DateTimeOffset chargingSince)
+                json.Add(new JProperty("chargingSince", chargingSince.ToString("o")));
 
             if (status == ChargingSessionStatus.Stopped)
                 json.Add(new JProperty("stoppedBy", StoppedBy));
@@ -312,6 +453,9 @@ namespace cloud.charging.open.Smartphone.Charging
             if (Start is not null)
                 json.Add(new JProperty("start",  Start. ToJSON()));
 
+            if (Report is not null)
+                json.Add(new JProperty("report", Report.ToStorageJSON()));
+
             return json;
 
         }
@@ -354,7 +498,8 @@ namespace cloud.charging.open.Smartphone.Charging
                               JSON["stoppedAt"] is JToken { Type: JTokenType.String } ? Time("stoppedAt") : null,
                               JSON.Value<String>("stoppedBy"),
                               ChargingTicketReference.TryParse(JSON["ticket"]),
-                              ChargingStartReference. TryParse(JSON["start"])
+                              ChargingStartReference. TryParse(JSON["start"]),
+                              ProviderReport.         TryParseStorage(JSON["report"])
                           );
 
                 if (Session.MaxPowerKW <= 0 || Session.TargetEnergyKWh <= 0)

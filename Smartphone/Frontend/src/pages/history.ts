@@ -84,7 +84,7 @@ export const historyPage: Page = {
                         ${all.simulated ? html`
                             <p class="small muted">
                                 ${all.sessions.some(session => session.start !== undefined)
-                                      ? 'Simulated figures: no meter values reach this phone yet. A session not started through an e-mobility provider charged nothing for real.'
+                                      ? 'Simulated figures, where the e-mobility provider reported nothing of a session. A session not started through an e-mobility provider charged nothing for real.'
                                       : 'Simulated sessions: no e-mobility provider was asked, and nothing was charged for real.'}
                             </p>
                         ` : nothing}
