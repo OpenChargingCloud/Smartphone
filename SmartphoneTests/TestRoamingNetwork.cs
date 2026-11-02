@@ -146,11 +146,13 @@ namespace cloud.charging.open.Smartphone.Tests
                            new JProperty("name",         new JObject(new JProperty("en", "Quality Assurance"))),
                            new JProperty("description",  new JObject(new JProperty("en", "The roaming network of the tests of the smartphone."))),
                            new JProperty("created",      created.ToISO8601()),
+                           new JProperty("lastChange",   created.ToISO8601()),
                            new JProperty("operator",     new JObject(
                                new JProperty("@id",                     RNOId.ToString()),
                                new JProperty("name",                    new JObject(new JProperty("en", "Open Charging Cloud"))),
                                new JProperty("created",                 created.ToISO8601()),
-                               new JProperty("identityKeys",            new JArray(rnoIdentityKey.ToJSON())),
+                               new JProperty("lastChange",              created.ToISO8601()),
+                               new JProperty("identityKeys",            new JArray(rnoIdentityKey.ToJSON(Embedded: true))),
                                new JProperty("signingKeyCertificates",  new JArray(certificate.ToJSON(Embedded: true))),
                                new JProperty("keyStatement",            keyStatement.ToJSON(Embedded: true))
                            )),
@@ -158,8 +160,9 @@ namespace cloud.charging.open.Smartphone.Tests
                                new JProperty("@id",           GEF.ToString()),
                                new JProperty("name",          new JObject(new JProperty("en", "GraphDefined Charging"))),
                                new JProperty("created",       created.ToISO8601()),
-                               new JProperty("identityKeys",  new JArray(POIPublicKey.From(gefIdentity).ToJSON())),
-                               new JProperty("signingKeys",   new JArray(gefSigningKey.ToJSON())),
+                               new JProperty("lastChange",    created.ToISO8601()),
+                               new JProperty("identityKeys",  new JArray(POIPublicKey.From(gefIdentity).ToJSON(Embedded: true))),
+                               new JProperty("signingKeys",   new JArray(gefSigningKey.ToJSON(Embedded: true))),
                                new JProperty("chargingTariffs", new JArray(
                                    Tariff(ACTariff, "AC", 0.49m, created),
                                    Tariff(DCTariff, "DC", 0.69m, created)
@@ -176,6 +179,7 @@ namespace cloud.charging.open.Smartphone.Tests
                                    )),
                                    new JProperty("geoLocation",  new JObject(new JProperty("lat", 50.9221), new JProperty("lng", 11.5852))),
                                    new JProperty("created",      created.ToISO8601()),
+                                   new JProperty("lastChange",   created.ToISO8601()),
                                    new JProperty("chargingStations", new JArray(
                                        Station(ACStation, ACEVSE, "AC_ThreePhases", 22000, "IEC_62196_T2",       "SOCKET", ACTariff, "meter-ac-1", "AC-2026-001", acMeterKey, created),
                                        Station(DCStation, DCEVSE, "DC",             150000, "IEC_62196_T2_COMBO", "CABLE",  DCTariff, "meter-dc-1", "DC-2026-001", dcMeterKey, created)
@@ -184,6 +188,8 @@ namespace cloud.charging.open.Smartphone.Tests
                            )))
                        );
 
+            // Written as POI writes it - its keys embedded, a lastChange beside
+            // every created - because a reader takes a version in no other form.
             if (!RoamingNetwork.TryParse(json, out var network, out var error))
                 throw new ArgumentException("The roaming network of the tests is no roaming network: " + error);
 
@@ -237,11 +243,13 @@ namespace cloud.charging.open.Smartphone.Tests
                                        String          MeterKey,
                                        DateTimeOffset  Created)
 
-            => new (new JProperty("@id",      StationId),
-                    new JProperty("created",  Created.ToISO8601()),
-                    new JProperty("EVSEs",    new JArray(new JObject(
+            => new (new JProperty("@id",         StationId),
+                    new JProperty("created",     Created.ToISO8601()),
+                    new JProperty("lastChange",  Created.ToISO8601()),
+                    new JProperty("EVSEs",       new JArray(new JObject(
                         new JProperty("@id",                 EVSEId),
                         new JProperty("created",             Created.ToISO8601()),
+                        new JProperty("lastChange",          Created.ToISO8601()),
                         new JProperty("currentTypes",        new JArray(CurrentType)),
                         new JProperty("maxPower",            MaxPower),
                         new JProperty("chargingConnectors",  new JArray(new JObject(
@@ -254,8 +262,9 @@ namespace cloud.charging.open.Smartphone.Tests
                             new JProperty("@id",               MeterId),
                             new JProperty("serialNumber",      Serial),
                             new JProperty("signatureMethods",  new JArray("OCMF")),
-                            new JProperty("publicKeys",        new JArray(new MeasurementPublicKey(Convert.FromBase64String(MeterKey)).ToJSON())),
-                            new JProperty("created",           Created.ToISO8601())
+                            new JProperty("publicKeys",        new JArray(new MeasurementPublicKey(Convert.FromBase64String(MeterKey)).ToJSON(Embedded: true))),
+                            new JProperty("created",           Created.ToISO8601()),
+                            new JProperty("lastChange",        Created.ToISO8601())
                         ))
                     ))));
 
@@ -264,11 +273,12 @@ namespace cloud.charging.open.Smartphone.Tests
                                       Decimal         Price,
                                       DateTimeOffset  Created)
 
-            => new (new JProperty("@id",       Id),
-                    new JProperty("name",      new JObject(new JProperty("en", Name))),
-                    new JProperty("currency",  "EUR"),
-                    new JProperty("elements",  new JArray(Element(Price))),
-                    new JProperty("created",   Created.ToISO8601()));
+            => new (new JProperty("@id",         Id),
+                    new JProperty("name",        new JObject(new JProperty("en", Name))),
+                    new JProperty("currency",    "EUR"),
+                    new JProperty("elements",    new JArray(Element(Price))),
+                    new JProperty("created",     Created.ToISO8601()),
+                    new JProperty("lastChange",  Created.ToISO8601()));
 
         private static JObject Element(Decimal Price)
 
