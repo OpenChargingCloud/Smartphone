@@ -134,10 +134,12 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// Take the stations of the map from the roaming network of another
-        /// trust anchor - or from none, and show the demo stations.
+        /// trust anchor - or from none, and show the demo stations - trusting
+        /// the identity keys given of it, or those trusted so far where the
+        /// anchor stays the same, or none.
         /// </summary>
-        /// <param name="JSON">What the page sent, in the shape of the "roamingNetwork" section.</param>
-        /// <param name="Who">Who asked, for the log.</param>
+        /// <param name="JSON">What the page sent: { "trustAnchor", "trustedKeys"? }.</param>
+        /// <param name="Who">Who asked, for the log and as who trusts a key newly trusted.</param>
         /// <param name="Error">Why nothing was changed.</param>
         /// <param name="NotSaved">True where the configuration file could not be read or written: nothing about the change was wrong, and nothing was changed.</param>
         public Boolean TryUpdateRoamingNetworkConfiguration(JObject                           JSON,
@@ -148,32 +150,119 @@ namespace cloud.charging.open.Smartphone
 
             NotSaved = false;
 
-            if (!RoamingNetworkConfiguration.TryParse(JSON, out var configuration, out Error))
-                return false;
+            RoamingNetworkConfiguration? configuration;
 
             lock (roamingNetworkLock)
             {
 
-                if (!ConfigFile.TryMergeSection(RoamingNetworkConfiguration.SectionName, configuration.ToJSON(), out Error))
+                if (!roamingNetwork.TryParseChange(JSON, Who, TimeProvider.GetUtcNow(), out configuration, out Error))
+                    return false;
+
+                if (!TrySaveRoamingNetwork(configuration, out Error))
                 {
                     NotSaved = true;
                     return false;
                 }
 
-                roamingNetwork    = configuration;
-                roamingLocations  = null;
-
-                // A check holds against the trust anchor it was made with, and
-                // no other.
-                locationChecks.Clear();
-
             }
 
             Log.Notice(configuration.IsSet
                            ? $"'{Who}' at the web interface set the trust anchor of the roaming network '{configuration.TrustAnchor.Id}', at {String.Join(", ", configuration.TrustAnchor.URLs)}: " +
-                             $"the map shows its charging stations, each checked against {configuration.TrustAnchor.Keys.Length} identity key(s) of its operator."
+                             $"the map shows its charging stations, and checks them against {configuration.TrustedKeys.Count} of the {configuration.TrustAnchor.Keys.Length} identity key(s) of its operator trusted here, " +
+                             $"of {configuration.TrustedHolders} of {configuration.TrustAnchor.MinConsensus} holder(s) required." +
+                             (configuration.QuorumTrusted ? "" : " No proof holds before more are.")
                            : $"'{Who}' at the web interface removed the trust anchor of the roaming network: the map shows its demo stations.",
                        "map", "poi", "configuration", "web");
+
+            return true;
+
+        }
+
+        #endregion
+
+        #region TrySetKeyTrust(KeyId, Trusted, Who, out Error, out NotFound, out NotSaved)
+
+        /// <summary>
+        /// Trust one identity key of the trust anchor - or no longer.
+        /// </summary>
+        /// <param name="KeyId">The key, by the thumbprint the trust anchor names it by.</param>
+        /// <param name="Trusted">Whether to trust it.</param>
+        /// <param name="Who">Who decided, for the log and the decision.</param>
+        /// <param name="Error">Why nothing was changed.</param>
+        /// <param name="NotFound">True where there is no trust anchor, or it names no such key.</param>
+        /// <param name="NotSaved">True where the configuration file could not be read or written.</param>
+        public Boolean TrySetKeyTrust(String                            KeyId,
+                                      Boolean                           Trusted,
+                                      String                            Who,
+                                      [NotNullWhen(false)] out String?  Error,
+                                      out Boolean                       NotFound,
+                                      out Boolean                       NotSaved)
+        {
+
+            NotFound  = false;
+            NotSaved  = false;
+
+            RoamingNetworkConfiguration configuration;
+
+            lock (roamingNetworkLock)
+            {
+
+                if (!roamingNetwork.IsSet || !roamingNetwork.TrustAnchor.Keys.Contains(KeyId))
+                {
+                    NotFound  = true;
+                    Error     = roamingNetwork.IsSet
+                                    ? $"The trust anchor of the roaming network '{roamingNetwork.TrustAnchor.Id}' names no identity key '{KeyId}'."
+                                    : "There is no trust anchor, and so no identity key of it to trust.";
+                    return false;
+                }
+
+                configuration = Trusted
+                                    ? roamingNetwork.Trusting(KeyId, Who, TimeProvider.GetUtcNow())
+                                    : roamingNetwork.NotTrusting(KeyId);
+
+                if (!ReferenceEquals(configuration, roamingNetwork) && !TrySaveRoamingNetwork(configuration, out Error))
+                {
+                    NotSaved = true;
+                    return false;
+                }
+
+            }
+
+            Log.Notice($"'{Who}' at the web interface {(Trusted ? "trusts" : "no longer trusts")} the identity key {KeyId} of the trust anchor of the roaming network '{configuration.TrustAnchor!.Id}': " +
+                       $"identity keys of {configuration.TrustedHolders} of the {configuration.TrustAnchor.MinConsensus} holder(s) required are trusted." +
+                       (configuration.QuorumTrusted ? "" : " No proof holds before more are."),
+                       "map", "poi", "configuration", "web");
+
+            Error = null;
+            return true;
+
+        }
+
+        #endregion
+
+        #region (private) TrySaveRoamingNetwork(Configuration, out Error)
+
+        /// <summary>
+        /// Keep the given section in the configuration file and take it - under
+        /// the lock of the roaming network.
+        /// </summary>
+        private Boolean TrySaveRoamingNetwork(RoamingNetworkConfiguration       Configuration,
+                                              [NotNullWhen(false)] out String?  Error)
+        {
+
+            if (!ConfigFile.TryMergeSection(RoamingNetworkConfiguration.SectionName, Configuration.ToJSON(), out Error))
+                return false;
+
+            // The pools another trust anchor's network listed are not this
+            // one's; those of the same network are, and are kept.
+            if (Configuration.TrustAnchor?.ToJSON().ToString() != roamingNetwork.TrustAnchor?.ToJSON().ToString())
+                roamingLocations = null;
+
+            roamingNetwork = Configuration;
+
+            // A check holds against the trust anchor and the keys trusted when
+            // it was made, and no others.
+            locationChecks.Clear();
 
             return true;
 
@@ -185,13 +274,15 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// The roaming network the map takes its stations from, as
-        /// Configuration → Map shows it: what its trust anchor says.
+        /// Configuration → Map shows it: what its trust anchor says, and which
+        /// of its identity keys are trusted here, since when and by whom.
         /// </summary>
         public JObject RoamingNetworkConfigurationJSON()
         {
 
-            var anchor = RoamingNetwork.TrustAnchor;
-            var json   = anchor?.ToJSON();
+            var configuration  = RoamingNetwork;
+            var anchor         = configuration.TrustAnchor;
+            var json           = anchor?.ToJSON();
 
             return new JObject(
                        new JProperty("set",            anchor is not null),
@@ -206,9 +297,38 @@ namespace cloud.charging.open.Smartphone
                            new JProperty("qrCode",            anchor.ToQRCode()),
                            new JProperty("json",              json)
                        )),
+                       new JProperty("trustedKeys",    new JArray(configuration.TrustedKeys.Select(key => key.ToJSON()))),
+                       new JProperty("trustedHolders", configuration.TrustedHolders),
+                       new JProperty("quorumTrusted",  configuration.QuorumTrusted),
                        new JProperty("maxTextLength",  RoamingNetworkConfiguration.MaxTextLength),
                        new JProperty("file",           ConfigFile.Path)
                    );
+
+        }
+
+        #endregion
+
+        #region CheckKeyStatementAsync(CancellationToken)
+
+        /// <summary>
+        /// The key statement of the operator of the roaming network, asked of
+        /// it now and evaluated against its trust anchor and the identity keys
+        /// trusted here - or why there is none to ask.
+        /// </summary>
+        public async Task<(KeyStatementCheck? Check, String? Error)> CheckKeyStatementAsync(CancellationToken CancellationToken = default)
+        {
+
+            var client = RoamingNetworkClientFor(RoamingNetwork);
+
+            if (client is null)
+                return (null, "There is no trust anchor, and so no roaming network to ask for the key statement of its operator.");
+
+            var check = await client.CheckKeyStatementAsync(TimeProvider.GetUtcNow(), CancellationToken);
+
+            if (check.KeyStatement is null)
+                Log.Warning($"The key statement of the operator of the roaming network '{client.TrustAnchor.Id}' could not be had: {check.Error}", "map", "poi");
+
+            return (check, null);
 
         }
 
@@ -220,7 +340,7 @@ namespace cloud.charging.open.Smartphone
         private RoamingNetworkClient? RoamingNetworkClientFor(RoamingNetworkConfiguration Configuration)
 
             => Configuration.IsSet
-                   ? new RoamingNetworkClient(Configuration.TrustAnchor, DNSClient)
+                   ? new RoamingNetworkClient(Configuration, DNSClient)
                    : null;
 
         #endregion
@@ -351,9 +471,12 @@ namespace cloud.charging.open.Smartphone
 
                 if (station.Verified)
                     Log.Info($"The proof of the charging station {station.StationId} of {location.Name} holds: attested by '{station.Attestation!.Signer ?? station.Attestation.KeyId}' " +
-                             $"of the roaming network '{client.TrustAnchor.Id}', revision {station.Proof!.Revision}, until {station.Attestation.ValidUntil:o}." +
+                             $"of the roaming network '{client.TrustAnchor.Id}', revision {station.Proof!.Revision}, until {station.Verification!.ValidUntil:o}." +
                              (station.PriceStatements.Any(statement => !statement.Verified)
                                   ? $" {station.PriceStatements.Count(statement => !statement.Verified)} of its price statement(s) do not hold."
+                                  : "") +
+                             (station.PriceConflict is not null
+                                  ? $" {station.PriceConflict}"
                                   : ""),
                              "map", "poi");
 

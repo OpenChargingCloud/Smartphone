@@ -168,7 +168,10 @@ export function stationCheck(stationId: string, evseId: string, verified = true,
         from:                     'https://hub.example/poi/RNs/QA',
         verified:                 true,
         error:                    null,
+        trust:                    { signaturesValid: true, signersTrusted: true, quorumReached: true, withinValidity: true, trustedHolders: 1, requiredConsensus: 1,
+                                    attestedBy: [ 'OCC' ], validUntil: '2026-10-10T08:10:00Z' },
         textMismatch:             null,
+        warnings:                 [],
         roamingNetwork:           { id: 'QA', name: 'Quality Assurance', description: null, operator: 'Open Charging Cloud', revision: 7, commitId: 'c0ffee' },
         attestation:              { role: 'roamingNetworkOperator', signer: 'OCC', algorithm: 'ES256', keyId: 'a1b2', signedAt: '2026-10-10T07:55:00Z', validUntil: '2026-10-10T08:10:00Z' },
         chargingStationOperator:  { id: 'DE*GEF', name: 'GraphDefined Charging' },
@@ -184,10 +187,11 @@ export function stationCheck(stationId: string, evseId: string, verified = true,
                              signatureMethods: [ 'OCMF' ],
                              publicKeys: [ { id: 'fba865f35d75', algorithm: 'secp256r1', key: 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE0J5uv5Eo22C9', certificateChain: 0 } ] }
         } ],
-        priceStatements:          [ { verified: true, error: null, entityType: 'EVSE', entityId: evseId, signer: 'DE*GEF', keyId: '4197', sequence: 0,
+        priceStatements:          [ { verified: true, current: true, error: null, entityType: 'EVSE', entityId: evseId, signer: 'DE*GEF', keyId: '4197', sequence: 0,
                                       signedAt: '2026-10-10T07:59:00Z', validFrom: '2026-10-10T07:59:00Z', validUntil: null,
                                       prices: [ { chargingTariffId: 'DE*GEF*T_DC', elements: [ { priceComponents: [ { type: 'ENERGY', price: 0.65, stepSize: 1 } ] } ] } ] } ],
         priceStatementsError:     null,
+        priceConflict:            null,
         ...more
     };
 

@@ -9,8 +9,8 @@ import { html, nothing, render, type TemplateResult } from '@node/view';
 
 /**
  * What is signed about a charging pool of the roaming network: the proof of
- * each of its stations, checked against the trust anchor the smartphone was
- * given, by whom it is attested and until when - and, where it holds,
+ * each of its stations, checked against the identity keys of the trust anchor
+ * trusted on the smartphone, by whom it is attested and until when - and, where it holds,
  * everything it gives: each EVSE with its tariffs, the price a price
  * statement sets, and its energy meter with the public keys it signs its
  * measurements with, so that it is known before the first meter value which
@@ -66,11 +66,12 @@ export const locationPage: Page = {
 
                         <p class="small">
                             ${check.verified
-                                  ? html`Every station here is in a proof the operator of the roaming network attested, as the trust
-                                         anchor this smartphone was given names it. What follows is what those proofs say - nothing
-                                         else, and none of it from the list the map was drawn from.`
-                                  : html`Not every station here is in a proof attested by the operator the trust anchor names.
-                                         Of those that are not, nothing is shown, and nothing is charged there.`}
+                                  ? html`Every station here is in a proof the operator of the roaming network attested, by the
+                                         identity keys of its trust anchor trusted on this smartphone. What follows is what those
+                                         proofs say - nothing else, and none of it from the list the map was drawn from.`
+                                  : html`Not every station here is in a proof attested by the operator the trust anchor names,
+                                         by the identity keys trusted on this smartphone. Of those that are not, nothing is shown,
+                                         and nothing is charged there.`}
                         </p>
 
                         ${first?.roamingNetwork ? html`
@@ -106,11 +107,19 @@ export const locationPage: Page = {
                     <section class="card station-check-card">
                         <h2><i class="fa-solid fa-charging-station"></i> ${station.stationId} ${verdict(false)}</h2>
                         <div class="error-box">${station.error}</div>
+                        ${station.trust && !station.trust.quorumReached ? html`
+                            <p class="small trust-hint">
+                                Identity keys trusted here of ${station.trust.trustedHolders} of the ${station.trust.requiredConsensus}
+                                holder(s) required signed the key statement of the operator.
+                                <a href="${toURL('/configuration/map')}">Configuration → Map</a> trusts the keys of its trust anchor.
+                            </p>
+                        ` : nothing}
                         ${station.from ? html`<p class="small muted">Asked at ${station.from}.</p>` : nothing}
                     </section>
                 `;
 
             const attestation  = station.attestation;
+            const trust        = station.trust;
             const made         = [ station.station?.manufacturer, station.station?.model ].filter(part => part).join(' ');
 
             return html`
@@ -128,8 +137,14 @@ export const locationPage: Page = {
                             ${kv('Signed',       dayAndTime(attestation.signedAt))}
                             ${kv('Valid until',  dayAndTime(attestation.validUntil))}
                         ` : nothing}
+                        ${trust ? html`
+                            ${kv('Holders attesting',  `${trust.attestedBy.length} of the ${trust.requiredConsensus} required`)}
+                            ${trust.validUntil ? kv('Holds until', dayAndTime(trust.validUntil)) : nothing}
+                        ` : nothing}
                         ${kv('Served by',       station.from)}
                     </div>
+
+                    ${(station.warnings ?? []).filter(warning => warning !== station.textMismatch).map(warning => html`<div class="notice">${warning}</div>`)}
 
                     ${(station.evses ?? []).map(evse => evseView(evse))}
 
@@ -238,6 +253,7 @@ export const locationPage: Page = {
             return html`
                 <h3>Price statements</h3>
                 ${station.priceStatementsError ? html`<div class="error-box">${station.priceStatementsError}</div>` : nothing}
+                ${station.priceConflict ? html`<div class="error-box price-conflict">${station.priceConflict} What charging here costs is not known.</div>` : nothing}
                 <ul class="price-statements">
                     ${statements.map(statement => statementView(statement, station))}
                 </ul>
@@ -256,6 +272,9 @@ export const locationPage: Page = {
                     ${statement.verified
                           ? html`<span class="chip ok"><i class="fa-solid fa-check"></i> holds</span>`
                           : html`<span class="chip bad"><i class="fa-solid fa-xmark"></i> does not hold</span>`}
+                    ${statement.verified && !statement.current
+                          ? html`<span class="chip warn">not in force</span>`
+                          : nothing}
                     <span class="evse-id">${statement.entityId}</span>
                     ${(statement.prices ?? []).map(prices => html`<span>${prices.chargingTariffId}: ${elementsView(prices.elements, currencyOf(prices.chargingTariffId))}</span>`)}
                     <div class="small muted">

@@ -46,8 +46,9 @@ namespace cloud.charging.open.Smartphone.Roaming
 
     /// <summary>
     /// The smartphone asking a roaming network, at the URLs its trust anchor
-    /// names: its charging pools, and the proof of a charging station and its
-    /// price statements, checked against the trust anchor.
+    /// names: its charging pools, the key statement of its operator, and the
+    /// proof of a charging station and its price statements, checked against
+    /// the identity keys of the trust anchor trusted here.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -77,9 +78,16 @@ namespace cloud.charging.open.Smartphone.Roaming
         #region Properties
 
         /// <summary>
+        /// The roaming network asked: its trust anchor, and those of its
+        /// identity keys trusted here.
+        /// </summary>
+        public RoamingNetworkConfiguration  Configuration  { get; }
+
+        /// <summary>
         /// The trust anchor of the roaming network asked.
         /// </summary>
-        public RoamingNetworkTrustAnchor  TrustAnchor  { get; }
+        public RoamingNetworkTrustAnchor    TrustAnchor
+            => Configuration.TrustAnchor!;
 
         #endregion
 
@@ -88,16 +96,22 @@ namespace cloud.charging.open.Smartphone.Roaming
         /// <summary>
         /// Ask the roaming network of the given trust anchor.
         /// </summary>
-        /// <param name="TrustAnchor">The trust anchor of the roaming network.</param>
+        /// <param name="Configuration">The roaming network: its trust anchor, and those of its identity keys trusted here.</param>
         /// <param name="DNSClient">How to resolve the names of its URLs: the smartphone's own.</param>
         /// <param name="Timeout">How long one URL is waited for.</param>
-        public RoamingNetworkClient(RoamingNetworkTrustAnchor  TrustAnchor,
-                                    DNSClient                  DNSClient,
-                                    TimeSpan?                  Timeout   = null)
+        /// <exception cref="ArgumentException">There is no trust anchor.</exception>
+        public RoamingNetworkClient(RoamingNetworkConfiguration  Configuration,
+                                    DNSClient                    DNSClient,
+                                    TimeSpan?                    Timeout   = null)
         {
-            this.TrustAnchor  = TrustAnchor;
-            this.dnsClient    = DNSClient;
-            this.timeout      = Timeout ?? DefaultTimeout;
+
+            if (!Configuration.IsSet)
+                throw new ArgumentException("A roaming network is asked at the URLs of its trust anchor, and there is none.", nameof(Configuration));
+
+            this.Configuration  = Configuration;
+            this.dnsClient      = DNSClient;
+            this.timeout        = Timeout ?? DefaultTimeout;
+
         }
 
         #endregion
@@ -279,12 +293,42 @@ namespace cloud.charging.open.Smartphone.Roaming
         #endregion
 
 
+        #region CheckKeyStatementAsync(At, CancellationToken)
+
+        /// <summary>
+        /// The key statement of the roaming network operator, asked of the
+        /// roaming network and evaluated against the trust anchor and the
+        /// identity keys trusted here at the given time: what an administrator
+        /// looks at before trusting a key - its keys, who holds them, whether
+        /// it is signed validly - and whether those trusted are a quorum.
+        /// </summary>
+        public async Task<KeyStatementCheck> CheckKeyStatementAsync(DateTimeOffset     At,
+                                                                    CancellationToken  CancellationToken = default)
+        {
+
+            var answer = await GetAsync("keyStatement", CancellationToken);
+
+            if (answer.Text is null)
+                return new KeyStatementCheck(At, answer.From, null, null, answer.Error);
+
+            if (!RoamingNetworkKeyStatement.TryParse(answer.Text, out var keyStatement, out var parseError))
+                return new KeyStatementCheck(At, answer.From, null, null, $"What {answer.From}/keyStatement gave is no key statement: {parseError}");
+
+            var evaluation = Configuration.Evaluate(keyStatement, [], At, out var error);
+
+            return new KeyStatementCheck(At, answer.From, keyStatement, evaluation, error);
+
+        }
+
+        #endregion
+
         #region CheckStationAsync(StationId, At, CancellationToken)
 
         /// <summary>
         /// The proof of a charging station and its price statements, asked of
-        /// the roaming network and checked against its trust anchor at the given
-        /// time.
+        /// the roaming network and checked at the given time against a trust
+        /// context of the identity keys trusted here, evaluated of the key
+        /// statement the proof gives.
         /// </summary>
         public async Task<StationCheck> CheckStationAsync(String             StationId,
                                                           DateTimeOffset     At,
@@ -299,8 +343,16 @@ namespace cloud.charging.open.Smartphone.Roaming
             if (!RoamingNetworkProof.TryParse(proofAnswer.Text, out var proof, out var parseError))
                 return StationCheck.Failed(StationId, At, $"What {proofAnswer.From} gave as the proof of {StationId} is none: {parseError}", proofAnswer.From);
 
-            if (!proof.Verify(TrustAnchor, out var attestation, out var verifyError, At))
-                return StationCheck.Failed(StationId, At, $"The proof of {StationId} is not attested by the operator the trust anchor names: {verifyError}", proofAnswer.From, proof);
+            // Not against every identity key the trust anchor pins, but against
+            // those trusted here: a context of them, of the key statement this
+            // proof gives, evaluated now - and for the next check anew.
+            var trust = Configuration.Evaluate(proof, At, out var trustError);
+
+            if (trust?.Context is not RoamingNetworkTrustContext context)
+                return StationCheck.Failed(StationId, At, NotTrusted(StationId, trust, trustError), proofAnswer.From, proof, trust);
+
+            if (!VerifiedChargingStation.TryVerify(context, proof, out var station, out var verifyError, ChargingStationId: StationId))
+                return StationCheck.Failed(StationId, At, $"The proof of {StationId} is not attested by the operator the trust anchor names: {verifyError}", proofAnswer.From, proof, trust);
 
             // The statements of the pool, the station and its EVSEs. Each is
             // checked on its own: one that is not valid is said and not taken,
@@ -308,6 +360,7 @@ namespace cloud.charging.open.Smartphone.Roaming
             var statements       = new List<PriceStatementCheck>();
             var statementsAnswer = await GetAsync($"CSs/{StationId}/priceStatements", CancellationToken);
             var statementsError  = statementsAnswer.Text is null ? statementsAnswer.Error : null;
+            String? conflict     = null;
 
             if (statementsAnswer.Text is not null)
             {
@@ -322,7 +375,11 @@ namespace cloud.charging.open.Smartphone.Roaming
                             continue;
                         }
 
-                        statements.Add(statement.TryVerify(proof, out var statementError, At)
+                        // Of an entity the proof gives, signed by its operator,
+                        // valid now - and of this station, naming only tariffs
+                        // of its entity, as WWCP_POI verifies a station's.
+                        statements.Add(statement.TryVerify(proof, out var statementError, At) &&
+                                       station.TryGetCurrentPrices([ statement ], out _, out statementError, At)
                                            ? new PriceStatementCheck(statement, json, true,  null)
                                            : new PriceStatementCheck(statement, json, false, statementError));
 
@@ -334,15 +391,65 @@ namespace cloud.charging.open.Smartphone.Roaming
                 }
             }
 
+            // Of those that hold, the one in force for each entity - and none at
+            // all where they contradict each other: two of one sequence of an
+            // entity, a split view, leave its price unknown.
+            var holding = statements.Where(check => check.Verified).Select(check => check.Statement!).ToArray();
+
+            if (holding.Length > 0)
+            {
+                if (station.TryGetCurrentPrices(holding, out var prices, out var pricesError, At))
+                    statements = [ .. statements.Select(check => check.Verified && prices.Values.Any(price => price.Digest == check.Statement!.Digest)
+                                                                     ? check with { Current = true }
+                                                                     : check) ];
+                else
+                    conflict = $"The price statements of {StationId} do not hold together, and none of them is taken: {pricesError}";
+            }
+
             return new StationCheck(StationId,
                                     At,
                                     proofAnswer.From,
                                     proof,
-                                    attestation,
+                                    trust,
+                                    station,
                                     null,
-                                    proof.TrustAnchorTextMismatch(TrustAnchor),
                                     statements,
-                                    statementsError);
+                                    statementsError,
+                                    conflict);
+
+        }
+
+        #endregion
+
+        #region (private) NotTrusted(StationId, Trust, Error)
+
+        /// <summary>
+        /// Why the identity keys trusted here give no trust context of the key
+        /// statement of a proof.
+        /// </summary>
+        private String NotTrusted(String                          StationId,
+                                  RoamingNetworkTrustEvaluation?  Trust,
+                                  String?                         Error)
+        {
+
+            var notAttested = $"The proof of {StationId} is not attested by the operator the trust anchor names";
+
+            if (Trust is null)
+                return $"{notAttested}: {Error}";
+
+            if (!Configuration.TrustedKeys.Any())
+                return $"The proof of {StationId} is not checked: none of the identity keys of the trust anchor of '{TrustAnchor.Id}' is trusted here yet. " +
+                       "Configuration → Map trusts them, once their key statement was looked at.";
+
+            if (!Trust.SignaturesValid)
+                return $"{notAttested}: its key statement is not signed validly. {Trust.VerificationError}";
+
+            if (!Trust.QuorumReached)
+                return $"{notAttested}: identity keys trusted here of {Trust.TrustedHolderCount} holder(s) signed its key statement, and {Trust.RequiredConsensus} must agree." +
+                       (Trust.VerificationError is String quorumError ? $" {quorumError}" : "");
+
+            return $"{notAttested}: its key statement, or a key that signed it, is not valid now." +
+                   (Trust.VerificationError is String validityError ? $" {validityError}" : "");
 
         }
 

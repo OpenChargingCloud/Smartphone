@@ -11,10 +11,13 @@ and charging sessions started from it - simulated, or through an account at
 an e-mobility provider and as the provider reports them, simulated only where
 it reports nothing. The map shows demo stations,
 or - given the trust anchor of a roaming network - its charging pools, the
-proof of each station checked against that anchor with
+proof of each station checked with
 [WWCP_POI](https://github.com/OpenChargingCloud/WWCP_POI) before anything it
 says is shown: its tariffs, its price statements, and the public keys its
-energy meters sign their measurements with. With an account at an e-mobility
+energy meters sign their measurements with. It is checked against those of
+the anchor's identity keys an administrator trusted, each on its own, after
+looking at the key statement of the network's operator; setting an anchor
+trusts none of them. With an account at an e-mobility
 provider - an account key made on the phone, certified from a PKCS#10 request
 - every start has a charging ticket of its own, and the start and the stop are
 requests signed by the ticket's key and countersigned by the provider, all of
@@ -32,12 +35,12 @@ pins it beside the libraries it needs, builds it, and runs its tests.
 | `Smartphone/Smartphone.cs` | the node: its names, its port (2346), the certificates it keeps, the security headers its pages need for the map |
 | `Smartphone/SmartphoneAccess.cs` | the resources `map` and `charging`, and the role `driver` |
 | `Smartphone/Map/` | where the map takes its stations from, the stations as OCPI locations, and the demo ones |
-| `Smartphone/Roaming/` | the trust anchor of a roaming network, asking it at its URLs, and the check of a station's proof and price statements |
+| `Smartphone/Roaming/` | the trust anchor of a roaming network and the identity keys of it trusted, asking the network at its URLs, the key statement of its operator, and the check of a station's proof and price statements against a trust context of the keys trusted |
 | `Smartphone/Provider/` | the account at an e-mobility provider, its client, charging tickets - their payload, the request signed by the ticket key and the account key, and the check of what comes back - start and stop requests, signed by the ticket key, and the check of the provider's countersignature, and what the provider reports of a start, checked to be of it |
 | `Smartphone/Charging/` | a charging session - simulated, or as the provider reports it - with its ticket and its start and stop through the provider, and the file every session is kept in |
-| `Smartphone/HTTPAPI/` | the JSON API: every node's, and `v1/map`, `v1/map/locations/{id}/check`, `v1/configuration/map`, `v1/configuration/roamingNetwork`, `v1/charging/sessions` and `v1/provider` |
+| `Smartphone/HTTPAPI/` | the JSON API: every node's, and `v1/map`, `v1/map/locations/{id}/check`, `v1/configuration/map`, `v1/configuration/roamingNetwork` with its `keyStatement` and `trustedKeys/{id}`, `v1/charging/sessions` and `v1/provider` |
 | `Smartphone/Frontend/` | the web interface - the map is Leaflet's - bundled by webpack with what every node shares |
-| `SmartphoneTests/` | what kind of node it is, the map and the sessions, the API with its roles, a roaming network served on the loopback and checked against its trust anchor, an e-mobility provider on the loopback issuing tickets, countersigning starts and stops and telling what its operator reported of them - and misbehaving - and WWCP_Node's conformance suite asked of a smartphone |
+| `SmartphoneTests/` | what kind of node it is, the map and the sessions, the API with its roles, a roaming network served on the loopback and checked against the identity keys of its trust anchor trusted - none before an administrator trusts one, an e-mobility provider on the loopback issuing tickets, countersigning starts and stops and telling what its operator reported of them - and misbehaving - and WWCP_Node's conformance suite asked of a smartphone |
 | `docs/` | drafts: starting and stopping a session with a charging ticket, signed by its key and countersigned by the provider, and what the app learns of it after the start |
 
 

@@ -166,9 +166,10 @@ export interface CheckedEVSE {
     energyMeter:   EnergyMeter | null;
 }
 
-/** A price statement of a station, its pool or one of its EVSEs, and whether it holds. */
+/** A price statement of a station, its pool or one of its EVSEs, whether it holds, and whether it is the one in force. */
 export interface CheckedPriceStatement {
     verified:    boolean;
+    current:     boolean;
     error:       string | null;
     entityType:  string | null;
     entityId:    string | null;
@@ -181,14 +182,31 @@ export interface CheckedPriceStatement {
     prices:      { chargingTariffId: string; elements: TariffElement[] }[] | null;
 }
 
-/** The check of one charging station: its proof against the trust anchor, and what it gives where it holds. */
+/**
+ * How the key statement a proof gives fared against the identity keys of the trust anchor trusted here, and - where the
+ * proof holds - which holders attest it and until when, at most, what it says holds.
+ */
+export interface StationTrust {
+    signaturesValid:    boolean;
+    signersTrusted:     boolean;
+    quorumReached:      boolean;
+    withinValidity:     boolean;
+    trustedHolders:     number;
+    requiredConsensus:  number;
+    attestedBy:         string[];
+    validUntil:         string | null;
+}
+
+/** The check of one charging station: its proof against the identity keys trusted here, and what it gives where it holds. */
 export interface StationCheck {
     stationId:                 string;
     checkedAt:                 string;
     from:                      string | null;
     verified:                  boolean;
     error:                     string | null;
+    trust?:                    StationTrust;
     textMismatch?:             string | null;
+    warnings?:                 string[];
     roamingNetwork?:           { id: string | null; name: string | null; description: string | null; operator: string | null; revision: number | null; commitId: string | null };
     attestation?:              { role: string; signer: string | null; algorithm: string; keyId: string; signedAt: string; validUntil: string };
     chargingStationOperator?:  { id: string | null; name: string | null };
@@ -196,6 +214,8 @@ export interface StationCheck {
     evses?:                    CheckedEVSE[];
     priceStatements?:          CheckedPriceStatement[];
     priceStatementsError?:     string | null;
+    /** Why the statements that hold do not hold together - two of one sequence of an entity - so that none is taken. */
+    priceConflict?:            string | null;
 }
 
 /** The check of every station of a charging pool of the map. */
@@ -222,8 +242,51 @@ export interface RoamingNetworkSettings {
         qrCode:            string;
         json:              Record<string, unknown>;
     } | null;
-    maxTextLength:  number;
-    file:           string;
+    /** Those of its identity keys trusted here: since when, and by whom. */
+    trustedKeys:     TrustedKey[];
+    /** How many of its holders have a key trusted here. */
+    trustedHolders:  number;
+    /** Whether they are as many as the trust anchor requires to agree. */
+    quorumTrusted:   boolean;
+    maxTextLength:   number;
+    file:            string;
+}
+
+/** An identity key of the trust anchor trusted here. */
+export interface TrustedKey {
+    id:          string;
+    acceptedAt:  string;
+    acceptedBy:  string;
+}
+
+/**
+ * The key statement of the operator of the roaming network, as the network served it, and how it fares against the
+ * trust anchor and the keys trusted here: what is looked at before a key is trusted.
+ */
+export interface KeyStatementCheck {
+    checkedAt:     string;
+    from:          string | null;
+    error:         string | null;
+    keyStatement:  {
+        roamingNetworkId:  string;
+        operatorId:        string;
+        signedAt:          string;
+        validUntil:        string;
+        minConsensus:      number;
+        signedBy:          string[];
+        identityKeys:      { id: string; holder: string | null; notBefore: string | null; notAfter: string | null; key: string | null }[];
+    } | null;
+    evaluation:    {
+        signaturesValid:    boolean;
+        signersTrusted:     boolean;
+        quorumReached:      boolean;
+        withinValidity:     boolean;
+        canTrustKeys:       boolean;
+        trustedHolders:     number;
+        requiredConsensus:  number;
+        signatures:         number;
+        error:              string | null;
+    } | null;
 }
 
 /** Where the map takes its stations from, as Configuration → Map shows it. */
@@ -364,8 +427,11 @@ export const api = {
     },
 
     roamingNetwork: {
-        settings:     ()                                    => request<RoamingNetworkSettings>('GET', '/configuration/roamingNetwork'),
-        saveSettings: (settings: { trustAnchor: string })   => request<RoamingNetworkSettings>('PUT', '/configuration/roamingNetwork', settings)
+        settings:     ()                                    => request<RoamingNetworkSettings>('GET',    '/configuration/roamingNetwork'),
+        saveSettings: (settings: { trustAnchor: string })   => request<RoamingNetworkSettings>('PUT',    '/configuration/roamingNetwork', settings),
+        keyStatement: ()                                    => request<KeyStatementCheck>     ('GET',    '/configuration/roamingNetwork/keyStatement'),
+        trustKey:     (keyId: string)                       => request<RoamingNetworkSettings>('PUT',    `/configuration/roamingNetwork/trustedKeys/${encodeURIComponent(keyId)}`),
+        distrustKey:  (keyId: string)                       => request<RoamingNetworkSettings>('DELETE', `/configuration/roamingNetwork/trustedKeys/${encodeURIComponent(keyId)}`)
     },
 
     charging: {

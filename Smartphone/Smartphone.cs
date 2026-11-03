@@ -268,8 +268,9 @@ namespace cloud.charging.open.Smartphone
 
             if (roamingNetwork.IsSet)
                 this.Log.Info($"The map shows the charging stations of the roaming network '{roamingNetwork.TrustAnchor.Id}', at {String.Join(", ", roamingNetwork.TrustAnchor.URLs)}, " +
-                              $"each checked against the trust anchor of its operator: {roamingNetwork.TrustAnchor.Keys.Length} identity key(s), " +
-                              $"{roamingNetwork.TrustAnchor.MinConsensus} of {roamingNetwork.TrustAnchor.Holders.Count} holder(s) to agree.",
+                              $"each checked against the identity keys of its operator trusted here: {roamingNetwork.TrustedKeys.Count} of the {roamingNetwork.TrustAnchor.Keys.Length} its trust anchor names, " +
+                              $"of {roamingNetwork.TrustedHolders} holder(s), {roamingNetwork.TrustAnchor.MinConsensus} of its {roamingNetwork.TrustAnchor.Holders.Count} to agree." +
+                              (roamingNetwork.QuorumTrusted ? "" : " No proof holds before more are trusted: Configuration → Map."),
                               "map", "poi");
 
             else

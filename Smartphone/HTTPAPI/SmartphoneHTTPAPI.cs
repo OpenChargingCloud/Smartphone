@@ -42,9 +42,11 @@ namespace cloud.charging.open.Smartphone
     /// | | |
     /// |---|---|
     /// | <c>GET v1/map</c> | the charging stations, OCPI locations with the status of each EVSE now: the demo stations, or the pools of the roaming network |
-    /// | <c>GET v1/map/locations/{id}/check</c> | the stations of a pool of the roaming network, each proof checked against the trust anchor, with its tariffs and energy meters |
+    /// | <c>GET v1/map/locations/{id}/check</c> | the stations of a pool of the roaming network, each proof checked against the identity keys of the trust anchor trusted here, with its tariffs and energy meters |
     /// | <c>GET v1/configuration/map</c>, <c>PUT</c> | where the map takes its stations from: <c>{ "stationsURL" }</c> |
-    /// | <c>GET v1/configuration/roamingNetwork</c>, <c>PUT</c> | the roaming network of the map: <c>{ "trustAnchor" }</c>, its QR code, URI or JSON |
+    /// | <c>GET v1/configuration/roamingNetwork</c>, <c>PUT</c> | the roaming network of the map: <c>{ "trustAnchor", "trustedKeys"? }</c>, its QR code, URI or JSON, and the thumbprints of its identity keys to trust |
+    /// | <c>GET v1/configuration/roamingNetwork/keyStatement</c> | the key statement of its operator, asked of it now, and how it fares against the keys trusted here |
+    /// | <c>PUT v1/configuration/roamingNetwork/trustedKeys/{id}</c>, <c>DELETE</c> | trust one identity key of the trust anchor, or no longer |
     /// | <c>GET v1/charging/sessions</c> | every session, the newest first; <c>?active=true</c> for those still charging |
     /// | <c>POST v1/charging/sessions</c> | <c>{ "locationId", "evseUid" }</c>: start one, 201 and the session |
     /// | <c>GET v1/charging/sessions/{id}</c> | one session, as it is now |
@@ -120,8 +122,12 @@ namespace cloud.charging.open.Smartphone
             AddHandler(HTTPPath.Root + "v1/map/locations/{id}/check",         GetLocationCheck,          HTTPMethod.GET);
             AddHandler(HTTPPath.Root + "v1/configuration/map",                GetMapConfiguration,       HTTPMethod.GET);
             AddHandler(HTTPPath.Root + "v1/configuration/map",                PutMapConfiguration,       HTTPMethod.PUT);
-            AddHandler(HTTPPath.Root + "v1/configuration/roamingNetwork",     GetRoamingNetworkConfiguration,  HTTPMethod.GET);
-            AddHandler(HTTPPath.Root + "v1/configuration/roamingNetwork",     PutRoamingNetworkConfiguration,  HTTPMethod.PUT);
+
+            AddHandler(HTTPPath.Root + "v1/configuration/roamingNetwork",                   GetRoamingNetworkConfiguration,  HTTPMethod.GET);
+            AddHandler(HTTPPath.Root + "v1/configuration/roamingNetwork",                   PutRoamingNetworkConfiguration,  HTTPMethod.PUT);
+            AddHandler(HTTPPath.Root + "v1/configuration/roamingNetwork/keyStatement",      GetRoamingNetworkKeyStatement,   HTTPMethod.GET);
+            AddHandler(HTTPPath.Root + "v1/configuration/roamingNetwork/trustedKeys/{id}",  PutTrustedKey,                   HTTPMethod.PUT);
+            AddHandler(HTTPPath.Root + "v1/configuration/roamingNetwork/trustedKeys/{id}",  DeleteTrustedKey,                HTTPMethod.DELETE);
 
             AddHandler(HTTPPath.Root + "v1/charging/sessions",                GetChargingSessions,       HTTPMethod.GET);
             AddHandler(HTTPPath.Root + "v1/charging/sessions",                PostChargingSession,       HTTPMethod.POST);

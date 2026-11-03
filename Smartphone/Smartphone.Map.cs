@@ -193,8 +193,9 @@ namespace cloud.charging.open.Smartphone
                 return json;
             }
 
-            var anchor  = RoamingNetwork.TrustAnchor!;
-            var listed  = await RoamingLocationsAsync(Refresh, CancellationToken);
+            var network  = RoamingNetwork;
+            var anchor   = network.TrustAnchor!;
+            var listed   = await RoamingLocationsAsync(Refresh, CancellationToken);
 
             json.Add(new JProperty("timestamp",       listed.At.ToString("o")));
             json.Add(new JProperty("roamingNetwork",  new JObject(
@@ -208,13 +209,15 @@ namespace cloud.charging.open.Smartphone
 
                 // A pool checked, and still holding: with the price its proof
                 // gives, as a demo station has its own.
-                var shown = locationChecks.TryGetValue(location.Id, out var check) && check.Verified && check.Stations.All(station => station.HoldsAt(anchor, now))
-                                ? location with { Tariff = location.EVSEs.Select(evse => check.StationOf(evse)?.TariffOf(evse.Uid)).FirstOrDefault(tariff => tariff is not null) }
+                var holds = locationChecks.TryGetValue(location.Id, out var check) && check.Verified && check.Stations.All(station => station.HoldsAt(network, now));
+
+                var shown = holds
+                                ? location with { Tariff = location.EVSEs.Select(evse => check!.StationOf(evse)?.TariffOf(evse.Uid)).FirstOrDefault(tariff => tariff is not null) }
                                 : location;
 
                 var entry = shown.ToJSON(evse => StatusOf(shown, evse, now), listed.At);
 
-                entry["verified"] = check is null ? null : check.Verified && check.Stations.All(station => station.HoldsAt(anchor, now));
+                entry["verified"] = check is null ? null : holds;
 
                 return entry;
 

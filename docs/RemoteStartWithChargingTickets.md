@@ -25,7 +25,7 @@ What exists today and what does not is said at the end.
 | the driver's account at the EMSP | an **account key**, P-256, long-lived, one or more per account | "this is me" | the EMSP: it certified it below its account CA, from a PKCS#10 request the app made (`POST /api/v1/account-keys`) |
 | one charging session | a **ticket key**, P-256, made for one start and thrown away after it | "I hold this ticket" | the CPO: the ticket names it, and the EMSP signed the ticket |
 | the EMSP | its **ticket issuer key** | "this EMSP issued this ticket", and "this EMSP vouches for this start" | the CPO: by the issuer certificate (`GET /api/v1/tickets/issuer.pem`), or by a signing key of the EMSP as a party of the roaming network (WWCP_POI, `eMobilityProviders`) |
-| the roaming network's operator | its identity keys, by their thumbprints | what the network says of the station: its EVSEs, tariffs, energy meters and their keys | the app: by the trust anchor it was given |
+| the roaming network's operator | its identity keys, by their thumbprints | what the network says of the station: its EVSEs, tariffs, energy meters and their keys | the app: by those keys of the trust anchor it was given that it trusts, each on its own |
 
 The account key never reaches the CPO. The ticket key never reaches anybody
 but the app.
@@ -33,9 +33,10 @@ but the app.
 
 ## 1. Before: the station, checked
 
-The app has checked the proof of the station against the trust anchor of the
-roaming network (Smartphone, map of a roaming network): it knows the EVSE, its
-tariff and price, and the public key its energy meter signs meter values with.
+The app has checked the proof of the station against those keys of the trust
+anchor of the roaming network it trusts (Smartphone, map of a roaming network):
+it knows the EVSE, its tariff and price, and the public key its energy meter
+signs meter values with.
 It keeps the proof - the digest of its effective tree and its commit - so that
 the start request can name what the driver saw.
 
@@ -421,5 +422,5 @@ bytes, and its signature then no longer holds. Payloads are deterministic CBOR
 | EMSP | self sign-up; account keys from a PKCS#10 request; tickets issued from a request signed by the ticket key and an account key, the account's signature taken off - with Styx's CBOR and COSE in place of its own; start and stop requests (`POST /api/v1/tickets/{id}/start` and `/stop`) checked and countersigned with a token per start - `token`, `authRef` and `iat` as text labels - and sent on as OCPI `START_SESSION` / `STOP_SESSION` on 2.2.1 and 2.3.0; the token `ALLOWED` while its ticket is good, and only at the location and EVSE of its start and for the CPO it went to - through WWCP_OCPI's `OnLocalTokenAuthorization` - and `BLOCKED` once its session is over; what became of a start, told as section 9 says (`GET /api/v1/tickets/{id}`) |
 | CSMS / CPO, missing | starting and stopping at a station on `START_SESSION` and `STOP_SESSION`; checking a ticket and a start request, limits as a charging profile, the token in the OCMF identification |
 | Roaming hub, missing | passing on what one peer sends to another - commands, their results, sessions and CDRs - so that, for now, an EMSP reaches a CPO only peered with it directly |
-| Smartphone | the station's proof checked against the trust anchor, its tariff, and its energy meter's key; an account at an EMSP, signed up or in with a session; an account key from a PKCS#10 request; a ticket per start, built, signed and checked with Styx - against the EMSP as committed and as moved to Styx; start and stop requests, signed by the ticket key and their countersignature checked - against a stand-in EMSP of its tests, which countersigns as this draft says; against the EMSP as far as it goes without a CPO, ticket and start request taken and the EVSE unknown to it; what became of a start, asked for as section 9 says and taken only where it is of that start - the session as the stand-in tells it, and from the EMSP a ticket with no start, where no CPO took one, its session left simulated; simulated where a provider tells nothing |
+| Smartphone | the station's proof checked against the identity keys of the trust anchor trusted on the phone, its tariff, and its energy meter's key; an account at an EMSP, signed up or in with a session; an account key from a PKCS#10 request; a ticket per start, built, signed and checked with Styx - against the EMSP as committed and as moved to Styx; start and stop requests, signed by the ticket key and their countersignature checked - against a stand-in EMSP of its tests, which countersigns as this draft says; against the EMSP as far as it goes without a CPO, ticket and start request taken and the EVSE unknown to it; what became of a start, asked for as section 9 says and taken only where it is of that start - the session as the stand-in tells it, and from the EMSP a ticket with no start, where no CPO took one, its session left simulated; simulated where a provider tells nothing |
 | Smartphone, missing | the signed meter values of a charge detail record checked against the energy meter's key: kept as they came, not checked yet |

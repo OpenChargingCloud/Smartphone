@@ -97,9 +97,12 @@ namespace cloud.charging.open.Smartphone
         }
 
         /// <summary>
-        /// PUT /api/v1/configuration/roamingNetwork with { "trustAnchor" }: the
-        /// text of its QR code, its URI or its JSON - or empty, and the map
-        /// shows its demo stations. Answers with what it says now.
+        /// PUT /api/v1/configuration/roamingNetwork with { "trustAnchor",
+        /// "trustedKeys"? }: the text of its QR code, its URI or its JSON - or
+        /// empty, and the map shows its demo stations - and the thumbprints of
+        /// those of its identity keys to trust. Without them, the keys trusted
+        /// so far stay trusted where the anchor stays the same, and none is
+        /// where it changed. Answers with what it says now.
         /// </summary>
         private Task<HTTPResponse> PutRoamingNetworkConfiguration(HTTPRequest Request)
         {
@@ -112,6 +115,70 @@ namespace cloud.charging.open.Smartphone
 
             if (!Smartphone.TryUpdateRoamingNetworkConfiguration(json, user.Id.ToString(), out var error, out var notSaved))
                 return Task.FromResult(NotChanged(Request, HTTPStatusCode.BadRequest, error, notSaved));
+
+            return Task.FromResult(
+                       JSONResponse(Request, HTTPStatusCode.OK, Smartphone.RoamingNetworkConfigurationJSON())
+                   );
+
+        }
+
+        #endregion
+
+        #region (private) GetRoamingNetworkKeyStatement(Request)
+
+        /// <summary>
+        /// GET /api/v1/configuration/roamingNetwork/keyStatement: the key
+        /// statement of the operator of the roaming network, asked of it now -
+        /// its identity keys, who holds them, whether it is signed validly -
+        /// and whether the keys trusted here are a quorum of it. 200 also where
+        /// the network did not answer, with why; 409 without a trust anchor.
+        /// </summary>
+        private async Task<HTTPResponse> GetRoamingNetworkKeyStatement(HTTPRequest Request)
+        {
+
+            if (!TryAuthorize(Request, Permission.Read(SmartphoneAccess.Map), false, out _, out var refused))
+                return refused;
+
+            var (check, error) = await Smartphone.CheckKeyStatementAsync();
+
+            if (check is null)
+                return ErrorJSON(Request, HTTPStatusCode.Conflict, error!);
+
+            return JSONResponse(Request, HTTPStatusCode.OK, check.ToJSON());
+
+        }
+
+        #endregion
+
+        #region (private) PutTrustedKey(Request) / DeleteTrustedKey(Request)
+
+        /// <summary>
+        /// PUT /api/v1/configuration/roamingNetwork/trustedKeys/{id}: trust one
+        /// identity key of the trust anchor, by its thumbprint. Answers with what
+        /// the configuration says now; 404 where the trust anchor names no such
+        /// key, or there is none.
+        /// </summary>
+        private Task<HTTPResponse> PutTrustedKey(HTTPRequest Request)
+
+            => SetKeyTrust(Request, true);
+
+        /// <summary>
+        /// DELETE /api/v1/configuration/roamingNetwork/trustedKeys/{id}: no
+        /// longer trust one identity key of the trust anchor.
+        /// </summary>
+        private Task<HTTPResponse> DeleteTrustedKey(HTTPRequest Request)
+
+            => SetKeyTrust(Request, false);
+
+        private Task<HTTPResponse> SetKeyTrust(HTTPRequest  Request,
+                                               Boolean      Trusted)
+        {
+
+            if (!TryAuthorize(Request, Permission.Edit(SmartphoneAccess.Map), true, out var user, out var refused))
+                return Task.FromResult(refused);
+
+            if (!Smartphone.TrySetKeyTrust(IdOf(Request), Trusted, user.Id.ToString(), out var error, out var notFound, out var notSaved))
+                return Task.FromResult(NotChanged(Request, notFound ? HTTPStatusCode.NotFound : HTTPStatusCode.BadRequest, error, notSaved));
 
             return Task.FromResult(
                        JSONResponse(Request, HTTPStatusCode.OK, Smartphone.RoamingNetworkConfigurationJSON())

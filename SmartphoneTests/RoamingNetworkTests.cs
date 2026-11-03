@@ -42,10 +42,11 @@ namespace cloud.charging.open.Smartphone.Tests
     /// <summary>
     /// The map of a smartphone given the trust anchor of a roaming network,
     /// against a roaming network served on the loopback: its charging pools on
-    /// the map, the proof of each station checked against the trust anchor -
-    /// and refused where nobody it trusts attested it - and everything a proof
-    /// that holds gives, its tariffs, its price statements and the public keys
-    /// its energy meters sign their measurements with.
+    /// the map, the proof of each station checked against the identity keys of
+    /// the trust anchor an administrator trusts - and refused where nobody it
+    /// trusts attested it - and everything a proof that holds gives, its
+    /// tariffs, its price statements and the public keys its energy meters
+    /// sign their measurements with.
     /// </summary>
     public class RoamingNetworkTests
     {
@@ -115,15 +116,16 @@ namespace cloud.charging.open.Smartphone.Tests
 
         /// <summary>
         /// A smartphone whose time client is switched off, on a free port of
-        /// the loopback - made, and not yet started.
+        /// the loopback - made, and not yet started - its configuration file
+        /// the given one, or one saying no more than that.
         /// </summary>
-        private Smartphone SmartphoneFrom()
+        private Smartphone SmartphoneFrom(String? Configuration = null)
         {
 
             var port  = TestPorts.Free();
             var file  = Path.Combine(directory, WWCPConfigFile.DefaultFileName);
 
-            File.WriteAllText(file, NoTimeServers);
+            File.WriteAllText(file, Configuration ?? NoTimeServers);
 
             smartphone  = new Smartphone(
                               HTTPPort:          IPPort.Parse(port),
@@ -197,21 +199,23 @@ namespace cloud.charging.open.Smartphone.Tests
         /// <summary>
         /// A started smartphone, the roaming network of the tests, and an
         /// administrator who gave the smartphone its trust anchor - as the text
-        /// of its QR code.
+        /// of its QR code - and trusts every identity key it names.
         /// </summary>
         private async Task<HttpClient> WithTheRoamingNetwork(RoamingNetworkTrustAnchor? TrustAnchor = null)
         {
 
             network ??= await TestRoamingNetwork.Start();
 
-            await TestPorts.StartedOnFreshPorts(SmartphoneFrom);
+            await TestPorts.StartedOnFreshPorts(() => SmartphoneFrom());
 
-            var admin = await SignedInAs("admin1", "systemadmin");
+            var admin   = await SignedInAs("admin1", "systemadmin");
+            var anchor  = TrustAnchor ?? network.TrustAnchor;
 
             var (status, settings) = await Send(admin, HttpMethod.Put, "api/v1/configuration/roamingNetwork",
-                                                new { trustAnchor = (TrustAnchor ?? network.TrustAnchor).ToQRCode() });
+                                                new { trustAnchor = anchor.ToQRCode(), trustedKeys = anchor.Keys.ToArray() });
 
-            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), settings.ToString());
+            Assert.That(status,                                       Is.EqualTo(HttpStatusCode.OK), settings.ToString());
+            Assert.That(settings["quorumTrusted"]!.Value<Boolean>(),  Is.True,                       settings.ToString());
 
             return admin;
 
@@ -233,7 +237,7 @@ namespace cloud.charging.open.Smartphone.Tests
 
             network = await TestRoamingNetwork.Start();
 
-            await TestPorts.StartedOnFreshPorts(SmartphoneFrom);
+            await TestPorts.StartedOnFreshPorts(() => SmartphoneFrom());
 
             using var admin   = await SignedInAs("admin1",  "systemadmin");
             using var driver  = await SignedInAs("driver1", "driver");
@@ -278,6 +282,206 @@ namespace cloud.charging.open.Smartphone.Tests
             (status, var map) = await Send(driver, HttpMethod.Get, "api/v1/map");
 
             Assert.That(map["source"]!.Value<String>(),  Is.EqualTo("demo"), "without a roaming network, the map shows its demo stations");
+
+        }
+
+        #endregion
+
+        #region SettingATrustAnchorTrustsNoKeyYet()
+
+        /// <summary>
+        /// A trust anchor set trusts none of its identity keys: no proof holds,
+        /// and why is said. The key statement of the network's operator shows
+        /// its keys and that it is signed validly; an administrator - and no
+        /// driver - trusts a key the anchor names, and no other, and the proofs
+        /// hold, until the key is no longer trusted. The decision is kept in
+        /// the configuration file: who trusted the key, and since when.
+        /// </summary>
+        [Test]
+        public async Task SettingATrustAnchorTrustsNoKeyYet()
+        {
+
+            network = await TestRoamingNetwork.Start();
+
+            await TestPorts.StartedOnFreshPorts(() => SmartphoneFrom());
+
+            using var admin   = await SignedInAs("admin1",  "systemadmin");
+            using var driver  = await SignedInAs("driver1", "driver");
+
+            var keyId                = network.TrustAnchor.Keys[0];
+            var keyPath              = $"api/v1/configuration/roamingNetwork/trustedKeys/{keyId}";
+            var checkPath            = $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check";
+
+            var (status, settings)   = await Send(admin, HttpMethod.Put, "api/v1/configuration/roamingNetwork", new { trustAnchor = network.TrustAnchor.ToQRCode() });
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                                       Is.EqualTo(HttpStatusCode.OK), settings.ToString());
+                Assert.That(settings["trustedKeys"]!.Count(),             Is.Zero);
+                Assert.That(settings["trustedHolders"]!.Value<Int32>(),   Is.Zero);
+                Assert.That(settings["quorumTrusted"]!.Value<Boolean>(),  Is.False);
+            }
+
+            (status, var check)      = await Send(driver, HttpMethod.Get, checkPath);
+
+            var station              = (JObject) check["stations"]![0]!;
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                                                 Is.EqualTo(HttpStatusCode.OK), check.ToString());
+                Assert.That(station["verified"]!.Value<Boolean>(),                  Is.False);
+                Assert.That(station["error"]!.Value<String>(),                      Does.Contain("none of the identity keys of the trust anchor of 'QA' is trusted here yet"));
+                Assert.That(station["trust"]!["signaturesValid"]!.Value<Boolean>(), Is.True);
+                Assert.That(station["trust"]!["quorumReached"]!.Value<Boolean>(),   Is.False);
+            }
+
+            // What the administrator looks at before trusting a key.
+            (status, var keyStatement) = await Send(driver, HttpMethod.Get, "api/v1/configuration/roamingNetwork/keyStatement");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                                                                         Is.EqualTo(HttpStatusCode.OK), keyStatement.ToString());
+                Assert.That(keyStatement["from"]!.Value<String>(),                                          Is.EqualTo(network.URL));
+                Assert.That(keyStatement["keyStatement"]!["operatorId"]!.Value<String>(),                   Is.EqualTo("OCC"));
+                Assert.That(keyStatement["keyStatement"]!["identityKeys"]!.Select(key => key["id"]!.Value<String>()), Is.EqualTo(new[] { keyId }));
+                Assert.That(keyStatement["keyStatement"]!["signedBy"]!.Values<String>(),                    Is.EqualTo(new[] { keyId }));
+                Assert.That(keyStatement["evaluation"]!["canTrustKeys"]!.Value<Boolean>(),                  Is.True);
+                Assert.That(keyStatement["evaluation"]!["quorumReached"]!.Value<Boolean>(),                 Is.False);
+            }
+
+            (status, var refused)    = await Send(driver, HttpMethod.Put, keyPath);
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Forbidden), refused.ToString());
+
+            (status, var unknown)    = await Send(admin, HttpMethod.Put, $"api/v1/configuration/roamingNetwork/trustedKeys/{new String('0', 64)}");
+
+            Assert.That(status,                             Is.EqualTo(HttpStatusCode.NotFound), unknown.ToString());
+            Assert.That(unknown["error"]!.Value<String>(),  Does.Contain("names no identity key"));
+
+            (status, settings)       = await Send(admin, HttpMethod.Put, keyPath);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                                                 Is.EqualTo(HttpStatusCode.OK), settings.ToString());
+                Assert.That(settings["trustedKeys"]![0]!["id"]!.Value<String>(),         Is.EqualTo(keyId));
+                Assert.That(settings["trustedKeys"]![0]!["acceptedBy"]!.Value<String>(), Is.EqualTo("admin1"));
+                Assert.That(settings["quorumTrusted"]!.Value<Boolean>(),            Is.True);
+            }
+
+            var file = JObject.Parse(File.ReadAllText(Path.Combine(directory, WWCPConfigFile.DefaultFileName)));
+
+            Assert.That(file["roamingNetwork"]?["trustedKeys"]?[0]?["id"]?.Value<String>(), Is.EqualTo(keyId), "the decision was not written into the configuration file");
+
+            (status, check)          = await Send(driver, HttpMethod.Get, checkPath);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(check["verified"]!.Value<Boolean>(),                                 Is.True, check.ToString());
+                Assert.That(check["stations"]![0]!["trust"]!["attestedBy"]!.Count(),             Is.EqualTo(1));
+                Assert.That(check["stations"]![0]!["trust"]!["validUntil"]!.Type,                Is.Not.EqualTo(JTokenType.Null));
+            }
+
+            (status, keyStatement)   = await Send(driver, HttpMethod.Get, "api/v1/configuration/roamingNetwork/keyStatement");
+
+            Assert.That(keyStatement["evaluation"]!["quorumReached"]!.Value<Boolean>(), Is.True, keyStatement.ToString());
+
+            (status, settings)       = await Send(admin, HttpMethod.Delete, keyPath);
+
+            Assert.That(status,                           Is.EqualTo(HttpStatusCode.OK), settings.ToString());
+            Assert.That(settings["trustedKeys"]!.Count(), Is.Zero);
+
+            (status, check)          = await Send(driver, HttpMethod.Get, checkPath);
+
+            Assert.That(check["verified"]!.Value<Boolean>(), Is.False, "a key no longer trusted still holds");
+
+        }
+
+        #endregion
+
+        #region AnotherTrustAnchorTakesNoTrustAlong()
+
+        /// <summary>
+        /// The keys trusted stay trusted where the same trust anchor is set
+        /// again, in another form; another anchor - another network, holders,
+        /// quorum or URLs - trusts none of them, and trusts no key it does not
+        /// name.
+        /// </summary>
+        [Test]
+        public async Task AnotherTrustAnchorTakesNoTrustAlong()
+        {
+
+            network  = await TestRoamingNetwork.Start();
+            other    = await TestRoamingNetwork.Start();
+
+            using var admin = await WithTheRoamingNetwork();
+
+            var (status, settings)  = await Send(admin, HttpMethod.Get, "api/v1/configuration/roamingNetwork");
+            var trustedSince        = settings["trustedKeys"]![0]!["acceptedAt"]!.Value<String>();
+
+            (status, settings)      = await Send(admin, HttpMethod.Put, "api/v1/configuration/roamingNetwork", new { trustAnchor = network.TrustAnchor.ToURL() });
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                                                  Is.EqualTo(HttpStatusCode.OK), settings.ToString());
+                Assert.That(settings["trustedKeys"]![0]!["id"]!.Value<String>(),          Is.EqualTo(network.TrustAnchor.Keys[0]));
+                Assert.That(settings["trustedKeys"]![0]!["acceptedAt"]!.Value<String>(),  Is.EqualTo(trustedSince), "trusted anew");
+            }
+
+            (status, var wrong)     = await Send(admin, HttpMethod.Put, "api/v1/configuration/roamingNetwork",
+                                                 new { trustAnchor = other.TrustAnchor.ToQRCode(), trustedKeys = network.TrustAnchor.Keys.ToArray() });
+
+            Assert.That(status,                           Is.EqualTo(HttpStatusCode.BadRequest), wrong.ToString());
+            Assert.That(wrong["error"]!.Value<String>(),  Does.Contain("names no identity key"));
+
+            (status, settings)      = await Send(admin, HttpMethod.Put, "api/v1/configuration/roamingNetwork", new { trustAnchor = other.TrustAnchor.ToQRCode() });
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                                       Is.EqualTo(HttpStatusCode.OK), settings.ToString());
+                Assert.That(settings["trustedKeys"]!.Count(),             Is.Zero, "another trust anchor took the decisions of the one before along");
+                Assert.That(settings["quorumTrusted"]!.Value<Boolean>(),  Is.False);
+            }
+
+        }
+
+        #endregion
+
+        #region TheKeysTrustedAreReadFromTheConfigurationFile()
+
+        /// <summary>
+        /// A smartphone started with a "roamingNetwork" section that trusts the
+        /// identity key of its anchor checks the stations against it at once.
+        /// </summary>
+        [Test]
+        public async Task TheKeysTrustedAreReadFromTheConfigurationFile()
+        {
+
+            network = await TestRoamingNetwork.Start();
+
+            var configuration = JObject.Parse(NoTimeServers);
+
+            configuration["roamingNetwork"] = new JObject(
+                                                  new JProperty("trustAnchor",  network.TrustAnchor.ToJSON()),
+                                                  new JProperty("trustedKeys",  new JArray(new JObject(
+                                                      new JProperty("id",          network.TrustAnchor.Keys[0]),
+                                                      new JProperty("acceptedAt",  "2026-11-01T08:00:00.0000000+00:00"),
+                                                      new JProperty("acceptedBy",  "root")
+                                                  )))
+                                              );
+
+            await TestPorts.StartedOnFreshPorts(() => SmartphoneFrom(configuration.ToString()));
+
+            using var viewer = await SignedInAs("viewer1", "viewer");
+
+            var (status, settings)  = await Send(viewer, HttpMethod.Get, "api/v1/configuration/roamingNetwork");
+            (status, var check)     = await Send(viewer, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(settings["trustedKeys"]![0]!["acceptedBy"]!.Value<String>(),  Is.EqualTo("root"), settings.ToString());
+                Assert.That(settings["quorumTrusted"]!.Value<Boolean>(),                  Is.True);
+                Assert.That(check["verified"]!.Value<Boolean>(),                          Is.True, check.ToString());
+            }
 
         }
 
@@ -386,7 +590,9 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(acEVSE["price"]!["currency"]!.Value<String>(),                       Is.EqualTo("EUR"));
 
                 Assert.That(dc["priceStatements"]!.Single()["verified"]!.Value<Boolean>(),       Is.True, dc["priceStatements"]!.ToString());
+                Assert.That(dc["priceStatements"]!.Single()["current"]!.Value<Boolean>(),        Is.True, "the one statement of the EVSE is not the one in force");
                 Assert.That(dc["priceStatements"]!.Single()["signer"]!.Value<String>(),          Is.EqualTo("DE*GEF"));
+                Assert.That(dc["priceConflict"]!.Type,                                           Is.EqualTo(JTokenType.Null));
 
                 // The key to check the meter values of a session at the DC
                 // EVSE with - known before the first of them.

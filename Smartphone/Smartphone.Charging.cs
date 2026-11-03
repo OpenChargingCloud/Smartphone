@@ -99,7 +99,8 @@ namespace cloud.charging.open.Smartphone
                                                             CancellationToken  CancellationToken = default)
         {
 
-            var anchor    = RoamingNetwork.TrustAnchor;
+            var network   = RoamingNetwork;
+            var anchor    = network.TrustAnchor;
             var location  = anchor is null
                                 ? DemoLocations.Location(LocationId)
                                 : RoamingLocation(LocationId);
@@ -127,7 +128,7 @@ namespace cloud.charging.open.Smartphone
                 var now      = TimeProvider.GetUtcNow();
                 var station  = locationChecks.TryGetValue(location.Id, out var check) ? check.StationOf(evse) : null;
 
-                if (station is null || !station.HoldsAt(anchor, now))
+                if (station is null || !station.HoldsAt(network, now))
                     return ChargingStart.Refused(ChargingRefusal.Conflict,
                                                  station is null
                                                      ? $"{evse.EVSEId} at {location.Name} was not checked yet: open the station on the map, so that its proof is checked, and charge then."
@@ -138,7 +139,10 @@ namespace cloud.charging.open.Smartphone
                 var tariff = station.TariffOf(evse.Uid);
 
                 if (tariff is null)
-                    return ChargingStart.Refused(ChargingRefusal.Conflict, $"The proof of {evse.EVSEId} at {location.Name} names no price per kWh, and a simulated session counts with nothing else.");
+                    return ChargingStart.Refused(ChargingRefusal.Conflict,
+                                                 station.PriceConflict is not null
+                                                     ? $"What charging at {evse.EVSEId} at {location.Name} costs is not known: {station.PriceConflict}"
+                                                     : $"The proof of {evse.EVSEId} at {location.Name} names no price per kWh, and a simulated session counts with nothing else.");
 
                 location       = location with { Tariff = tariff };
                 statusOf       = (_, _) => EVSEStatus.Unknown;

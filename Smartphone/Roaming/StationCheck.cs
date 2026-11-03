@@ -31,22 +31,26 @@ namespace cloud.charging.open.Smartphone.Roaming
     /// <summary>
     /// One price statement of a charging station, its pool or one of its
     /// EVSEs, and whether it holds: signed by a signing key of the charging
-    /// station operator the checked proof gives, of an entity the proof gives,
-    /// and valid at the time of the check.
+    /// station operator the checked proof gives, of the station, its pool or
+    /// one of its EVSEs, naming only tariffs of its entity, and valid at the
+    /// time of the check - and whether it is the one in force for its entity.
     /// </summary>
     /// <param name="Statement">The statement, where it could be read.</param>
     /// <param name="JSON">The statement as it was served.</param>
     /// <param name="Verified">Whether it holds.</param>
     /// <param name="Error">Why not.</param>
+    /// <param name="Current">Whether it is the statement of its entity in force at the time of the check.</param>
     public sealed record PriceStatementCheck(RoamingNetworkPriceStatement?  Statement,
                                              JObject                        JSON,
                                              Boolean                        Verified,
-                                             String?                        Error)
+                                             String?                        Error,
+                                             Boolean                        Current   = false)
     {
 
         public JObject ToJSON()
 
             => new (new JProperty("verified",    Verified),
+                    new JProperty("current",     Current),
                     new JProperty("error",       Error),
                     new JProperty("entityType",  Statement?.EntityType ?? JSON["entityType"]?.Value<String>()),
                     new JProperty("entityId",    Statement?.EntityId   ?? JSON["entityId"]?.  Value<String>()),
@@ -64,7 +68,8 @@ namespace cloud.charging.open.Smartphone.Roaming
     /// <summary>
     /// What the smartphone found when it checked one charging station of a
     /// roaming network: its proof, attested by the roaming network operator
-    /// as the trust anchor names it - or why not - and its price statements.
+    /// as the identity keys trusted here require - or why not - and its price
+    /// statements.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -73,9 +78,13 @@ namespace cloud.charging.open.Smartphone.Roaming
     /// energy meters with the public keys they sign their measurements with,
     /// and the charging tariffs its EVSEs take, in a hash tree whose root the
     /// operator of the network attests (WWCP_POI's SPECIFICATION.md, section
-    /// 8). What it gives completely is attested, and nothing else; so what the
-    /// smartphone shows of a station beyond the list of the map is read from
-    /// here, and only where the proof holds.
+    /// 8). It is checked against a trust context of the identity keys of the
+    /// trust anchor trusted here, evaluated of the key statement the proof
+    /// gives at the time of the check (RoamingNetworkTrustContext), and read
+    /// as WWCP_POI reads a verified station (VerifiedChargingStation). What it
+    /// gives completely is attested, and nothing else; so what the smartphone
+    /// shows of a station beyond the list of the map is read from here, and
+    /// only where the proof holds.
     /// </para>
     /// </remarks>
     public sealed class StationCheck
@@ -86,44 +95,45 @@ namespace cloud.charging.open.Smartphone.Roaming
         /// <summary>
         /// The charging station checked.
         /// </summary>
-        public String                              StationId           { get; }
+        public String                              StationId             { get; }
 
         /// <summary>
         /// When it was checked: what the attestations and statements had to be
         /// valid at.
         /// </summary>
-        public DateTimeOffset                      CheckedAt           { get; }
+        public DateTimeOffset                      CheckedAt             { get; }
 
         /// <summary>
         /// The URL of the roaming network that served the proof.
         /// </summary>
-        public String?                             From                { get; }
+        public String?                             From                  { get; }
 
         /// <summary>
         /// The proof, where one could be read - also where it does not hold.
         /// </summary>
-        public RoamingNetworkProof?                Proof               { get; }
+        public RoamingNetworkProof?                Proof                 { get; }
 
         /// <summary>
-        /// The attestation the proof holds by, where it does.
+        /// The key statement the proof gives, evaluated against the identity
+        /// keys trusted here: its signatures, its signers, its quorum and its
+        /// validity - where the proof gives one of this network.
         /// </summary>
-        public RoamingNetworkAttestation?          Attestation         { get; }
+        public RoamingNetworkTrustEvaluation?      Trust                 { get; }
+
+        /// <summary>
+        /// The station as the proof attests it, where it holds.
+        /// </summary>
+        public VerifiedChargingStation?            Station               { get; }
 
         /// <summary>
         /// Why the proof does not hold, or could not be had.
         /// </summary>
-        public String?                             Error               { get; }
-
-        /// <summary>
-        /// Where the trust anchor names the network otherwise than the proof
-        /// does: a QR code that is not what it says.
-        /// </summary>
-        public String?                             TextMismatch        { get; }
+        public String?                             Error                 { get; }
 
         /// <summary>
         /// The price statements of the station, its pool and its EVSEs.
         /// </summary>
-        public IReadOnlyList<PriceStatementCheck>  PriceStatements     { get; }
+        public IReadOnlyList<PriceStatementCheck>  PriceStatements       { get; }
 
         /// <summary>
         /// Why the price statements could not be had.
@@ -131,10 +141,38 @@ namespace cloud.charging.open.Smartphone.Roaming
         public String?                             PriceStatementsError  { get; }
 
         /// <summary>
+        /// Why those that hold, each on its own, do not hold together - two of
+        /// one sequence of an entity, a split view - so that none is taken, and
+        /// no price is known.
+        /// </summary>
+        public String?                             PriceConflict         { get; }
+
+        /// <summary>
         /// Whether the proof holds.
         /// </summary>
         public Boolean                             Verified
-            => Attestation is not null;
+            => Station is not null;
+
+        /// <summary>
+        /// What the proof attests and by whom, where it holds.
+        /// </summary>
+        public RoamingNetworkProofVerification?    Verification
+            => Station?.Verification;
+
+        /// <summary>
+        /// The first attestation the proof holds by, where it does.
+        /// </summary>
+        public RoamingNetworkAttestation?          Attestation
+            => Station?.Verification.Attestations.FirstOrDefault();
+
+        /// <summary>
+        /// Where the trust anchor names the network otherwise than the proof
+        /// does: a QR code that is not what it says.
+        /// </summary>
+        public String?                             TextMismatch
+            => Trust?.Context is RoamingNetworkTrustContext context
+                   ? Proof?.TrustAnchorTextMismatch(context.TrustAnchor)
+                   : null;
 
         /// <summary>
         /// The digest of the effective tree of the version the proof is of -
@@ -142,127 +180,94 @@ namespace cloud.charging.open.Smartphone.Roaming
         /// proof holds.
         /// </summary>
         public Byte[]?                             EffectiveTree
-            => Verified && Proof?.TryCalculateETag(out var etag, out _) == true
-                   ? [ .. etag.Digest ]
+            => Station is not null
+                   ? [ .. Station.Verification.ETag.Digest ]
                    : null;
 
         #endregion
 
         #region Constructor(s)
 
-        public StationCheck(String                             StationId,
-                            DateTimeOffset                     CheckedAt,
-                            String?                            From,
-                            RoamingNetworkProof?               Proof,
-                            RoamingNetworkAttestation?         Attestation,
-                            String?                            Error,
-                            String?                            TextMismatch,
-                            IReadOnlyList<PriceStatementCheck> PriceStatements,
-                            String?                            PriceStatementsError)
+        public StationCheck(String                              StationId,
+                            DateTimeOffset                      CheckedAt,
+                            String?                             From,
+                            RoamingNetworkProof?                Proof,
+                            RoamingNetworkTrustEvaluation?      Trust,
+                            VerifiedChargingStation?            Station,
+                            String?                             Error,
+                            IReadOnlyList<PriceStatementCheck>  PriceStatements,
+                            String?                             PriceStatementsError,
+                            String?                             PriceConflict)
         {
 
             this.StationId             = StationId;
             this.CheckedAt             = CheckedAt;
             this.From                  = From;
             this.Proof                 = Proof;
-            this.Attestation           = Attestation;
+            this.Trust                 = Trust;
+            this.Station               = Station;
             this.Error                 = Error;
-            this.TextMismatch          = TextMismatch;
             this.PriceStatements       = PriceStatements;
             this.PriceStatementsError  = PriceStatementsError;
+            this.PriceConflict         = PriceConflict;
 
         }
 
         /// <summary>
         /// A check that found no proof that holds.
         /// </summary>
-        public static StationCheck Failed(String                StationId,
-                                          DateTimeOffset        CheckedAt,
-                                          String                Error,
-                                          String?               From    = null,
-                                          RoamingNetworkProof?  Proof   = null)
+        public static StationCheck Failed(String                          StationId,
+                                          DateTimeOffset                  CheckedAt,
+                                          String                          Error,
+                                          String?                         From    = null,
+                                          RoamingNetworkProof?            Proof   = null,
+                                          RoamingNetworkTrustEvaluation?  Trust   = null)
 
-            => new (StationId, CheckedAt, From, Proof, null, Error, null, [], null);
-
-        #endregion
-
-
-        #region HoldsAt(TrustAnchor, Timestamp)
-
-        /// <summary>
-        /// Whether the proof still holds at the given time: its attestations
-        /// are valid for minutes, so that a proof checked an hour ago says
-        /// nothing of now.
-        /// </summary>
-        public Boolean HoldsAt(RoamingNetworkTrustAnchor  TrustAnchor,
-                               DateTimeOffset             Timestamp)
-
-            => Proof is not null &&
-               Verified          &&
-               Proof.Verify(TrustAnchor, out _, out _, Timestamp);
+            => new (StationId, CheckedAt, From, Proof, Trust, null, Error, [], null, null);
 
         #endregion
 
 
-        #region (private) Operator() / Station()
+        #region HoldsAt(Configuration, Timestamp)
 
         /// <summary>
-        /// The charging station operator of the station, as the proof gives it.
+        /// Whether the proof still holds at the given time, against the identity
+        /// keys trusted then: its attestations are valid for minutes, so that a
+        /// proof checked an hour ago says nothing of now, and a trust context is
+        /// one of a single time.
         /// </summary>
-        private JObject? Operator()
+        public Boolean HoldsAt(RoamingNetworkConfiguration  Configuration,
+                               DateTimeOffset               Timestamp)
 
-            => Proof?.Given(RoamingNetwork.PropertyKeys.ChargingStationOperators).
-                      FirstOrDefault(chargingStationOperator => Proof.GivenBelow(chargingStationOperator,
-                                                                                 ChargingStationOperator.PropertyKeys.ChargingPools,
-                                                                                 ChargingPool.PropertyKeys.ChargingStations).
-                                                                      Any(station => IdOf(station) == StationId));
-
-        /// <summary>
-        /// The station, as the proof gives it: with its EVSEs, their energy
-        /// meters and the properties their templates give them.
-        /// </summary>
-        private JObject? Station(JObject? Operator)
-
-            => Operator is null || Proof is null
-                   ? null
-                   : Proof.GivenBelow(Operator,
-                                      ChargingStationOperator.PropertyKeys.ChargingPools,
-                                      ChargingPool.PropertyKeys.ChargingStations).
-                           FirstOrDefault(station => IdOf(station) == StationId);
+            => Verified          &&
+               Proof is not null &&
+               Configuration.Evaluate(Proof, Timestamp, out _)?.Context is RoamingNetworkTrustContext context &&
+               VerifiedChargingStation.TryVerify(context, Proof, out _, out _, StationId);
 
         #endregion
+
 
         #region TariffOf(EVSEId)
 
         /// <summary>
         /// What charging at the given EVSE of the station costs per kWh, as the
-        /// checked proof and the price statements that hold say it: the first
+        /// checked proof and the price statements in force say it: the first
         /// energy price of the first charging tariff the EVSE takes, as a
         /// statement of the EVSE, its station or its pool sets it - in this
         /// order - or as the tariff has it. Null where the proof does not hold,
-        /// or names no energy price.
+        /// names no energy price, or where its statements contradict each other.
         /// </summary>
         public SmartphoneTariff? TariffOf(String EVSEId)
         {
 
-            if (!Verified)
+            if (Station is null || PriceConflict is not null || !Station.Tariffs.TryGetValue(EVSEId, out var tariffs))
                 return null;
 
-            var chargingStationOperator = Operator();
-            var evse                    = EVSEOf(Station(chargingStationOperator), EVSEId);
-
-            if (evse is null)
-                return null;
-
-            var tariffs = TariffsOf(chargingStationOperator);
-
-            foreach (var tariffId in (evse["chargingTariffIds"] as JArray ?? []).Values<String>().OfType<String>())
+            foreach (var tariff in tariffs)
             {
 
-                if (!tariffs.TryGetValue(tariffId, out var tariff))
-                    continue;
-
-                var currency = tariff["currency"]?.Value<String>() ?? "";
+                var tariffId  = IdOf(tariff) ?? "";
+                var currency  = tariff["currency"]?.Value<String>() ?? "";
 
                 if (StatedElements(tariffId, EVSEId) is JArray stated && EnergyPrice(stated) is Decimal statedPrice)
                     return new SmartphoneTariff(statedPrice, currency, tariffId);
@@ -278,19 +283,10 @@ namespace cloud.charging.open.Smartphone.Roaming
 
         #endregion
 
-        #region (private) TariffsOf(Operator) / StatedElements(TariffId, EVSEId)
-
-        private Dictionary<String, JObject> TariffsOf(JObject? Operator)
-
-            => Operator is null || Proof is null
-                   ? []
-                   : Proof.GivenBelow(Operator, ChargingStationOperator.PropertyKeys.ChargingTariffs).
-                           Where (tariff => IdOf(tariff) is not null).
-                           GroupBy(tariff => IdOf(tariff)!).
-                           ToDictionary(group => group.Key, group => group.First());
+        #region (private) StatedElements(TariffId, EVSEId)
 
         /// <summary>
-        /// The elements a price statement that holds sets for the given tariff
+        /// The elements the price statement in force sets for the given tariff
         /// at the given EVSE: the statement of the EVSE before the one of its
         /// station before the one of its pool.
         /// </summary>
@@ -298,13 +294,13 @@ namespace cloud.charging.open.Smartphone.Roaming
                                        String  EVSEId)
         {
 
-            var holding = PriceStatements.Where(check => check.Verified && check.Statement is not null).
+            var current = PriceStatements.Where (check => check.Current && check.Statement is not null).
                                           Select(check => check.Statement!).
                                           ToArray();
 
-            var inOrder = holding.Where(statement => statement.IsOf(nameof(EVSE),            EVSEId)).
-                          Concat(holding.Where(statement => statement.IsOf(nameof(ChargingStation), StationId))).
-                          Concat(holding.Where(statement => statement.EntityType == nameof(ChargingPool)));
+            var inOrder = current.Where(statement => statement.IsOf(nameof(EVSE),            EVSEId)).
+                          Concat(current.Where(statement => statement.IsOf(nameof(ChargingStation), StationId))).
+                          Concat(current.Where(statement => statement.IsOf(nameof(ChargingPool),    IdOf(Station!.ChargingPool) ?? "")));
 
             foreach (var statement in inOrder)
                 if ((statement.PriceStatusJSON["prices"] as JArray ?? []).OfType<JObject>().
@@ -317,7 +313,7 @@ namespace cloud.charging.open.Smartphone.Roaming
 
         #endregion
 
-        #region (private static) EnergyPrice(Elements) / EVSEOf(Station, EVSEId) / IdOf(JSON)
+        #region (private static) EnergyPrice(Elements) / IdOf(JSON)
 
         /// <summary>
         /// The first price per kWh of the given tariff elements: of the first
@@ -338,12 +334,6 @@ namespace cloud.charging.open.Smartphone.Roaming
 
         }
 
-        private static JObject? EVSEOf(JObject?  Station,
-                                       String    EVSEId)
-
-            => (Station?[ChargingStation.PropertyKeys.EVSEs] as JArray ?? []).OfType<JObject>().
-                   FirstOrDefault(evse => IdOf(evse) == EVSEId);
-
         private static String? IdOf(JObject JSON)
 
             => JSON["@id"]?.Value<String>();
@@ -355,8 +345,9 @@ namespace cloud.charging.open.Smartphone.Roaming
 
         /// <summary>
         /// The check as a page shows it: whether the proof holds and by whom,
-        /// and everything it gives of the station - nothing of it where it does
-        /// not hold.
+        /// how its key statement fared against the identity keys trusted here,
+        /// and everything the proof gives of the station - nothing of it where
+        /// it does not hold.
         /// </summary>
         public JObject ToJSON()
         {
@@ -369,23 +360,34 @@ namespace cloud.charging.open.Smartphone.Roaming
                            new JProperty("error",      Error)
                        );
 
-            if (!Verified || Proof is null || Attestation is null)
+            if (Trust is not null)
+                json.Add(new JProperty("trust", new JObject(
+                             new JProperty("signaturesValid",    Trust.SignaturesValid),
+                             new JProperty("signersTrusted",     Trust.SignersTrusted),
+                             new JProperty("quorumReached",      Trust.QuorumReached),
+                             new JProperty("withinValidity",     Trust.WithinValidity),
+                             new JProperty("trustedHolders",     Trust.TrustedHolderCount),
+                             new JProperty("requiredConsensus",  Trust.RequiredConsensus),
+                             new JProperty("attestedBy",         new JArray(Verification is null ? [] : Verification.AttestedBy.ToArray())),
+                             new JProperty("validUntil",         Verification?.ValidUntil.ToString("o"))
+                         )));
+
+            if (Station is null || Proof is null || Attestation is null)
                 return json;
 
-            var network                  = Proof.RoamingNetwork;
-            var chargingStationOperator  = Operator();
-            var station                  = Station(chargingStationOperator);
-            var tariffs                  = TariffsOf(chargingStationOperator);
+            var network  = Proof.RoamingNetwork;
+            var station  = Station.ChargingStation;
 
             json.Add(new JProperty("textMismatch",  TextMismatch));
+            json.Add(new JProperty("warnings",      new JArray(Station.Warnings)));
 
             json.Add(new JProperty("roamingNetwork", new JObject(
                          new JProperty("id",             network["@id"]?.Value<String>()),
                          new JProperty("name",           RoamingNetworkClient.Text(network["name"])),
                          new JProperty("description",    RoamingNetworkClient.Text(network["description"])),
                          new JProperty("operator",       RoamingNetworkClient.Text(network["operator"]?["name"]) ?? network["operator"]?["@id"]?.Value<String>()),
-                         new JProperty("revision",       Proof.Revision),
-                         new JProperty("commitId",       Proof.CommitId?.ToString()),
+                         new JProperty("revision",       Station.Revision),
+                         new JProperty("commitId",       Station.CommitId?.ToString()),
                          new JProperty("effectiveTree",  EffectiveTree is Byte[] effectiveTree ? Convert.ToHexStringLower(effectiveTree) : null)
                      )));
 
@@ -399,24 +401,25 @@ namespace cloud.charging.open.Smartphone.Roaming
                      )));
 
             json.Add(new JProperty("chargingStationOperator", new JObject(
-                         new JProperty("id",    chargingStationOperator?["@id"]?.Value<String>()),
-                         new JProperty("name",  RoamingNetworkClient.Text(chargingStationOperator?["name"]))
+                         new JProperty("id",    Station.Operator["@id"]?.Value<String>()),
+                         new JProperty("name",  RoamingNetworkClient.Text(Station.Operator["name"]))
                      )));
 
             json.Add(new JProperty("station", new JObject(
-                         new JProperty("name",              RoamingNetworkClient.Text(station?["name"])),
-                         new JProperty("manufacturer",      ManufacturerName(RoamingNetwork.PropertyKeys.ChargingStationManufacturers, station?["manufacturerId"])),
-                         new JProperty("model",             station?["modelId"]?.         Value<String>()),
-                         new JProperty("hardwareRevision",  station?["hardwareRevision"]?.Value<String>()),
-                         new JProperty("firmwareVersion",   station?["firmwareVersion"]?. Value<String>())
+                         new JProperty("name",              RoamingNetworkClient.Text(station["name"])),
+                         new JProperty("manufacturer",      ManufacturerName(RoamingNetwork.PropertyKeys.ChargingStationManufacturers, station["manufacturerId"])),
+                         new JProperty("model",             station["modelId"]?.         Value<String>()),
+                         new JProperty("hardwareRevision",  station["hardwareRevision"]?.Value<String>()),
+                         new JProperty("firmwareVersion",   station["firmwareVersion"]?. Value<String>())
                      )));
 
             json.Add(new JProperty("evses", new JArray(
-                         (station?[ChargingStation.PropertyKeys.EVSEs] as JArray ?? []).OfType<JObject>().Select(evse => {
+                         Station.EVSEs.Select(evse => {
 
                              var evseId  = IdOf(evse) ?? "";
                              var meter   = evse["energyMeter"] as JObject;
                              var tariff  = TariffOf(evseId);
+                             var given   = Station.Tariffs.TryGetValue(evseId, out var tariffs) ? tariffs : [];
 
                              return new JObject(
                                         new JProperty("id",            evseId),
@@ -428,12 +431,12 @@ namespace cloud.charging.open.Smartphone.Roaming
                                                                            new JProperty("format",  connector["format"]?.Value<String>())
                                                                        )))),
                                         new JProperty("tariffs",       new JArray((evse["chargingTariffIds"] as JArray ?? []).Values<String>().OfType<String>().Select(tariffId =>
-                                                                           tariffs.TryGetValue(tariffId, out var given)
+                                                                           given.FirstOrDefault(tariff => IdOf(tariff) == tariffId) is JObject found
                                                                                ? new JObject(
                                                                                      new JProperty("id",        tariffId),
-                                                                                     new JProperty("name",      RoamingNetworkClient.Text(given["name"])),
-                                                                                     new JProperty("currency",  given["currency"]?.Value<String>()),
-                                                                                     new JProperty("elements",  given["elements"]?.DeepClone() ?? new JArray())
+                                                                                     new JProperty("name",      RoamingNetworkClient.Text(found["name"])),
+                                                                                     new JProperty("currency",  found["currency"]?.Value<String>()),
+                                                                                     new JProperty("elements",  found["elements"]?.DeepClone() ?? new JArray())
                                                                                  )
                                                                                : new JObject(
                                                                                      new JProperty("id",        tariffId),
@@ -452,6 +455,7 @@ namespace cloud.charging.open.Smartphone.Roaming
 
             json.Add(new JProperty("priceStatements",       new JArray(PriceStatements.Select(statement => statement.ToJSON()))));
             json.Add(new JProperty("priceStatementsError",  PriceStatementsError));
+            json.Add(new JProperty("priceConflict",         PriceConflict));
 
             return json;
 

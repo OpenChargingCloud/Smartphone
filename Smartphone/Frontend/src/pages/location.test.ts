@@ -65,6 +65,42 @@ describe('what is signed about a station', () => {
 
         assert.match(root.querySelector('.price-statements')!.textContent!, /holds/);
         assert.match(root.querySelector('.price-statements')!.textContent!, /by DE\*GEF, number 0/);
+        assert.doesNotMatch(root.querySelector('.price-statements')!.textContent!, /not in force/);
+
+        assert.match(text, /Holders attesting\s*1 of the 1 required/);
+        assert.match(text, /Holds until/);
+
+    });
+
+    it('says where a proof holds by no key trusted here, and where they are trusted', async () => {
+
+        answer = () => ({ ...locationCheck(), verified: false,
+                          stations: [ stationCheck('DE*GEF*S1', 'DE*GEF*E1*1', false, {
+                                          error: "The proof of DE*GEF*S1 is not checked: none of the identity keys of the trust anchor of 'QA' is trusted here yet.",
+                                          trust: { signaturesValid: true, signersTrusted: false, quorumReached: false, withinValidity: true, trustedHolders: 0, requiredConsensus: 1,
+                                                   attestedBy: [], validUntil: null } }) ] });
+
+        const root = await open(locationPage, '/map/locations/DE*GEF*P1', [ 'map:read' ],
+                                smartphone, root => root.querySelector('.station-check-card') !== null);
+
+        const hint = root.querySelector<HTMLElement>('.station-check-card .trust-hint');
+
+        assert.ok(hint, 'it is not said where the keys are trusted');
+        assert.match(hint.textContent!, /of 0 of the 1\s+holder\(s\) required/);
+        assert.match(hint.querySelector('a')!.getAttribute('href')!, /\/configuration\/map$/);
+
+    });
+
+    it('says where price statements contradict each other, and that the price is not known', async () => {
+
+        answer = () => ({ ...locationCheck(),
+                          stations: [ stationCheck('DE*GEF*S2', 'DE*GEF*E2*1', true, {
+                                          priceConflict: 'The price statements of DE*GEF*S2 do not hold together, and none of them is taken: Two price statements of one sequence of \'EVSE:DEGEFE21\': a split view!' }) ] });
+
+        const root = await open(locationPage, '/map/locations/DE*GEF*P1', [ 'map:read' ],
+                                smartphone, root => root.querySelector('.price-conflict') !== null);
+
+        assert.match(root.querySelector('.price-conflict')!.textContent!, /a split view!.*What charging here costs is not known/s);
 
     });
 
