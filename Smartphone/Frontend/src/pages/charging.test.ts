@@ -7,7 +7,7 @@
  */
 
 import { asked, leave, open, refused, until, type Asked } from '../../test/smartphone.ts';
-import { reportedSession, session } from '../../test/charging.ts';
+import { liveLinkSession, reportedSession, session } from '../../test/charging.ts';
 
 import { strict as assert }    from 'node:assert';
 import { after, describe, it } from 'node:test';
@@ -73,6 +73,24 @@ describe('the charging page', () => {
         assert.equal(card.querySelector('progress'), null, 'a progress of what OCPI does not tell');
         assert.doesNotMatch(root.textContent!, /Simulated/);
         assert.ok(card.querySelector('.btn.danger'));
+
+    });
+
+    it('draws a session its operator\'s web payment page started without a Stop, saying it is stopped there', async () => {
+
+        running    = [ liveLinkSession() ];
+        stopAnswer = undefined;
+
+        const root = await open(chargingPage, '/charging', [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelectorAll('.session-card').length === 1);
+
+        const card = root.querySelector<HTMLElement>('.session-card')!;
+
+        assert.match(card.textContent!, /Jena, Paradiesbahnhof/);
+        assert.match(card.textContent!, /Started at the web payment page of its operator, and stopped there/);
+        assert.match(card.textContent!, /7 updates came over its live link/);
+        assert.match(card.textContent!, /not yet checked against the proof of the station/);
+        assert.equal(card.querySelector('.btn.danger'), null, 'a Stop for a session stopped at the web payment page');
 
     });
 

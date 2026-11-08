@@ -141,7 +141,7 @@ export const chargingPage: Page = {
                         <div class="small muted session-reported">${reportedInWords(session)}</div>
                     `}
 
-                    ${mayStop ? html`
+                    ${mayStop && session.liveLink === undefined ? html`
                         <div class="form-actions">
                             <button type="button" class="btn danger" ?disabled=${busy} @click=${() => void stop(session)}>
                                 <i class="fa-solid fa-stop"></i> ${busy ? 'Stopping ...' : 'Stop charging'}

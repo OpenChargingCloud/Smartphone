@@ -2,8 +2,8 @@
  * What the smartphone's own pages are held to: what every page of every kind
  * of node is, by the rules of WWCP_Node's test/pages.ts - the map's settings
  * and the e-mobility provider have forms, and the other pages none: the map's
- * search and its choice of a charge point are inputs that keep nothing worth
- * asking about.
+ * search, its choice of a charge point and the live link handed over in a pin
+ * are inputs that keep nothing worth asking about.
  *
  * Run with `npm test`. "@node/.." is WWCP_Node/Frontend, where the rules are.
  */

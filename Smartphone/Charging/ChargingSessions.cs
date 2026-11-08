@@ -166,6 +166,7 @@ namespace cloud.charging.open.Smartphone.Charging
         /// <param name="Error">Why none was.</param>
         /// <param name="NotSaved">True where the file could not be written: nothing about the request was wrong, and nothing was started.</param>
         /// <param name="Evidence">At a station of a roaming network, the proof of its station and the price statements that held.</param>
+        /// <param name="LiveLink">The live link of a session the web payment page of the operator of the station started: taken whatever the EVSE says of itself, as it charges for this very session.</param>
         public Boolean TryStart(ChargingLocation                           Location,
                                 ChargingEVSE                               EVSE,
                                 Func<ChargingEVSE, DateTimeOffset, String> StatusOf,
@@ -175,7 +176,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                 [NotNullWhen(true)]  out ChargingSession?  Session,
                                 [NotNullWhen(false)] out String?           Error,
                                 out Boolean                                NotSaved,
-                                SessionEvidence?                           Evidence   = null)
+                                SessionEvidence?                           Evidence   = null,
+                                LiveLinkFollow?                            LiveLink   = null)
         {
 
             Session   = null;
@@ -198,13 +200,13 @@ namespace cloud.charging.open.Smartphone.Charging
                 // network is not reached over its WebSocket, or says nothing
                 // of it: started at as at an available one, as a driver
                 // standing in front of it would.
-                if (status != EVSEStatus.Available && status != EVSEStatus.Unknown)
+                if (LiveLink is null && status != EVSEStatus.Available && status != EVSEStatus.Unknown)
                 {
                     Error = $"{EVSE.EVSEId} at {Location.Name} is {EVSEStatus.InWords(status)}, not available.";
                     return false;
                 }
 
-                var started = ChargingSession.New(NewId(), Location, EVSE, now, StartedBy, Ticket, Start, Evidence);
+                var started = ChargingSession.New(NewId(), Location, EVSE, now, StartedBy, Ticket, Start, Evidence, LiveLink);
 
                 sessions.Add(started);
 
@@ -321,6 +323,51 @@ namespace cloud.charging.open.Smartphone.Charging
                 }
 
                 Session = reported;
+                return true;
+
+            }
+
+        }
+
+        #endregion
+
+        #region TryFollow(Id, Change, out Session, out Error)
+
+        /// <summary>
+        /// What came over the live link of a session, or why nothing does,
+        /// kept with it: the given change made to its live link as it is now.
+        /// </summary>
+        public Boolean TryFollow(String                                     Id,
+                                 Func<LiveLinkFollow, LiveLinkFollow>       Change,
+                                 [NotNullWhen(true)]  out ChargingSession?  Session,
+                                 [NotNullWhen(false)] out String?           Error)
+        {
+
+            Session = null;
+
+            lock (sync)
+            {
+
+                var index = sessions.FindIndex(session => session.Id == Id);
+
+                if (index < 0 || sessions[index].LiveLink is not LiveLinkFollow liveLink)
+                {
+                    Error = $"There is no charging session '{Id}' with a live link on this phone.";
+                    return false;
+                }
+
+                var before   = sessions[index];
+                var followed = before with { LiveLink = Change(liveLink) };
+
+                sessions[index] = followed;
+
+                if (!TrySave(out Error))
+                {
+                    sessions[index] = before;
+                    return false;
+                }
+
+                Session = followed;
                 return true;
 
             }

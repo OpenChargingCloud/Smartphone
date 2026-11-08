@@ -81,6 +81,9 @@ export function isRunning(Session: ChargingSession): boolean {
  */
 export function reportedInWords(Session: ChargingSession): string {
 
+    if (Session.liveLink !== undefined)
+        return liveLinkInWords(Session);
+
     const report = Session.provider;
 
     if (report === undefined)
@@ -99,6 +102,30 @@ export function reportedInWords(Session: ChargingSession): string {
                      : '';
 
     return `${what}${cost} Last heard from the e-mobility provider at ${clock(report.receivedAt)}.`;
+
+}
+
+
+/**
+ * What the live link of a session the web payment page of its operator
+ * started says, in a line or two: that it is stopped there, what came over
+ * it - and that its figures are not checked against the proof yet.
+ */
+export function liveLinkInWords(Session: ChargingSession): string {
+
+    const link = Session.liveLink;
+
+    if (link === undefined)
+        return '';
+
+    const what = link.endedBecause !== null
+                     ? `It is over: ${link.endedBecause}`
+                     : link.updates === 0
+                           ? link.problem ?? 'Nothing came over its live link yet.'
+                           : `${link.updates} update${link.updates === 1 ? '' : 's'} came over its live link, the last at ${clock(link.lastUpdateAt ?? '')}${link.lastTransport !== null ? ` over ${link.lastTransport}` : ''}.`;
+
+    return `Started at the web payment page of its operator, and stopped there. ${what} ` +
+           'The figures are what its signed documents say, not yet checked against the proof of the station.';
 
 }
 

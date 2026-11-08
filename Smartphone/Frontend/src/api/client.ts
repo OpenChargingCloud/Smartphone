@@ -421,6 +421,36 @@ export interface ChargingSession {
     start?:           ChargingStartReference;
     /** At a station of a roaming network: its meter values and its price, checked against what it kept of the station. */
     check?:           SessionCheck;
+    /** Of a session the web payment page of its operator started: its live link, and what came over it. */
+    liveLink?:        LiveLinkFollow;
+}
+
+/** The live link of a session the web payment page of its operator started: what came over it, as its signed documents say - not checked against the proof of the station. */
+export interface LiveLinkFollow {
+    handedOverAt:   string;
+    /** The URL it was fetched from; null where its document itself was handed over. */
+    from:           string | null;
+    /** The EVSE it names, where it names one. */
+    evseId:         string | null;
+    /** How to follow it: "https", "httpSSE", "websocket". */
+    transports:     string[];
+    /** How often something came over it. */
+    updates:        number;
+    lastUpdateAt:   string | null;
+    lastTransport:  string | null;
+    lastEndpoint:   string | null;
+    /** What ChargyCore made of what came last. */
+    lastKind:       string | null;
+    /** Why nothing comes now, where nothing does. */
+    problem:        string | null;
+    endedAt:        string | null;
+    endedBecause:   string | null;
+    /** How many signed documents it brought. */
+    documents:      number;
+    readings:       MeterReading[];
+    energyKWh:      number | null;
+    /** Whether its documents were checked against the proof of the station: not yet. */
+    checked:        boolean;
 }
 
 /** One reading of a signed meter value: when the meter measured it, its register in kWh, "B" or "E" of the transaction. */
@@ -539,6 +569,8 @@ export const api = {
         list:         (onlyActive = false)                  => request<ChargingSessions>('GET',  `/charging/sessions${onlyActive ? '?active=true' : ''}`),
         get:          (id: string)                          => request<ChargingSession> ('GET',  session(id)),
         start:        (locationId: string, evseUid: string) => request<ChargingSession> ('POST', '/charging/sessions', { locationId, evseUid }),
+        /** Take over the live link the web payment page of the operator gave - its https URL, or its document - of the session it started there. */
+        follow:       (locationId: string, evseUid: string, liveLink: string) => request<ChargingSession>('POST', '/charging/sessions', { locationId, evseUid, liveLink }),
         stop:         (id: string)                          => request<ChargingSession> ('POST', `${session(id)}/stop`, {})
     }
 

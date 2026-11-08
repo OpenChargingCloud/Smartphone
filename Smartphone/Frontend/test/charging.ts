@@ -120,6 +120,41 @@ export function reportedSession(more: Partial<ChargingSession> = {}): ChargingSe
 
 
 /**
+ * A session at the DC EVSE of a roaming network that the web payment page of
+ * its operator started, as a smartphone sends it: followed over its live link,
+ * two signed documents come, its figures what they say - not checked yet.
+ */
+export function liveLinkSession(more: Partial<ChargingSession> = {}): ChargingSession {
+
+    const followed: ChargingSession = {
+        ...session(),
+        id:             'L1V3L1NK0001',
+        simulated:      false,
+        location:       { id: 'DE*GEF*P1', name: 'Jena, Paradiesbahnhof', address: 'Am Paradiesbahnhof 1', city: 'Jena', operator: 'GraphDefined' },
+        evse:           { uid: 'DE*GEF*E2*1', evseId: 'DE*GEF*E2*1', standard: 'IEC_62196_T2_COMBO', powerType: 'DC', maxPowerKW: 150 },
+        chargingSince:  '2026-10-10T08:00:00Z',
+        energyKWh:      12.5,
+        cost:           { amount: 8.13, pricePerKWh: 0.65, currency: 'EUR' },
+        liveLink:       { handedOverAt: '2026-10-10T07:59:30Z', from: 'https://pay.gef.example/liveLinks/S1', evseId: 'DE*GEF*E2*1',
+                          transports: [ 'https' ], updates: 7, lastUpdateAt: '2026-10-10T08:10:00Z', lastTransport: 'https',
+                          lastEndpoint: 'https://pay.gef.example/sessions/S1/live', lastKind: 'OCMFChargeTransparencyRecord',
+                          problem: null, endedAt: null, endedBecause: null, documents: 2,
+                          readings: [ { measuredAt: '2026-10-10T08:00:00Z', energyKWh: 1000,   transaction: 'B', status: 'G' },
+                                      { measuredAt: '2026-10-10T08:10:00Z', energyKWh: 1012.5, transaction: 'C', status: 'G' } ],
+                          energyKWh: 12.5, checked: false }
+    };
+
+    delete followed.fullAt;
+    delete followed.powerKW;
+    delete followed.targetEnergyKWh;
+    delete followed.progressPercent;
+
+    return { ...followed, ...more };
+
+}
+
+
+/**
  * The check of a session at the DC EVSE of a roaming network whose charge
  * detail record came: its begin and its end signed by the meter, with the key
  * the station's proof gave, and the price the operator stated for the EVSE in

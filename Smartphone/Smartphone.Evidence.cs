@@ -299,6 +299,7 @@ namespace cloud.charging.open.Smartphone
         {
             await StopKeepingProofsAsync();
             await StopFollowingRoamingStatusAsync();
+            await StopFollowingLiveLinksAsync();
         }
 
         #endregion

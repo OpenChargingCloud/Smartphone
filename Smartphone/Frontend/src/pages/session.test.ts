@@ -8,7 +8,7 @@
  */
 
 import { asked, leave, open, refused, until, type Asked } from '../../test/smartphone.ts';
-import { reportedSession, session, sessionCheck } from '../../test/charging.ts';
+import { liveLinkSession, reportedSession, session, sessionCheck } from '../../test/charging.ts';
 import type { MeterValueCheck } from '../api/client.ts';
 
 import { strict as assert }    from 'node:assert';
@@ -62,6 +62,26 @@ describe('a charging session', () => {
 
         assert.match(root.querySelector('.session-status')!.textContent!, /stopped/);
         assert.match(root.textContent!, /Stopped by\s*root/);
+
+    });
+
+    it('shows the live link of a session its operator\'s web payment page started, what came over it, and no Stop', async () => {
+
+        current = liveLinkSession();
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.session-live-link') !== null);
+
+        const link = root.querySelector<HTMLElement>('.session-live-link')!;
+
+        assert.match(link.textContent!, /https:\/\/pay\.gef\.example\/liveLinks\/S1/);
+        assert.match(link.textContent!, /Followed over\s*https/);
+        assert.match(link.textContent!, /Signed documents\s*2/);
+        assert.match(link.textContent!, /https:\/\/pay\.gef\.example\/sessions\/S1\/live/);
+        assert.equal(link.querySelectorAll('ul.live-readings li').length, 2);
+        assert.match(link.textContent!, /not yet checked against the proof of the station/);
+        assert.match(root.textContent!, /Started at the web payment page of its operator, and stopped there/);
+        assert.equal(root.querySelector('.btn.danger'), null, 'a Stop for a session stopped at the web payment page');
 
     });
 

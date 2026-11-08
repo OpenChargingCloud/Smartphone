@@ -250,6 +250,39 @@ describe('the map of a roaming network', () => {
 
     });
 
+    it('hands over the live link the web payment page gave, at the charge point chosen', async () => {
+
+        verified  = true;
+        checked   = false;
+        payments  = [ { url: 'https://pay.gef.example/stations/S1', of: 'chargingStation', error: null } ];
+
+        try
+        {
+
+            const root = await opened();
+
+            await until(() => root.querySelector('.station-popup .live-link') !== null, 'no way to hand over the live link');
+
+            const handOver = root.querySelector<HTMLElement>('.station-popup .live-link')!;
+
+            assert.match(handOver.textContent!, /The live link its page gave, for DE\*GEF\*E1\*1/);
+
+            typeInto(handOver.querySelector<HTMLInputElement>('input[name="liveLink"]')!, 'https://pay.gef.example/liveLinks/S1');
+            handOver.querySelector<HTMLButtonElement>('button')!.click();
+
+            await until(() => asked.some(one => one.method === 'POST' && one.path === '/charging/sessions'), 'the live link was not handed over');
+
+            assert.deepEqual(asked.filter(one => one.method === 'POST').pop()!.body,
+                             { locationId: 'DE*GEF*P1', evseUid: 'DE*GEF*E1*1', liveLink: 'https://pay.gef.example/liveLinks/S1' });
+
+        }
+        finally
+        {
+            payments = [];
+        }
+
+    });
+
     it('says when a station is not signed as the trust anchor requires, and charges nothing there', async () => {
 
         verified = false;

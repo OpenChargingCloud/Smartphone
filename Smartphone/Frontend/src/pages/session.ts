@@ -1,4 +1,4 @@
-import { api, type ChargingSession, type MeterValueCheck, type SessionCheck } from '../api/client';
+import { api, type ChargingSession, type LiveLinkFollow, type MeterValueCheck, type SessionCheck } from '../api/client';
 import { auth } from '../auth';
 import { dayAndTime, duration, isRunning, money, reportedInWords, sessionStatusClass, sessionStatusWord, withUnit } from '../charging/words';
 import { standardWord } from '../map/stations';
@@ -148,6 +148,51 @@ export const sessionPage: Page = {
         }
 
 
+        /** The live link of a session the web payment page of its operator started: how it is followed, and what came over it. */
+        function liveLinkView(link: LiveLinkFollow): TemplateResult {
+
+            return html`
+                <section class="card session-live-link">
+
+                    <h2><i class="fa-solid fa-tower-broadcast"></i> Live link</h2>
+
+                    <div class="kv-list">
+                        ${kv('Handed over',       dayAndTime(link.handedOverAt))}
+                        ${kv('From',              link.from !== null ? html`<span class="mono">${link.from}</span>` : 'its document itself')}
+                        ${kv('Followed over',     link.transports.length > 0 ? link.transports.join(', ') : 'nothing')}
+                        ${kv('Updates',           link.lastUpdateAt !== null
+                                                      ? `${link.updates}, the last at ${dayAndTime(link.lastUpdateAt)}${link.lastTransport !== null ? ` over ${link.lastTransport}` : ''}`
+                                                      : 'none yet')}
+                        ${link.lastEndpoint !== null ? kv('Last from', html`<span class="mono">${link.lastEndpoint}</span>`) : nothing}
+                        ${kv('Signed documents',  String(link.documents))}
+                        ${link.problem      !== null ? kv('Now',   link.problem)      : nothing}
+                        ${link.endedBecause !== null ? kv('Ended', link.endedBecause) : nothing}
+                    </div>
+
+                    ${link.readings.length > 0 ? html`
+                        <ul class="live-readings">
+                            ${link.readings.map(reading => html`
+                                <li>
+                                    <span>${dayAndTime(reading.measuredAt)}</span>
+                                    <span>${reading.energyKWh !== null ? withUnit(reading.energyKWh, 'kWh', 3) : 'no energy register'}</span>
+                                    ${reading.transaction !== null ? html`<span class="muted">${reading.transaction}</span>` : nothing}
+                                </li>
+                            `)}
+                        </ul>
+                    ` : nothing}
+
+                    <p class="small muted">
+                        What its signed documents say, not yet checked against the proof of the station: a key a live
+                        link names is no authority, the one the proof gives for the meter is. The documents are kept,
+                        each as it came, to be checked with it.
+                    </p>
+
+                </section>
+            `;
+
+        }
+
+
         function meterValueView(value: MeterValueCheck): TemplateResult {
 
             return html`
@@ -211,7 +256,7 @@ export const sessionPage: Page = {
                                       aria-label="How far it has charged"></progress>
                         ` : nothing}
 
-                        ${running && mayStop ? html`
+                        ${running && mayStop && session.liveLink === undefined ? html`
                             <div class="form-actions">
                                 <button type="button" class="btn danger" ?disabled=${stopping} @click=${() => void stop()}>
                                     <i class="fa-solid fa-stop"></i> ${stopping ? 'Stopping ...' : 'Stop charging'}
@@ -251,7 +296,7 @@ export const sessionPage: Page = {
                             ${kv('Session',     html`<span class="mono">${session.id}</span>`)}
                         </div>
 
-                        ${!session.simulated && session.provider !== undefined ? html`
+                        ${!session.simulated && (session.provider !== undefined || session.liveLink !== undefined) ? html`
                             <p class="small muted session-reported">${reportedInWords(session)}</p>
                         ` : nothing}
 
@@ -266,6 +311,8 @@ export const sessionPage: Page = {
                         ` : nothing}
 
                     </section>
+
+                    ${session.liveLink !== undefined ? liveLinkView(session.liveLink) : nothing}
 
                     ${session.ticket !== undefined ? html`
                         <section class="card session-ticket">

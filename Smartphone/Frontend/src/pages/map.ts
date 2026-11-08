@@ -63,6 +63,11 @@ export const mapPage: Page = {
         const chosen   = new Map<string, string>();
         const starting = new Set<string>();
         const failed   = new Map<string, string>();
+
+        // The charge point a driver went to pay for at the web payment page,
+        // by its station: the one its live link is handed over at, once the
+        // page started charging there and it is no longer free.
+        const paying   = new Map<string, string>();
         const checks   = new Map<string, LocationCheck>();
         const checking = new Set<string>();
         const unchecked = new Map<string, string>();
@@ -333,12 +338,29 @@ export const mapPage: Page = {
                     `}
 
                     ${payment?.url ? html`
-                        <a class="btn web-payment" href=${payment.url} target="_blank" rel="noopener noreferrer">
+                        <a class="btn web-payment" href=${payment.url} target="_blank" rel="noopener noreferrer"
+                           @click=${() => { if (pick !== undefined) paying.set(id, pick); }}>
                             <i class="fa-solid fa-credit-card"></i> Pay ad hoc at its operator
                         </a>
                         <div class="small muted">The web payment page ${webPaymentWord(payment.of)}, as its proof says.</div>
                     ` : payment?.error ? html`
                         <div class="small muted web-payment-error">${payment.error}</div>
+                    ` : nothing}
+
+                    ${mayCharge && signed && checked?.verified === true && (paying.get(id) ?? pick) !== undefined ? html`
+                        <div class="live-link">
+                            <label class="small">
+                                Paid there? The live link its page gave, for ${paying.get(id) ?? pick}:
+                                <input name="liveLink" type="text" autocomplete="off"
+                                       placeholder="https://... or its document" ?disabled=${busy}
+                                       @keydown=${(event: KeyboardEvent) => { if (event.key === 'Enter') void followLiveLink(location, paying.get(id) ?? pick, event.target as HTMLInputElement); }}>
+                            </label>
+                            <button type="button" class="btn" ?disabled=${busy}
+                                    @click=${(event: MouseEvent) => void followLiveLink(location, paying.get(id) ?? pick,
+                                                                                          (event.currentTarget as HTMLElement).parentElement!.querySelector<HTMLInputElement>('input[name="liveLink"]')!)}>
+                                <i class="fa-solid fa-tower-broadcast"></i> Follow it
+                            </button>
+                        </div>
                     ` : nothing}
 
                     ${signed ? html`
@@ -458,6 +480,44 @@ export const mapPage: Page = {
                     </label>
                 </li>
             `;
+
+        }
+
+
+        /** Take over the live link the web payment page gave for the session it started at an EVSE, and show the session. */
+        async function followLiveLink(location: ChargingLocation, evseUid: string | undefined, input: HTMLInputElement): Promise<void> {
+
+            const liveLink = input.value.trim();
+
+            if (evseUid === undefined || liveLink === '' || starting.has(location.id))
+                return;
+
+            starting.add(location.id);
+            failed.delete(location.id);
+            drawPopup(location.id);
+
+            try
+            {
+
+                const session = await api.charging.follow(location.id, evseUid, liveLink);
+
+                paying.delete(location.id);
+
+                if (!cancelled)
+                    navigate(`/charging?session=${encodeURIComponent(session.id)}`);
+
+            }
+            catch (error)
+            {
+                if (!cancelled)
+                    failed.set(location.id, errorMessage(error));
+            }
+            finally
+            {
+                starting.delete(location.id);
+                if (!cancelled)
+                    drawPopup(location.id);
+            }
 
         }
 

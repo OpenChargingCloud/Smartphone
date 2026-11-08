@@ -78,6 +78,14 @@ namespace cloud.charging.open.Smartphone.Charging
     /// its price are checked against later (<see cref="Evidence"/>): the
     /// proofs of the station and the price statements that held at the start.
     /// </para>
+    /// <para>
+    /// One the web payment page of the operator of its station started - not
+    /// this phone - is known by its live link (<see cref="LiveLink"/>), which
+    /// the driver handed over: starting until something comes over it,
+    /// charging from then on, finished once its meter signs the end of the
+    /// transaction or the station ends the stream - nothing simulated, and
+    /// what it charged is what its signed documents say.
+    /// </para>
     /// </remarks>
     public sealed record ChargingSession(String           Id,
                                          String           LocationId,
@@ -100,7 +108,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                          ChargingTicketReference?  Ticket  = null,
                                          ChargingStartReference?   Start     = null,
                                          ProviderReport?           Report    = null,
-                                         SessionEvidence?          Evidence  = null)
+                                         SessionEvidence?          Evidence  = null,
+                                         LiveLinkFollow?           LiveLink  = null)
     {
 
         #region Data
@@ -139,22 +148,23 @@ namespace cloud.charging.open.Smartphone.Charging
 
         /// <summary>
         /// Whether its figures are simulated: no provider reported anything of
-        /// it.
+        /// it, and it follows no live link.
         /// </summary>
         public Boolean IsSimulated
-            => Report is null;
+            => Report is null && LiveLink is null;
 
         #endregion
 
 
-        #region New(Id, Location, EVSE, StartedAt, StartedBy, Ticket = null, Start = null, Evidence = null)
+        #region New(Id, Location, EVSE, StartedAt, StartedBy, Ticket = null, Start = null, Evidence = null, LiveLink = null)
 
         /// <summary>
         /// A session started now, at an EVSE of a location - one that says
         /// what charging there costs - with the charging ticket it was started
         /// with and its start as the provider countersigned it, where the
         /// phone has an e-mobility provider, and at a station of a roaming
-        /// network with the evidence of its station.
+        /// network with the evidence of its station - or the live link of one
+        /// the web payment page of its operator started.
         /// </summary>
         public static ChargingSession New(String                    Id,
                                           ChargingLocation          Location,
@@ -163,7 +173,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                           String                    StartedBy,
                                           ChargingTicketReference?  Ticket    = null,
                                           ChargingStartReference?   Start     = null,
-                                          SessionEvidence?          Evidence  = null)
+                                          SessionEvidence?          Evidence  = null,
+                                          LiveLinkFollow?           LiveLink  = null)
 
             => new (Id,
                     Location.Id,
@@ -183,7 +194,8 @@ namespace cloud.charging.open.Smartphone.Charging
                     StartedBy,
                     Ticket:    Ticket,
                     Start:     Start,
-                    Evidence:  Evidence);
+                    Evidence:  Evidence,
+                    LiveLink:  LiveLink);
 
         #endregion
 
@@ -195,6 +207,15 @@ namespace cloud.charging.open.Smartphone.Charging
         /// </summary>
         public ChargingSessionStatus StatusAt(DateTimeOffset Now)
         {
+
+            if (LiveLink is LiveLinkFollow liveLink)
+                return StoppedAt is not null
+                           ? ChargingSessionStatus.Stopped
+                           : liveLink.EndedAt is not null
+                                 ? ChargingSessionStatus.Finished
+                                 : liveLink.Updates > 0
+                                       ? ChargingSessionStatus.Charging
+                                       : ChargingSessionStatus.Starting;
 
             if (Report is ProviderReport report)
                 return StoppedAt is not null
@@ -241,6 +262,13 @@ namespace cloud.charging.open.Smartphone.Charging
 
             var status = StatusAt(Now);
 
+            if (LiveLink is LiveLinkFollow liveLink)
+                return status switch {
+                           ChargingSessionStatus.Stopped   => StoppedAt,
+                           ChargingSessionStatus.Finished  => liveLink.EndedAt,
+                           _                               => null
+                       };
+
             if (Report is ProviderReport report)
                 return status switch {
                            ChargingSessionStatus.Stopped   => StoppedAt ?? report.ChargingUntil ?? report.EndedAt ?? report.ReceivedAt,
@@ -276,6 +304,9 @@ namespace cloud.charging.open.Smartphone.Charging
         public Decimal EnergyAt(DateTimeOffset Now)
         {
 
+            if (LiveLink is LiveLinkFollow liveLink)
+                return liveLink.EnergyKWh ?? 0m;
+
             if (Report is ProviderReport report)
                 return report.EnergyKWh ?? 0m;
 
@@ -298,6 +329,9 @@ namespace cloud.charging.open.Smartphone.Charging
         /// </summary>
         public JObject ToJSON(DateTimeOffset Now)
         {
+
+            if (LiveLink is LiveLinkFollow liveLink)
+                return LiveLinkJSON(liveLink, Now);
 
             if (Report is ProviderReport report)
                 return ReportedJSON(report, Now);
@@ -420,6 +454,64 @@ namespace cloud.charging.open.Smartphone.Charging
 
         }
 
+        /// <summary>
+        /// The session the web payment page of the operator of its station
+        /// started, as its live link says it: its energy what its signed
+        /// documents say, not checked, and its cost what the price of the proof
+        /// of its station makes of that.
+        /// </summary>
+        private JObject LiveLinkJSON(LiveLinkFollow LiveLink, DateTimeOffset Now)
+        {
+
+            var status   = StatusAt(Now);
+            var ended    = EndedAt(Now);
+            var energy   = EnergyAt(Now);
+            var since    = LiveLink.Readings.FirstOrDefault()?.MeasuredAt;
+            var duration = since is DateTimeOffset chargingSince && status != ChargingSessionStatus.Starting
+                               ? (ended ?? Now) - chargingSince
+                               : TimeSpan.Zero;
+
+            var json = new JObject(
+                           new JProperty("id",                 Id),
+                           new JProperty("status",             status.ToString().ToLowerInvariant()),
+                           new JProperty("simulated",          false),
+                           new JProperty("location",           new JObject(
+                               new JProperty("id",        LocationId),
+                               new JProperty("name",      LocationName),
+                               new JProperty("address",   Address),
+                               new JProperty("city",      City),
+                               new JProperty("operator",  Operator)
+                           )),
+                           new JProperty("evse",               new JObject(
+                               new JProperty("uid",         EVSEUid),
+                               new JProperty("evseId",      EVSEId),
+                               new JProperty("standard",    Standard),
+                               new JProperty("powerType",   PowerType),
+                               new JProperty("maxPowerKW",  MaxPowerKW)
+                           )),
+                           new JProperty("startedAt",          StartedAt.ToString("o")),
+                           new JProperty("startedBy",          StartedBy),
+                           new JProperty("endedAt",            ended?.ToString("o")),
+                           new JProperty("durationSeconds",    (Int64) Math.Max(0, duration.TotalSeconds)),
+                           new JProperty("energyKWh",          energy),
+                           new JProperty("cost",               new JObject(
+                               new JProperty("amount",       Math.Round(energy * PricePerKWh, 2)),
+                               new JProperty("pricePerKWh",  PricePerKWh),
+                               new JProperty("currency",     Currency)
+                           )),
+                           new JProperty("liveLink",           LiveLink.ToJSON())
+                       );
+
+            if (since is DateTimeOffset first)
+                json.Add(new JProperty("chargingSince", first.ToString("o")));
+
+            if (status == ChargingSessionStatus.Stopped)
+                json.Add(new JProperty("stoppedBy", StoppedBy));
+
+            return json;
+
+        }
+
         #endregion
 
         #region ToStorageJSON() / TryParseStorage(JSON, out Session, out Error)
@@ -468,6 +560,9 @@ namespace cloud.charging.open.Smartphone.Charging
             if (Evidence is not null)
                 json.Add(new JProperty("evidence", Evidence.ToJSON()));
 
+            if (LiveLink is not null)
+                json.Add(new JProperty("liveLink", LiveLink.ToStorageJSON()));
+
             return json;
 
         }
@@ -512,7 +607,8 @@ namespace cloud.charging.open.Smartphone.Charging
                               ChargingTicketReference.TryParse(JSON["ticket"]),
                               ChargingStartReference. TryParse(JSON["start"]),
                               ProviderReport.         TryParseStorage(JSON["report"]),
-                              SessionEvidence.        TryParse(JSON["evidence"])
+                              SessionEvidence.        TryParse(JSON["evidence"]),
+                              LiveLinkFollow.         TryParse(JSON["liveLink"])
                           );
 
                 if (Session.MaxPowerKW <= 0 || Session.TargetEnergyKWh <= 0)

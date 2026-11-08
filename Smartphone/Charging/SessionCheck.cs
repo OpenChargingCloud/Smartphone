@@ -515,9 +515,9 @@ namespace cloud.charging.open.Smartphone.Charging
         /// The readings of an OCMF payload: each with the time the meter signed
         /// and its energy register in kWh - "Wh" taken as a thousandth.
         /// </summary>
-        private static Boolean TryReadingsOf(JToken?                                              JSON,
-                                             out IReadOnlyList<MeterReading>                      Readings,
-                                             [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out String?  Error)
+        internal static Boolean TryReadingsOf(JToken?                                             JSON,
+                                              out IReadOnlyList<MeterReading>                      Readings,
+                                              [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out String?  Error)
         {
 
             var readings = new List<MeterReading>();

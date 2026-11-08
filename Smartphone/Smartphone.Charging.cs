@@ -22,6 +22,7 @@ using Newtonsoft.Json.Linq;
 using cloud.charging.open.Smartphone.Charging;
 using cloud.charging.open.Smartphone.Map;
 using cloud.charging.open.Smartphone.Provider;
+using cloud.charging.open.Smartphone.Roaming;
 
 #endregion
 
@@ -42,7 +43,11 @@ namespace cloud.charging.open.Smartphone
         /// <summary>The sessions could not be written down: nothing about the request was wrong.</summary>
         NotSaved,
         /// <summary>The e-mobility provider issued no charging ticket for it, started or stopped nothing, or could not be reached.</summary>
-        Provider
+        Provider,
+        /// <summary>What was handed over is not what was asked for, e.g. no live link.</summary>
+        Invalid,
+        /// <summary>The live link handed over by its URL could not be fetched.</summary>
+        Unreachable
     }
 
 
@@ -127,24 +132,10 @@ namespace cloud.charging.open.Smartphone
             if (anchor is not null)
             {
 
-                var now      = TimeProvider.GetUtcNow();
-                var station  = locationChecks.TryGetValue(location.Id, out var check) ? check.StationOf(evse) : null;
+                var (station, tariff, refusal) = CheckedStationOf(location, evse, network, TimeProvider.GetUtcNow());
 
-                if (station is null || !station.HoldsAt(network, now))
-                    return ChargingStart.Refused(ChargingRefusal.Conflict,
-                                                 station is null
-                                                     ? $"{evse.EVSEId} at {location.Name} was not checked yet: open the station on the map, so that its proof is checked, and charge then."
-                                                     : station.Verified
-                                                           ? $"The proof of {evse.EVSEId} at {location.Name} was checked at {station.CheckedAt:HH:mm:ss} and does not hold any more: open the station again."
-                                                           : $"{evse.EVSEId} at {location.Name} is not signed as the trust anchor of the roaming network requires: {station.Error}");
-
-                var tariff = station.TariffOf(evse.Uid);
-
-                if (tariff is null)
-                    return ChargingStart.Refused(ChargingRefusal.Conflict,
-                                                 station.PriceConflict is not null
-                                                     ? $"What charging at {evse.EVSEId} at {location.Name} costs is not known: {station.PriceConflict}"
-                                                     : $"The proof of {evse.EVSEId} at {location.Name} names no price per kWh, and a simulated session counts with nothing else.");
+                if (station is null || tariff is null)
+                    return ChargingStart.Refused(ChargingRefusal.Conflict, refusal ?? $"{evse.EVSEId} at {location.Name} was not checked.");
 
                 location       = location with { Tariff = tariff };
                 statusOf       = (one, _) => RoamingStatusOf(one);
@@ -231,6 +222,43 @@ namespace cloud.charging.open.Smartphone
 
         #endregion
 
+        #region (private) CheckedStationOf(Location, EVSE, Network, Now)
+
+        /// <summary>
+        /// The check of the station of an EVSE of a roaming network, where its
+        /// proof was checked and still holds, and what charging there costs as
+        /// it says - or why a session there can not be.
+        /// </summary>
+        private (StationCheck? Station, ChargingTariff? Tariff, String? Refusal) CheckedStationOf(ChargingLocation             Location,
+                                                                                                   ChargingEVSE                 EVSE,
+                                                                                                   RoamingNetworkConfiguration  Network,
+                                                                                                   DateTimeOffset               Now)
+        {
+
+            var station = locationChecks.TryGetValue(Location.Id, out var check) ? check.StationOf(EVSE) : null;
+
+            if (station is null || !station.HoldsAt(Network, Now))
+                return (null, null,
+                        station is null
+                            ? $"{EVSE.EVSEId} at {Location.Name} was not checked yet: open the station on the map, so that its proof is checked, and charge then."
+                            : station.Verified
+                                  ? $"The proof of {EVSE.EVSEId} at {Location.Name} was checked at {station.CheckedAt:HH:mm:ss} and does not hold any more: open the station again."
+                                  : $"{EVSE.EVSEId} at {Location.Name} is not signed as the trust anchor of the roaming network requires: {station.Error}");
+
+            var tariff = station.TariffOf(EVSE.Uid);
+
+            if (tariff is null)
+                return (station, null,
+                        station.PriceConflict is not null
+                            ? $"What charging at {EVSE.EVSEId} at {Location.Name} costs is not known: {station.PriceConflict}"
+                            : $"The proof of {EVSE.EVSEId} at {Location.Name} names no price per kWh, and a simulated session counts with nothing else.");
+
+            return (station, tariff, null);
+
+        }
+
+        #endregion
+
         #region StopChargingAsync(Id, Who, CancellationToken = default)
 
         /// <summary>
@@ -253,6 +281,11 @@ namespace cloud.charging.open.Smartphone
 
             if (!running.IsActiveAt(TimeProvider.GetUtcNow()))
                 return ChargingStop.Refused(ChargingRefusal.Conflict, $"The charging session '{Id}' is {running.StatusAt(TimeProvider.GetUtcNow()).ToString().ToLowerInvariant()} already.");
+
+            // Started at the web payment page of the operator: stopped there,
+            // and this phone follows its live link until the meter signs its end.
+            if (running.LiveLink is not null)
+                return ChargingStop.Refused(ChargingRefusal.Conflict, $"The session at {running.EVSEId} was started at the web payment page of its operator, and is stopped there: this phone follows its live link until the meter signs its end.");
 
             ChargingStartReference? stopped = null;
 

@@ -17,6 +17,8 @@
 
 #region Usings
 
+using Newtonsoft.Json.Linq;
+
 using org.GraphDefined.Vanaheimr.Hermod.HTTP;
 
 using cloud.charging.open.protocols.WWCP.Node.Web;
@@ -286,7 +288,12 @@ namespace cloud.charging.open.Smartphone
         /// with a charging ticket of its own where the phone has one. 201 with
         /// the session; 404 where the station or its EVSE is not on the map;
         /// 409 where the EVSE is not available; 502 where the provider issued
-        /// no ticket or started nothing.
+        /// no ticket or started nothing. With a "liveLink" as well - the https
+        /// URL of the live link the web payment page of the operator gave, or
+        /// its document - the session that page started there, followed over
+        /// its live link: 400 where it is none, 409 where it is of another EVSE
+        /// or the proof of the station does not hold, 502 where its URL could
+        /// not be fetched.
         /// </summary>
         private async Task<HTTPResponse> PostChargingSession(HTTPRequest Request)
         {
@@ -303,6 +310,22 @@ namespace cloud.charging.open.Smartphone
             if (String.IsNullOrEmpty(locationId) || String.IsNullOrEmpty(evseUid))
                 return ErrorJSON(Request, HTTPStatusCode.BadRequest,
                                  "Say where to charge: 'locationId' and 'evseUid', as the map gives them.");
+
+            if (json["liveLink"] is JToken liveLink && liveLink.Type != JTokenType.Null)
+            {
+
+                if (liveLink.Type is not (JTokenType.String or JTokenType.Object))
+                    return ErrorJSON(Request, HTTPStatusCode.BadRequest,
+                                     "'liveLink' is the URL of the live link the web payment page of the operator gave, or its document.");
+
+                var followed = await Smartphone.FollowLiveLinkAsync(locationId, evseUid, liveLink, user.Id.ToString());
+
+                if (followed.Session is null)
+                    return Refused(Request, followed.Refusal, followed.Error ?? "No live link is followed.");
+
+                return JSONResponse(Request, HTTPStatusCode.Created, Smartphone.SessionJSON(followed.Session, Smartphone.TimeProvider.GetUtcNow()));
+
+            }
 
             var start = await Smartphone.StartChargingAsync(locationId, evseUid, user.Id.ToString());
 
@@ -357,10 +380,12 @@ namespace cloud.charging.open.Smartphone
 
             => ErrorJSON(Request,
                          Refusal switch {
-                             ChargingRefusal.NotFound  => HTTPStatusCode.NotFound,
-                             ChargingRefusal.NotSaved  => HTTPStatusCode.InternalServerError,
-                             ChargingRefusal.Provider  => HTTPStatusCode.BadGateway,
-                             _                         => HTTPStatusCode.Conflict
+                             ChargingRefusal.NotFound     => HTTPStatusCode.NotFound,
+                             ChargingRefusal.NotSaved     => HTTPStatusCode.InternalServerError,
+                             ChargingRefusal.Provider     => HTTPStatusCode.BadGateway,
+                             ChargingRefusal.Unreachable  => HTTPStatusCode.BadGateway,
+                             ChargingRefusal.Invalid      => HTTPStatusCode.BadRequest,
+                             _                            => HTTPStatusCode.Conflict
                          },
                          Error);
 

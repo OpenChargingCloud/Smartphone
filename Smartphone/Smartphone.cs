@@ -341,6 +341,7 @@ namespace cloud.charging.open.Smartphone
 
             StartKeepingProofs();
             StartFollowingRoamingStatus();
+            StartFollowingLiveLinks();
 
             return Task.CompletedTask;
 
