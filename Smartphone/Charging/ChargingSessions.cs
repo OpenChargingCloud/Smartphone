@@ -194,9 +194,10 @@ namespace cloud.charging.open.Smartphone.Charging
 
                 var status = StatusOf(EVSE, now);
 
-                // Unknown is what an EVSE of a roaming network is, which says
-                // its status only over its WebSocket: started at as at an
-                // available one, as a driver standing in front of it would.
+                // Unknown is what an EVSE of a roaming network is where the
+                // network is not reached over its WebSocket, or says nothing
+                // of it: started at as at an available one, as a driver
+                // standing in front of it would.
                 if (status != EVSEStatus.Available && status != EVSEStatus.Unknown)
                 {
                     Error = $"{EVSE.EVSEId} at {Location.Name} is {EVSEStatus.InWords(status)}, not available.";

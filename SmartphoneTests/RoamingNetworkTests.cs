@@ -576,7 +576,9 @@ namespace cloud.charging.open.Smartphone.Tests
 
                 Assert.That(evses.Select(evse => evse["evse_id"]!.Value<String>()),     Is.EqualTo(new[] { TestRoamingNetwork.ACEVSE, TestRoamingNetwork.DCEVSE }));
                 Assert.That(evses.Select(evse => evse["station_id"]!.Value<String>()),  Is.EqualTo(new[] { TestRoamingNetwork.ACStation, TestRoamingNetwork.DCStation }));
-                Assert.That(evses.Select(evse => evse["status"]!.Value<String>()),      Is.All.EqualTo("UNKNOWN"));
+                // As the network says it over its WebSocket - or not known,
+                // where the phone does not follow it yet.
+                Assert.That(evses.Select(evse => evse["status"]!.Value<String>()),      Is.All.EqualTo(StatusLive(map) ? "AVAILABLE" : "UNKNOWN"));
                 Assert.That(evses[1]!["connectors"]![0]!["power_type"]!.Value<String>(),          Is.EqualTo("DC"));
                 Assert.That(evses[1]!["connectors"]![0]!["max_electric_power"]!.Value<Int64>(),   Is.EqualTo(150000));
                 Assert.That(evses[0]!["connectors"]![0]!["standard"]!.Value<String>(),            Is.EqualTo("IEC_62196_T2"));
@@ -1048,6 +1050,195 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(after ["check"]?["error"]?.Value<String>(),                     Does.StartWith("Nothing of it is checked"), after.ToString());
                 Assert.That(after ["check"]?["meterValues"],                                Is.Null);
                 Assert.That(after ["check"]?["price"],                                      Is.Null);
+            }
+
+        }
+
+        #endregion
+
+
+        #region (helpers) MapWhen(Client, Condition, What) / EVSEStatusOf(Map, EVSEId) / StatusLive(Map)
+
+        /// <summary>
+        /// The map, asked again until it is as the condition says - for at most
+        /// fifteen seconds, and failed with what it was last otherwise.
+        /// </summary>
+        private static async Task<JObject> MapWhen(HttpClient           Client,
+                                                   Func<JObject, Boolean>  Condition,
+                                                   String               What)
+        {
+
+            var until  = DateTimeOffset.UtcNow.AddSeconds(15);
+            var map    = new JObject();
+
+            do
+            {
+
+                (_, map) = await Send(Client, HttpMethod.Get, "api/v1/map");
+
+                if (Condition(map))
+                    return map;
+
+                await Task.Delay(100);
+
+            }
+            while (DateTimeOffset.UtcNow < until);
+
+            Assert.Fail($"{What}: {map}");
+
+            return map;
+
+        }
+
+        private static String? EVSEStatusOf(JObject Map, String EVSEId)
+
+            => Map["locations"]?.SelectMany(location => location["evses"] ?? new JArray()).
+                                 FirstOrDefault(evse => evse["evse_id"]?.Value<String>() == EVSEId)?["status"]?.Value<String>();
+
+        private static Boolean StatusLive(JObject Map)
+
+            => Map["roamingNetwork"]?["status"]?["live"]?.Value<Boolean>() == true;
+
+        #endregion
+
+        #region TheMapShowsWhichChargePointIsFreeAsTheNetworkSaysIt()
+
+        /// <summary>
+        /// The status of the charge points of the roaming network, followed over
+        /// its WebSocket: on the map as the network says it, pushed as it
+        /// changes - and no start where it says a charge point is taken, or out
+        /// of service, until it is free again.
+        /// </summary>
+        [Test]
+        public async Task TheMapShowsWhichChargePointIsFreeAsTheNetworkSaysIt()
+        {
+
+            using var admin   = await WithTheRoamingNetwork();
+            using var driver  = await SignedInAs("driver1", "driver");
+
+            var map     = await MapWhen(driver, StatusLive, "the status of the roaming network is not followed");
+            var status  = map["roamingNetwork"]!["status"]!;
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status["from"]!.Value<String>(),                    Is.EqualTo(Roaming.RoamingNetworkStatus.WebSocketURLOf(network!.URL)));
+                Assert.That(status["since"]!.Type,                              Is.EqualTo(JTokenType.Date));
+                Assert.That(status["error"]!.Type,                              Is.EqualTo(JTokenType.Null));
+                Assert.That(status["evses"]!.Value<Int32>(),                    Is.EqualTo(2));
+                Assert.That(EVSEStatusOf(map, TestRoamingNetwork.ACEVSE),       Is.EqualTo("AVAILABLE"));
+                Assert.That(EVSEStatusOf(map, TestRoamingNetwork.DCEVSE),       Is.EqualTo("AVAILABLE"));
+            }
+
+            // Somebody else charges at the AC point, and the DC point is taken
+            // out of service by its operator.
+            var now = DateTimeOffset.UtcNow;
+
+            Assert.That(network.History.RuntimeStatus.TryUpdate(POIRuntimeStatusKind.Status,      "EVSE", TestRoamingNetwork.ACEVSE, "charging",     now, out _, out var error), Is.EqualTo(POIStatusUpdateResult.Updated), error);
+            Assert.That(network.History.RuntimeStatus.TryUpdate(POIRuntimeStatusKind.AdminStatus, "EVSE", TestRoamingNetwork.DCEVSE, "outOfService", now, out _, out error),     Is.EqualTo(POIStatusUpdateResult.Updated), error);
+
+            await MapWhen(driver,
+                          map => EVSEStatusOf(map, TestRoamingNetwork.ACEVSE) == "CHARGING" && EVSEStatusOf(map, TestRoamingNetwork.DCEVSE) == "INOPERATIVE",
+                          "the status the network pushed is not on the map");
+
+            var (code, check) = await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            Assert.That(check["verified"]!.Value<Boolean>(), Is.True, check.ToString());
+
+            foreach (var (evse, why) in new[] { (TestRoamingNetwork.ACEVSE, "is charging, not available"), (TestRoamingNetwork.DCEVSE, "is inoperative, not available") })
+            {
+
+                (code, var refused) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = TestRoamingNetwork.PoolId, evseUid = evse });
+
+                using (Assert.EnterMultipleScope())
+                {
+                    Assert.That(code,                               Is.EqualTo(HttpStatusCode.Conflict), refused.ToString());
+                    Assert.That(refused["error"]!.Value<String>(),  Does.Contain(why));
+                }
+
+            }
+
+            // Free again: started at.
+            Assert.That(network.History.RuntimeStatus.TryUpdate(POIRuntimeStatusKind.Status, "EVSE", TestRoamingNetwork.ACEVSE, "available", DateTimeOffset.UtcNow, out _, out error), Is.EqualTo(POIStatusUpdateResult.Updated), error);
+
+            await MapWhen(driver, map => EVSEStatusOf(map, TestRoamingNetwork.ACEVSE) == "AVAILABLE", "the AC point is not free again on the map");
+
+            (code, var session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.ACEVSE });
+
+            Assert.That(code, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+        }
+
+        #endregion
+
+        #region TheStatusIsFollowedAtAMirrorAndNotKnownOnceNoneAnswers()
+
+        /// <summary>
+        /// A trust anchor naming a URL nobody answers at first and the network's
+        /// own second: the status is followed at the second. Once the network
+        /// is gone too, no status is known - none is kept from a connection
+        /// that ended - and why is said; a charge point is unknown again, and
+        /// started at as one a driver stands in front of.
+        /// </summary>
+        [Test]
+        public async Task TheStatusIsFollowedAtAMirrorAndNotKnownOnceNoneAnswers()
+        {
+
+            network = await TestRoamingNetwork.Start();
+
+            var down    = URL.Parse($"http://127.0.0.1:{TestPorts.Free()}/RNs/QA");
+            var anchor  = new RoamingNetworkTrustAnchor(network.TrustAnchor.Id, [ down, network.TrustAnchor.URLs[0] ], network.TrustAnchor.Keys);
+
+            using var admin = await WithTheRoamingNetwork(anchor);
+
+            var map = await MapWhen(admin, StatusLive, "the status was not followed at the mirror");
+
+            Assert.That(map["roamingNetwork"]!["status"]!["from"]!.Value<String>(), Is.EqualTo(Roaming.RoamingNetworkStatus.WebSocketURLOf(network.URL)));
+
+            await network.DisposeAsync();
+            network = null;
+
+            map = await MapWhen(admin, map => !StatusLive(map), "the status is still said to be known, of a network that is gone");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(map["roamingNetwork"]!["status"]!["error"]!.Value<String>(),  Is.Not.Empty);
+                Assert.That(map["roamingNetwork"]!["status"]!["from"]!.Type,              Is.EqualTo(JTokenType.Null));
+                Assert.That(EVSEStatusOf(map, TestRoamingNetwork.ACEVSE),                 Is.EqualTo("UNKNOWN"));
+            }
+
+        }
+
+        #endregion
+
+        #region AStatusIsSaidInOCPIsWords()
+
+        /// <summary>
+        /// The admin status and the status of an EVSE in POI's words, as the map
+        /// says them in OCPI's: what its operator declares first, then what it
+        /// is - and the WebSocket of a history below a URL of a trust anchor.
+        /// </summary>
+        [Test]
+        public void AStatusIsSaidInOCPIsWords()
+        {
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(Roaming.RoamingNetworkStatus.OCPIStatusOf(null,            "available"),         Is.EqualTo("AVAILABLE"));
+                Assert.That(Roaming.RoamingNetworkStatus.OCPIStatusOf("operational",   "waitingForPlugin"),  Is.EqualTo("AVAILABLE"));
+                Assert.That(Roaming.RoamingNetworkStatus.OCPIStatusOf("Operational",   "Charging"),          Is.EqualTo("CHARGING"));
+                Assert.That(Roaming.RoamingNetworkStatus.OCPIStatusOf("operational",   "occupied"),          Is.EqualTo("CHARGING"));
+                Assert.That(Roaming.RoamingNetworkStatus.OCPIStatusOf("operational",   "reserved"),          Is.EqualTo("RESERVED"));
+                Assert.That(Roaming.RoamingNetworkStatus.OCPIStatusOf("outOfService",  "available"),         Is.EqualTo("INOPERATIVE"));
+                Assert.That(Roaming.RoamingNetworkStatus.OCPIStatusOf("internalUse",   "available"),         Is.EqualTo("BLOCKED"));
+                Assert.That(Roaming.RoamingNetworkStatus.OCPIStatusOf("planned",       null),                Is.EqualTo("PLANNED"));
+                Assert.That(Roaming.RoamingNetworkStatus.OCPIStatusOf("operational",   "error"),             Is.EqualTo("OUTOFORDER"));
+                Assert.That(Roaming.RoamingNetworkStatus.OCPIStatusOf("operational",   "offline"),           Is.EqualTo("OUTOFORDER"));
+                Assert.That(Roaming.RoamingNetworkStatus.OCPIStatusOf("operational",   "removed"),           Is.EqualTo("REMOVED"));
+                Assert.That(Roaming.RoamingNetworkStatus.OCPIStatusOf("operational",   "somethingNew"),      Is.EqualTo("UNKNOWN"));
+                Assert.That(Roaming.RoamingNetworkStatus.OCPIStatusOf("operational",   null),                Is.EqualTo("UNKNOWN"));
+
+                Assert.That(Roaming.RoamingNetworkStatus.WebSocketURLOf("https://hub.example/poi/RNs/QA/"),  Is.EqualTo("wss://hub.example/poi/RNs/QA/history/ws"));
+                Assert.That(Roaming.RoamingNetworkStatus.WebSocketURLOf("http://127.0.0.1:2356/RNs/QA"),     Is.EqualTo("ws://127.0.0.1:2356/RNs/QA/history/ws"));
             }
 
         }

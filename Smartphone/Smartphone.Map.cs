@@ -151,8 +151,8 @@ namespace cloud.charging.open.Smartphone
         /// <summary>
         /// The status an EVSE has now, as the map shows it: charging where this
         /// phone charges there, and otherwise what the EVSE says of itself - of
-        /// a demo station; of a roaming network, unknown, as it says its status
-        /// only over its WebSocket.
+        /// a demo station; of a roaming network, what the network says over its
+        /// WebSocket, unknown where it is not reached.
         /// </summary>
         public String StatusOf(ChargingLocation  Location,
                                ChargingEVSE      EVSE,
@@ -162,7 +162,7 @@ namespace cloud.charging.open.Smartphone
                    ? EVSEStatus.Charging
                    : EVSE.StationId is null
                          ? DemoLocations.StatusOf(EVSE, Now)
-                         : EVSEStatus.Unknown;
+                         : RoamingStatusOf(EVSE);
 
         #endregion
 
@@ -202,7 +202,8 @@ namespace cloud.charging.open.Smartphone
                          new JProperty("id",     anchor.Id.ToString()),
                          new JProperty("name",   Roaming.RoamingNetworkClient.Text(anchor.ToJSON()["name"])),
                          new JProperty("from",   listed.From),
-                         new JProperty("error",  listed.Error)
+                         new JProperty("error",  listed.Error),
+                         new JProperty("status", RoamingStatus?.ToJSON())
                      )));
 
             json.Add(new JProperty("locations", new JArray(listed.Locations.Select(location => {

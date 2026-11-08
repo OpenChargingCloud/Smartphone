@@ -10,7 +10,8 @@
  */
 
 import { asked, leave, open, refused, type as typeInto, until, type Asked } from '../../test/smartphone.ts';
-import { holzmarkt, lobeda, locationCheck, mapData, paradies, roamingMapData, session } from '../../test/charging.ts';
+import { holzmarkt, lobeda, locationCheck, mapData, paradies, roamingMapData, roamingStatus, session } from '../../test/charging.ts';
+import type { ChargingLocation, EVSEStatus, RoamingNetworkStatus } from '../api/client.ts';
 
 import { strict as assert }    from 'node:assert';
 import { after, describe, it } from 'node:test';
@@ -229,6 +230,84 @@ describe('the map of a roaming network', () => {
         assert.match(root.querySelector('.station-popup')!.textContent!, /not attested by the operator the trust anchor names/);
         assert.match(root.querySelector('.station-popup')!.textContent!, /the price is what its proof says/);
         assert.equal(root.querySelector<HTMLButtonElement>('.station-popup .charge-now')!.disabled, true, '"Charge now!" at a station nobody it trusts attested');
+
+    });
+
+});
+
+
+describe('the map of a roaming network whose status is followed', () => {
+
+    let status: RoamingNetworkStatus = roamingStatus();
+
+    /** The Paradiesbahnhof, its AC point taken and its DC point free - or as given. */
+    function pool(first: EVSEStatus = 'CHARGING', second: EVSEStatus = 'AVAILABLE'): ChargingLocation {
+        const paradiesbahnhof = paradies({ verified: true, tariff: { price_per_kwh: 0.49, currency: 'EUR' } });
+        return { ...paradiesbahnhof, evses: [ { ...paradiesbahnhof.evses[0]!, status: first }, { ...paradiesbahnhof.evses[1]!, status: second } ] };
+    }
+
+    function network({ method, path }: Asked): unknown {
+
+        if (method === 'GET' && path.startsWith('/map/locations/') && path.endsWith('/check'))
+            return locationCheck(true);
+
+        if (method === 'GET' && path.startsWith('/map'))
+            return roamingMapData([ status.live ? pool() : pool('UNKNOWN', 'UNKNOWN') ], status);
+
+        if (method === 'POST' && path === '/charging/sessions')
+            return new Response(JSON.stringify(session()), { status: 201, headers: { 'Content-Type': 'application/json' } });
+
+        return undefined;
+
+    }
+
+    it('shows which charge points are free, and charges at a free one', async () => {
+
+        status = roamingStatus();
+
+        const root = await open(mapPage, '/map', [ 'map:read', 'charging:read', 'charging:run' ],
+                                network, root => pins(root).length === 1);
+
+        assert.ok(pins(root)[0]!.className.includes('status-available'), 'a pool with a free point is not available');
+        assert.match(root.querySelector('.map-legend .roaming-status.live')!.textContent!, /over its WebSocket since .* not signed/s);
+        assert.match(root.querySelector('.map-legend')!.textContent!, /out of order/);
+
+        typeInto(root.querySelector<HTMLInputElement>('#map-search')!, 'paradies');
+        await until(() => root.querySelector('.map-result') !== null, 'the search did not find the Paradiesbahnhof');
+        assert.match(root.querySelector('.map-result')!.textContent!, /1 of 2 available/);
+        root.querySelector<HTMLButtonElement>('.map-result')!.click();
+
+        await until(() => root.querySelector('.station-popup .chip.ok') !== null, 'the station was not checked as it opened');
+
+        const popup  = root.querySelector<HTMLElement>('.station-popup')!;
+        const radios = [ ...popup.querySelectorAll<HTMLInputElement>('input[type="radio"]') ];
+
+        assert.equal(radios.length, 2);
+        assert.equal(radios[0]!.disabled, true,  'the point taken may be chosen');
+        assert.equal(radios[1]!.checked,  true,  'the free point is not chosen');
+        assert.match(popup.textContent!, /charging/);
+
+        popup.querySelector<HTMLButtonElement>('.charge-now')!.click();
+
+        await until(() => asked.some(one => one.method === 'POST' && one.path === '/charging/sessions'), '"Charge now!" did not ask the smartphone');
+
+        assert.deepEqual(asked.filter(one => one.method === 'POST').pop()!.body, { locationId: 'DE*GEF*P1', evseUid: 'DE*GEF*E2*1' });
+
+    });
+
+    it('says why the status is not known, where the network is not reached', async () => {
+
+        status = roamingStatus(false, 'wss://hub.example/poi/RNs/QA/history/ws could not be reached: refused.');
+
+        const root = await open(mapPage, '/map', [ 'map:read', 'charging:read', 'charging:run' ],
+                                network, root => pins(root).length === 1);
+
+        assert.match(root.querySelector('.map-legend .roaming-status.not-known')!.textContent!, /not known: wss:\/\/hub\.example.* could not be reached: refused\./);
+        assert.doesNotMatch(root.querySelector('.map-legend')!.textContent!, /out of order/);
+
+        typeInto(root.querySelector<HTMLInputElement>('#map-search')!, 'paradies');
+        await until(() => root.querySelector('.map-result') !== null, 'the search did not find the Paradiesbahnhof');
+        assert.match(root.querySelector('.map-result')!.textContent!, /2 charge point\(s\), their status not known/);
 
     });
 

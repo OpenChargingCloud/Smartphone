@@ -147,7 +147,7 @@ namespace cloud.charging.open.Smartphone
                                                      : $"The proof of {evse.EVSEId} at {location.Name} names no price per kWh, and a simulated session counts with nothing else.");
 
                 location       = location with { Tariff = tariff };
-                statusOf       = (_, _) => EVSEStatus.Unknown;
+                statusOf       = (one, _) => RoamingStatusOf(one);
                 effectiveTree  = station.EffectiveTree;
                 tariffId       = tariff.TariffId;
                 evidence       = EvidenceOf(station, evse);

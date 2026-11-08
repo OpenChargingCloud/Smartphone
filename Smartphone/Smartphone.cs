@@ -331,7 +331,8 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// What a smartphone says once it is up: where its API is - and from
-        /// now on, the proofs of the stations of sessions that charge are kept.
+        /// now on, the proofs of the stations of sessions that charge are kept,
+        /// and the status of the charge points of the roaming network followed.
         /// </summary>
         protected override Task OnStarted()
         {
@@ -339,6 +340,7 @@ namespace cloud.charging.open.Smartphone
             Log.Info($"The JSON API is at {APIURL}v1/status", "web", "http");
 
             StartKeepingProofs();
+            StartFollowingRoamingStatus();
 
             return Task.CompletedTask;
 

@@ -41,7 +41,7 @@ namespace cloud.charging.open.Smartphone
     /// <para>
     /// | | |
     /// |---|---|
-    /// | <c>GET v1/map</c> | the charging stations, OCPI locations with the status of each EVSE now: the demo stations, or the pools of the roaming network |
+    /// | <c>GET v1/map</c> | the charging stations, OCPI locations with the status of each EVSE now: the demo stations, or the pools of the roaming network, with the status of their EVSEs as it says it over its WebSocket and <c>"roamingNetwork": { "status" }</c>, whether it is known |
     /// | <c>GET v1/map/locations/{id}/check</c> | the stations of a pool of the roaming network, each proof checked against the identity keys of the trust anchor trusted here, with its tariffs and energy meters |
     /// | <c>GET v1/configuration/map</c>, <c>PUT</c> | where the map takes its stations from: <c>{ "stationsURL" }</c> |
     /// | <c>GET v1/configuration/roamingNetwork</c>, <c>PUT</c> | the roaming network of the map: <c>{ "trustAnchor", "trustedKeys"? }</c>, its QR code, URI or JSON, and the thumbprints of its identity keys to trust |

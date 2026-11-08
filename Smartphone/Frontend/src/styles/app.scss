@@ -133,6 +133,12 @@ $status-colours: (
     gap:          0.35rem;
 }
 
+// Where the status of a roaming network's charge points comes from, or why it
+// is not known: a line of its own below the colours.
+.map-legend .roaming-status {
+    flex-basis:   100%;
+}
+
 .station-dot {
     display:        inline-block;
     width:          0.75rem;

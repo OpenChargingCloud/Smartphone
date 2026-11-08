@@ -5,7 +5,7 @@
  * the check of a session there. Each test lays over them what it is about.
  */
 
-import type { ChargingLocation, ChargingSession, LocationCheck, MapData, MeterValueCheck, SessionCheck, StationCheck } from '../src/api/client';
+import type { ChargingLocation, ChargingSession, LocationCheck, MapData, MeterValueCheck, RoamingNetworkStatus, SessionCheck, StationCheck } from '../src/api/client';
 
 
 /** A station of the map: one available AC point and one out of order. */
@@ -202,13 +202,20 @@ export function paradies(more: Partial<ChargingLocation> = {}): ChargingLocation
     };
 }
 
-/** The map of the roaming network QA. */
-export function roamingMapData(locations: ChargingLocation[] = [ paradies() ]): MapData {
+/** The map of the roaming network QA - the status of its charge points followed, or not. */
+export function roamingMapData(locations: ChargingLocation[] = [ paradies() ], status: RoamingNetworkStatus | null = null): MapData {
     return {
         ...mapData(locations),
         source:          'roamingNetwork',
-        roamingNetwork:  { id: 'QA', name: 'Quality Assurance', from: 'https://hub.example/poi/RNs/QA', error: null }
+        roamingNetwork:  { id: 'QA', name: 'Quality Assurance', from: 'https://hub.example/poi/RNs/QA', error: null, status }
     };
+}
+
+/** The status of the charge points of QA, followed over its WebSocket since 08:00 - or, not live, why not. */
+export function roamingStatus(live = true, error: string | null = null): RoamingNetworkStatus {
+    return live
+               ? { live: true,  from: 'wss://hub.example/poi/RNs/QA/history/ws', since: '2026-10-10T08:00:00Z', error: null, evses: 2 }
+               : { live: false, from: null, since: null, error, evses: 0 };
 }
 
 /** The check of a station of the pool: its proof attested by OCC, or - not verified - why not. */

@@ -174,6 +174,9 @@ namespace cloud.charging.open.Smartphone
                            : $"'{Who}' at the web interface removed the trust anchor of the roaming network: the map shows its demo stations.",
                        "map", "poi", "configuration", "web");
 
+            // The status of the network set now, and of no other.
+            FollowRoamingStatus();
+
             return true;
 
         }

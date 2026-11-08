@@ -292,11 +292,14 @@ namespace cloud.charging.open.Smartphone
         #region (protected override) OnStopping()
 
         /// <summary>
-        /// Before the server stops: no more proofs are asked for.
+        /// Before the server stops: no more proofs are asked for, and the
+        /// status of the roaming network is followed no more.
         /// </summary>
-        protected override Task OnStopping()
-
-            => StopKeepingProofsAsync();
+        protected override async Task OnStopping()
+        {
+            await StopKeepingProofsAsync();
+            await StopFollowingRoamingStatusAsync();
+        }
 
         #endregion
 

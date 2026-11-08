@@ -28,7 +28,9 @@ import { html, nothing, render, type TemplateResult } from '@node/view';
  * leaves alone; everything around it is drawn by comparing, as on every other
  * page. Its tiles are OpenStreetMap's - the one thing from elsewhere the page
  * is let load - and its stations are asked again every half minute, so that
- * the pins change colour while somebody looks.
+ * the pins change colour while somebody looks: every ten seconds while the
+ * smartphone follows the status of a roaming network over its WebSocket,
+ * which is what tells a free charge point from a taken one.
  */
 export const mapPage: Page = {
 
@@ -66,6 +68,9 @@ export const mapPage: Page = {
         const unchecked = new Map<string, string>();
 
         const ofRoamingNetwork = () => data?.source === 'roamingNetwork';
+
+        /** Of a roaming network, whether the status of its charge points is known: followed over its WebSocket now. */
+        const statusKnown = () => !ofRoamingNetwork() || data?.roamingNetwork?.status?.live === true;
 
 
         function draw(): void {
@@ -105,7 +110,7 @@ export const mapPage: Page = {
                                                 <span class="station-dot ${statusClass(stationStatus(location))}"></span>
                                                 <span class="map-result-name">${location.name}</span>
                                                 <span class="muted small">${location.address}, ${location.city} -
-                                                    ${ofRoamingNetwork()
+                                                    ${!statusKnown()
                                                           ? `${location.evses.length} charge point(s), their status not known`
                                                           : `${availability(location).available} of ${availability(location).total} available`}</span>
                                             </button>
@@ -129,6 +134,7 @@ export const mapPage: Page = {
                                       : `From the roaming network ${data.roamingNetwork?.name ?? data.roamingNetwork?.id ?? ''}, its stations checked as they are opened`},
                                 as of ${dayAndTime(data.timestamp)}.
                             </span>
+                            ${ofRoamingNetwork() ? statusView() : nothing}
                         ` : nothing}
                     </div>
 
@@ -139,14 +145,29 @@ export const mapPage: Page = {
         }
 
 
+        /** Where the status of the charge points of the roaming network comes from - or why it is not known. */
+        function statusView(): TemplateResult {
+
+            const status = data?.roamingNetwork?.status;
+
+            return status?.live === true
+                       ? html`<span class="muted roaming-status live">The status of its charge points as it says it now, over its WebSocket since ${dayAndTime(status.since ?? '')} - not signed.</span>`
+                       : html`<span class="muted roaming-status not-known">The status of its charge points is not known${status?.error ? html`: ${status.error}` : '.'}</span>`;
+
+        }
+
+
         /** The colours a pin can have, and what each says. */
         function legend(): TemplateResult {
 
-            // A roaming network says the status of its EVSEs only over its
-            // WebSocket: its pins are of a status not known.
-            const shown = ofRoamingNetwork()
+            // A roaming network says the status of its EVSEs over its
+            // WebSocket: while it is not reached, its pins are of a status
+            // not known.
+            const shown = !statusKnown()
                               ? [ 'UNKNOWN', 'CHARGING' ] as const
-                              : [ 'AVAILABLE', 'CHARGING', 'RESERVED', 'OUTOFORDER', 'PLANNED' ] as const;
+                              : ofRoamingNetwork()
+                                    ? [ 'AVAILABLE', 'CHARGING', 'RESERVED', 'INOPERATIVE', 'OUTOFORDER', 'UNKNOWN' ] as const
+                                    : [ 'AVAILABLE', 'CHARGING', 'RESERVED', 'OUTOFORDER', 'PLANNED' ] as const;
 
             return html`${shown.map(status => html`
                 <span class="legend-entry"><span class="station-dot ${statusClass(status)}"></span> ${statusWord(status)}</span>
@@ -327,7 +348,7 @@ export const mapPage: Page = {
         }
 
 
-        /** Whether this phone may start at an EVSE: available, or of a roaming network, whose status is not known. */
+        /** Whether this phone may start at an EVSE: available, or of a roaming network whose status is not known, as at one a driver stands in front of. */
         function isFree(evse: EVSE): boolean {
             return evse.status === 'AVAILABLE' || (ofRoamingNetwork() && evse.status === 'UNKNOWN');
         }
@@ -608,7 +629,7 @@ export const mapPage: Page = {
             }
 
             if (!cancelled)
-                timer = setTimeout(() => void load(), 30_000);
+                timer = setTimeout(() => void load(), ofRoamingNetwork() && statusKnown() ? 10_000 : 30_000);
 
         }
 

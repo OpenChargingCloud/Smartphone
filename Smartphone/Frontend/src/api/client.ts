@@ -113,8 +113,22 @@ export interface MapData {
     timestamp:        string;
     statuses:         EVSEStatus[];
     locations:        ChargingLocation[];
-    /** Of a roaming network: which, the URL that listed its pools, or why none did. */
-    roamingNetwork?:  { id: string; name: string | null; from: string | null; error: string | null };
+    /** Of a roaming network: which, the URL that listed its pools, or why none did, and how its status is followed. */
+    roamingNetwork?:  { id: string; name: string | null; from: string | null; error: string | null; status?: RoamingNetworkStatus | null };
+}
+
+/**
+ * The status of the charge points of a roaming network, followed over its
+ * WebSocket: known while it is reached, from where and since when - or why
+ * not. Nothing of it is signed.
+ */
+export interface RoamingNetworkStatus {
+    live:   boolean;
+    from:   string | null;
+    since:  string | null;
+    error:  string | null;
+    /** How many EVSEs say their status. */
+    evses:  number;
 }
 
 /** A public key an energy meter signs its measurements with: the DER of its SubjectPublicKeyInfo as Base64. */
