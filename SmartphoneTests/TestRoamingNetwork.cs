@@ -73,6 +73,17 @@ namespace cloud.charging.open.Smartphone.Tests
         /// </summary>
         public const String  DCMeterSerial  = "DC-2026-001";
 
+        /// <summary>
+        /// The web payment page of DE*GEF, where a driver pays ad hoc: of the
+        /// AC station, which names none of its own, nor does its pool.
+        /// </summary>
+        public const String  WebPaymentURL    = "https://pay.gef.example/";
+
+        /// <summary>
+        /// The web payment page of the DC station, its own.
+        /// </summary>
+        public const String  DCWebPaymentURL  = "https://pay.gef.example/stations/S2";
+
         #endregion
 
         #region Properties
@@ -177,6 +188,7 @@ namespace cloud.charging.open.Smartphone.Tests
                                new JProperty("lastChange",    created.ToISO8601()),
                                new JProperty("identityKeys",  new JArray(POIPublicKey.From(gefIdentity).ToJSON(Embedded: true))),
                                new JProperty("signingKeys",   new JArray(gefSigningKey.ToJSON(Embedded: true))),
+                               new JProperty("webPaymentURL", WebPaymentURL),
                                new JProperty("chargingTariffs", new JArray(
                                    Tariff(ACTariff, "AC", 0.49m, created),
                                    Tariff(DCTariff, "DC", 0.69m, created)
@@ -196,7 +208,7 @@ namespace cloud.charging.open.Smartphone.Tests
                                    new JProperty("lastChange",   created.ToISO8601()),
                                    new JProperty("chargingStations", new JArray(
                                        Station(ACStation, ACEVSE, "AC_ThreePhases", 22000, "IEC_62196_T2",       "SOCKET", ACTariff, "meter-ac-1", "AC-2026-001", acMeterKey, created),
-                                       Station(DCStation, DCEVSE, "DC",             150000, "IEC_62196_T2_COMBO", "CABLE",  DCTariff, "meter-dc-1", DCMeterSerial, dcMeterKey, created)
+                                       WithWebPayment(Station(DCStation, DCEVSE, "DC", 150000, "IEC_62196_T2_COMBO", "CABLE", DCTariff, "meter-dc-1", DCMeterSerial, dcMeterKey, created), DCWebPaymentURL)
                                    ))
                                )))
                            )))
@@ -302,6 +314,19 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
+
+        #region (private static) WithWebPayment(Station, URL)
+
+        /// <summary>
+        /// A station with a web payment page of its own.
+        /// </summary>
+        private static JObject WithWebPayment(JObject Station, String URL)
+        {
+            Station.Add(new JProperty("webPaymentURL", URL));
+            return Station;
+        }
+
+        #endregion
 
         #region (private static) Station(...) / Tariff(...) / Element(Price)
 

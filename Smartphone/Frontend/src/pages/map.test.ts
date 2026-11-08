@@ -11,7 +11,7 @@
 
 import { asked, leave, open, refused, type as typeInto, until, type Asked } from '../../test/smartphone.ts';
 import { holzmarkt, lobeda, locationCheck, mapData, paradies, roamingMapData, roamingStatus, session } from '../../test/charging.ts';
-import type { ChargingLocation, EVSEStatus, RoamingNetworkStatus } from '../api/client.ts';
+import type { ChargingLocation, EVSEStatus, RoamingNetworkStatus, WebPayment } from '../api/client.ts';
 
 import { strict as assert }    from 'node:assert';
 import { after, describe, it } from 'node:test';
@@ -154,14 +154,17 @@ describe('the map', () => {
 
 describe('the map of a roaming network', () => {
 
-    let verified = true;
-    let checked  = false;
+    let verified  = true;
+    let checked   = false;
+    let payments: (WebPayment | null)[] = [];
 
     function network({ method, path }: Asked): unknown {
 
         if (method === 'GET' && path.startsWith('/map/locations/') && path.endsWith('/check')) {
             checked = true;
-            return locationCheck(verified);
+            const check = locationCheck(verified);
+            check.stations.forEach((station, index) => station.webPayment = payments[index] ?? null);
+            return check;
         }
 
         if (method === 'GET' && path.startsWith('/map'))
@@ -215,6 +218,35 @@ describe('the map of a roaming network', () => {
         await until(() => asked.some(one => one.method === 'POST' && one.path === '/charging/sessions'), '"Charge now!" did not ask the smartphone');
 
         assert.deepEqual(asked.filter(one => one.method === 'POST').pop()!.body, { locationId: 'DE*GEF*P1', evseUid: 'DE*GEF*E1*1' });
+
+    });
+
+    it('offers the web payment page of the station chosen, as its proof says', async () => {
+
+        verified  = true;
+        checked   = false;
+        payments  = [ { url: 'https://pay.gef.example/stations/S1', of: 'chargingStation',         error: null },
+                      { url: 'https://pay.gef.example/',            of: 'chargingStationOperator', error: null } ];
+
+        try
+        {
+
+            const root = await opened();
+
+            await until(() => root.querySelector('.station-popup a.web-payment') !== null, 'no web payment page was offered');
+
+            const link = root.querySelector<HTMLAnchorElement>('.station-popup a.web-payment')!;
+
+            assert.equal(link.getAttribute('href'),   'https://pay.gef.example/stations/S1', 'not the page of the station of the charge point chosen');
+            assert.equal(link.getAttribute('target'), '_blank');
+            assert.match(link.getAttribute('rel')!,   /noopener/);
+            assert.match(root.querySelector('.station-popup')!.textContent!, /The web payment page of its station, as its proof says/);
+
+        }
+        finally
+        {
+            payments = [];
+        }
 
     });
 

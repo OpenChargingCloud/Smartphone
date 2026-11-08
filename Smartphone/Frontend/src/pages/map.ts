@@ -2,7 +2,7 @@ import * as L from 'leaflet';
 
 import { api, type ChargingLocation, type EVSE, type LocationCheck, type MapData } from '../api/client';
 import { auth } from '../auth';
-import { availability, maxPowerKW, positionOf, search, standardWord, stationStatus, statusClass, statusWord } from '../map/stations';
+import { availability, maxPowerKW, positionOf, search, standardWord, stationStatus, statusClass, statusWord, webPaymentOf, webPaymentWord } from '../map/stations';
 import { dayAndTime, money } from '../charging/words';
 import { toURL } from '@node/basePath';
 import type { Page } from '@node/router';
@@ -295,6 +295,12 @@ export const mapPage: Page = {
             // what it costs and who runs it are only what they say then.
             const blocked  = signed && checked?.verified !== true;
 
+            // Where to pay ad hoc, as the proof of the station chosen says -
+            // the operator's page, not the QR code at the station.
+            const payment  = signed && checked?.verified === true
+                                 ? webPaymentOf(checked, location.evses.find(evse => evse.uid === pick)?.evse_id)
+                                 : null;
+
             render(element, html`
 
                 <div class="station-popup">
@@ -325,6 +331,15 @@ export const mapPage: Page = {
                     ` : html`
                         <div class="small muted">${mayButNot('look at the map', 'start charging')}</div>
                     `}
+
+                    ${payment?.url ? html`
+                        <a class="btn web-payment" href=${payment.url} target="_blank" rel="noopener noreferrer">
+                            <i class="fa-solid fa-credit-card"></i> Pay ad hoc at its operator
+                        </a>
+                        <div class="small muted">The web payment page ${webPaymentWord(payment.of)}, as its proof says.</div>
+                    ` : payment?.error ? html`
+                        <div class="small muted web-payment-error">${payment.error}</div>
+                    ` : nothing}
 
                     ${signed ? html`
                         <a class="small station-details" href="${toURL(`/map/locations/${encodeURIComponent(id)}`)}">

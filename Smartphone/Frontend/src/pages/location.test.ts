@@ -122,6 +122,28 @@ describe('what is signed about a station', () => {
 
     });
 
+    it('names the web payment page of the operator of a station, and links it only where it is https', async () => {
+
+        answer = () => {
+            const check = locationCheck();
+            check.stations[0]!.webPayment = { url: 'https://pay.gef.example/pools/P1', of: 'chargingPool',    error: null };
+            check.stations[1]!.webPayment = { url: null, of: 'chargingStation', error: "'http://pay.gef.example/S2' is no https URL, so it is not offered." };
+            return check;
+        };
+
+        const root  = await open(locationPage, '/map/locations/DE*GEF*P1', [ 'map:read' ],
+                                 smartphone, root => root.querySelectorAll('.checked-evse').length === 2);
+
+        const cards = [ ...root.querySelectorAll<HTMLElement>('.station-check-card') ];
+        const link  = cards[0]!.querySelector<HTMLAnchorElement>('a.web-payment');
+
+        assert.equal(link?.getAttribute('href'), 'https://pay.gef.example/pools/P1', 'the web payment page is not linked');
+        assert.match(cards[0]!.textContent!, /Web payment\s*https:\/\/pay\.gef\.example\/pools\/P1\s*of its pool/);
+        assert.equal(cards[1]!.querySelector('a.web-payment'), null, 'a page that is no https URL is linked');
+        assert.match(cards[1]!.textContent!, /is no https URL, so it is not offered/);
+
+    });
+
     it('says when there is nothing to check', async () => {
 
         const root = await open(locationPage, '/map/locations/nowhere', [ 'map:read' ],

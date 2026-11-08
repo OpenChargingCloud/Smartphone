@@ -628,6 +628,13 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(dc["attestation"]!["role"]!.Value<String>(),                         Is.EqualTo("roamingNetworkOperator"));
                 Assert.That(dc["chargingStationOperator"]!["id"]!.Value<String>(),               Is.EqualTo("DE*GEF"));
 
+                // Where to pay ad hoc: the DC station's own page, of the AC
+                // station - naming none, nor its pool - that of its operator.
+                Assert.That(dc["webPayment"]!["url"]!.Value<String>(),                           Is.EqualTo(TestRoamingNetwork.DCWebPaymentURL));
+                Assert.That(dc["webPayment"]!["of"]!. Value<String>(),                           Is.EqualTo("chargingStation"));
+                Assert.That(ac["webPayment"]!["url"]!.Value<String>(),                           Is.EqualTo(TestRoamingNetwork.WebPaymentURL));
+                Assert.That(ac["webPayment"]!["of"]!. Value<String>(),                           Is.EqualTo("chargingStationOperator"));
+
                 Assert.That(dcEVSE["id"]!.Value<String>(),                                       Is.EqualTo(TestRoamingNetwork.DCEVSE));
                 Assert.That(dcEVSE["maxPowerKW"]!.Value<Decimal>(),                              Is.EqualTo(150m));
                 Assert.That(dcEVSE["tariffs"]![0]!["id"]!.Value<String>(),                       Is.EqualTo(TestRoamingNetwork.DCTariff));
@@ -1239,6 +1246,47 @@ namespace cloud.charging.open.Smartphone.Tests
 
                 Assert.That(Roaming.RoamingNetworkStatus.WebSocketURLOf("https://hub.example/poi/RNs/QA/"),  Is.EqualTo("wss://hub.example/poi/RNs/QA/history/ws"));
                 Assert.That(Roaming.RoamingNetworkStatus.WebSocketURLOf("http://127.0.0.1:2356/RNs/QA"),     Is.EqualTo("ws://127.0.0.1:2356/RNs/QA/history/ws"));
+            }
+
+        }
+
+        #endregion
+
+        #region AWebPaymentPageIsTheMostSpecificAndOnlyHTTPS()
+
+        /// <summary>
+        /// The web payment page of a station as its proof gives it: its own
+        /// before that of its pool before that of its operator - and only an
+        /// https URL linked, the first one given deciding, so that a station's
+        /// own page over http is not passed over for its operator's.
+        /// </summary>
+        [Test]
+        public void AWebPaymentPageIsTheMostSpecificAndOnlyHTTPS()
+        {
+
+            static JObject With(String? URL)
+                => URL is null ? [] : new JObject(new JProperty("webPaymentURL", URL));
+
+            var ofStation   = Roaming.StationCheck.WebPaymentJSON(With("https://pay.example/S1"), With("https://pay.example/P1"), With("https://pay.example/"));
+            var ofPool      = Roaming.StationCheck.WebPaymentJSON(With(null),                     With("https://pay.example/P1"), With("https://pay.example/"));
+            var ofOperator  = Roaming.StationCheck.WebPaymentJSON(With(null),                     With(null),                     With("https://pay.example/"));
+            var none        = Roaming.StationCheck.WebPaymentJSON(With(null),                     With(null),                     With(null));
+            var plain       = Roaming.StationCheck.WebPaymentJSON(With("http://pay.example/S1"),  With(null),                     With("https://pay.example/"));
+            var script      = Roaming.StationCheck.WebPaymentJSON(With("javascript:alert(1)"),    With(null),                     With(null));
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(ofStation! ["url"]!.Value<String>(),  Is.EqualTo("https://pay.example/S1"));
+                Assert.That(ofStation  ["of"]!. Value<String>(),  Is.EqualTo("chargingStation"));
+                Assert.That(ofPool!    ["url"]!.Value<String>(),  Is.EqualTo("https://pay.example/P1"));
+                Assert.That(ofPool     ["of"]!. Value<String>(),  Is.EqualTo("chargingPool"));
+                Assert.That(ofOperator!["of"]!. Value<String>(),  Is.EqualTo("chargingStationOperator"));
+                Assert.That(none,                                 Is.Null);
+
+                Assert.That(plain!     ["url"]!.Type,             Is.EqualTo(JTokenType.Null));
+                Assert.That(plain      ["of"]!. Value<String>(),  Is.EqualTo("chargingStation"));
+                Assert.That(plain      ["error"]!.Value<String>(), Does.Contain("is no https URL"));
+                Assert.That(script!    ["url"]!.Type,             Is.EqualTo(JTokenType.Null));
             }
 
         }

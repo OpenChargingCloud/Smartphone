@@ -1,10 +1,12 @@
 /**
  * What the map says about charging stations apart from drawing them: where
- * one is, what colour its pin has, and which of them a search finds.
+ * one is, what colour its pin has, which of them a search finds, and which
+ * web payment page a pool of the roaming network offers.
  */
 
-import { holzmarkt, lobeda } from '../../test/charging.ts';
-import { availability, maxPowerKW, positionOf, search, standardWord, stationStatus } from './stations.ts';
+import { holzmarkt, lobeda, locationCheck } from '../../test/charging.ts';
+import { availability, maxPowerKW, offeredWebPayment, positionOf, search, standardWord, stationStatus, webPaymentOf, webPaymentWord } from './stations.ts';
+import type { LocationCheck, WebPayment } from '../api/client.ts';
 
 import { strict as assert }  from 'node:assert';
 import { describe, it }      from 'node:test';
@@ -65,6 +67,54 @@ describe('the search of the map', () => {
         assert.deepEqual(search(both, 'jena').map(one => one.id),           [ 'DEMO-JENA-HOLZMARKT', 'DEMO-JENA-LOBEDA' ]);
         assert.deepEqual(search(both, 'jena 07747').map(one => one.id),     [ 'DEMO-JENA-LOBEDA' ]);
         assert.deepEqual(search(both, 'lobeda jena').map(one => one.id),    [ 'DEMO-JENA-LOBEDA' ]);
+    });
+
+});
+
+
+describe('the web payment page of a pool of the roaming network', () => {
+
+    function withPayments(...payments: (WebPayment | null)[]): LocationCheck {
+        const check = locationCheck();
+        check.stations.forEach((station, index) => station.webPayment = payments[index] ?? null);
+        return check;
+    }
+
+    const ofS1        : WebPayment = { url: 'https://pay.gef.example/stations/S1', of: 'chargingStation',         error: null };
+    const ofOperator  : WebPayment = { url: 'https://pay.gef.example/',            of: 'chargingStationOperator', error: null };
+
+    it('is that of the station of the charge point chosen', () => {
+        assert.deepEqual(webPaymentOf(withPayments(ofS1, ofOperator), 'DE*GEF*E2*1'), ofOperator);
+        assert.deepEqual(webPaymentOf(withPayments(ofS1, ofOperator), 'DE*GEF*E1*1'), ofS1);
+    });
+
+    it('is none where the station of the charge point chosen names none, rather than another station\'s', () => {
+        assert.equal(webPaymentOf(withPayments(null, ofOperator), 'DE*GEF*E1*1'), null);
+    });
+
+    it('is that of the first station naming one, where no charge point is chosen', () => {
+        assert.deepEqual(webPaymentOf(withPayments(null, ofOperator)), ofOperator);
+    });
+
+    it('is none where no proof holds', () => {
+        const check = withPayments(ofS1, ofOperator);
+        check.stations.forEach(station => station.verified = false);
+        assert.equal(webPaymentOf(check, 'DE*GEF*E1*1'), null);
+        assert.equal(webPaymentOf(undefined), null);
+    });
+
+    it('is linked only where it is https, and said otherwise', () => {
+        const plain = offeredWebPayment({ url: 'http://pay.gef.example/', of: 'chargingPool', error: null });
+        assert.equal(plain?.url, null);
+        assert.match(plain!.error!, /'http:\/\/pay\.gef\.example\/' is no https URL/);
+        assert.equal(offeredWebPayment({ url: 'javascript:alert(1)', of: 'chargingPool', error: null })?.url, null);
+        assert.deepEqual(offeredWebPayment(ofS1), ofS1);
+    });
+
+    it('says whose it is', () => {
+        assert.equal(webPaymentWord('chargingStation'),         'of its station');
+        assert.equal(webPaymentWord('chargingPool'),            'of its pool');
+        assert.equal(webPaymentWord('chargingStationOperator'), 'of its operator');
     });
 
 });

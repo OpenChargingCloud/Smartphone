@@ -421,6 +421,8 @@ namespace cloud.charging.open.Smartphone.Roaming
                          new JProperty("firmwareVersion",   station["firmwareVersion"]?. Value<String>())
                      )));
 
+            json.Add(new JProperty("webPayment",  WebPaymentJSON(Station.ChargingStation, Station.ChargingPool, Station.Operator)));
+
             json.Add(new JProperty("evses", new JArray(
                          Station.EVSEs.Select(evse => {
 
@@ -466,6 +468,62 @@ namespace cloud.charging.open.Smartphone.Roaming
             json.Add(new JProperty("priceConflict",         PriceConflict));
 
             return json;
+
+        }
+
+        #endregion
+
+        #region (static) WebPaymentJSON(Station, Pool, Operator)
+
+        /// <summary>
+        /// The web payment page of the operator of a verified station, where a
+        /// driver pays for charging there ad hoc and starts it: the station's
+        /// own, else that of its pool, else the operator's - each as the proof
+        /// gives it, of the station and its pool as they are at runtime, with
+        /// what their templates give them. Null where none is given.
+        /// </summary>
+        /// <remarks>
+        /// Not the URL in the dynamic QR code of the station, which is of one
+        /// EVSE and changes every few minutes; this one is static, so it shows
+        /// nothing of where the driver stands. Only an https URL is offered:
+        /// a page that takes payments over anything else, or a URL that is no
+        /// web page at all, is said and not linked - the first one given
+        /// decides, so a station's own is never passed over for its pool's.
+        /// </remarks>
+        /// <param name="Station">The station as the proof gives it.</param>
+        /// <param name="Pool">Its pool as the proof gives it.</param>
+        /// <param name="Operator">Its operator as the proof gives it.</param>
+        public static JObject? WebPaymentJSON(JObject  Station,
+                                              JObject  Pool,
+                                              JObject  Operator)
+        {
+
+            foreach (var (entity, of) in new (JObject Entity, String Of)[] {
+                                             (Station,   "chargingStation"),
+                                             (Pool,      "chargingPool"),
+                                             (Operator,  "chargingStationOperator")
+                                         })
+            {
+
+                // "webPaymentURL" of a station, a pool and an operator alike.
+                if (entity[ChargingStationOperator.PropertyKeys.WebPaymentURL] is not JValue { Type: JTokenType.String } value ||
+                    value.Value<String>() is not String text)
+                {
+                    continue;
+                }
+
+                var https = Uri.TryCreate(text, UriKind.Absolute, out var uri) &&
+                            uri.Scheme == Uri.UriSchemeHttps;
+
+                return new JObject(
+                           new JProperty("url",    https ? text : null),
+                           new JProperty("of",     of),
+                           new JProperty("error",  https ? null : $"'{text}' is no https URL, so it is not offered.")
+                       );
+
+            }
+
+            return null;
 
         }
 

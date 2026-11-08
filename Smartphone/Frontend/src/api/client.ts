@@ -211,6 +211,17 @@ export interface StationTrust {
     validUntil:         string | null;
 }
 
+/**
+ * The web payment page of the operator of a station, as its proof gives it - the station's own, else its pool's, else
+ * the operator's: where a driver pays ad hoc and starts. Not the URL in the dynamic QR code of the station. Only an
+ * https URL is offered; another one is said in its error.
+ */
+export interface WebPayment {
+    url:    string | null;
+    of:     'chargingStation' | 'chargingPool' | 'chargingStationOperator';
+    error:  string | null;
+}
+
 /** The check of one charging station: its proof against the identity keys trusted here, and what it gives where it holds. */
 export interface StationCheck {
     stationId:                 string;
@@ -225,6 +236,7 @@ export interface StationCheck {
     attestation?:              { role: string; signer: string | null; algorithm: string; keyId: string; signedAt: string; validUntil: string };
     chargingStationOperator?:  { id: string | null; name: string | null };
     station?:                  { name: string | null; manufacturer: string | null; model: string | null; hardwareRevision: string | null; firmwareVersion: string | null };
+    webPayment?:               WebPayment | null;
     evses?:                    CheckedEVSE[];
     priceStatements?:          CheckedPriceStatement[];
     priceStatementsError?:     string | null;

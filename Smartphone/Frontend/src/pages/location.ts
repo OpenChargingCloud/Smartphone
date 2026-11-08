@@ -1,6 +1,6 @@
 import { api, type CheckedEVSE, type CheckedPriceStatement, type CheckedTariff, type EnergyMeter, type LocationCheck, type StationCheck, type TariffElement } from '../api/client';
 import { dayAndTime, money } from '../charging/words';
-import { standardWord } from '../map/stations';
+import { offeredWebPayment, standardWord, webPaymentWord } from '../map/stations';
 import { toURL } from '@node/basePath';
 import type { Page } from '@node/router';
 import { reloadButton, shell } from '@node/shell';
@@ -121,6 +121,7 @@ export const locationPage: Page = {
             const attestation  = station.attestation;
             const trust        = station.trust;
             const made         = [ station.station?.manufacturer, station.station?.model ].filter(part => part).join(' ');
+            const payment      = offeredWebPayment(station.webPayment);
 
             return html`
                 <section class="card station-check-card">
@@ -131,6 +132,10 @@ export const locationPage: Page = {
                         ${kv('Operator',        `${station.chargingStationOperator?.name ?? ''} (${station.chargingStationOperator?.id ?? ''})`)}
                         ${made.length > 0 ? kv('Station', made) : nothing}
                         ${station.station?.firmwareVersion ? kv('Firmware', station.station.firmwareVersion) : nothing}
+                        ${payment !== null ? kv('Web payment', payment.url !== null
+                              ? html`<a class="web-payment" href=${payment.url} target="_blank" rel="noopener noreferrer">${payment.url}</a>
+                                     <span class="muted">${webPaymentWord(payment.of)}</span>`
+                              : payment.error) : nothing}
                         ${attestation ? html`
                             ${kv('Attested by',  `${attestation.signer ?? station.roamingNetwork?.operator ?? ''}, as ${attestation.role}`)}
                             ${kv('Its key',      html`<span class="commit">${attestation.keyId}</span> (${attestation.algorithm})`)}

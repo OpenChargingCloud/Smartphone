@@ -1,4 +1,4 @@
-import type { ChargingLocation, EVSE, EVSEStatus } from '../api/client';
+import type { ChargingLocation, EVSE, EVSEStatus, LocationCheck, WebPayment } from '../api/client';
 
 /**
  * What the map says about charging stations, apart from drawing them: where
@@ -115,5 +115,47 @@ export function search(Locations: readonly ChargingLocation[],
     const inName = (location: ChargingLocation) => words.every(word => location.name.toLocaleLowerCase().includes(word)) ? 0 : 1;
 
     return found.sort((a, b) => inName(a) - inName(b) || a.name.localeCompare(b.name));
+
+}
+
+
+/**
+ * The web payment page to offer at a pool of the roaming network, where a
+ * driver pays ad hoc and starts: that of the station of the EVSE chosen,
+ * where its proof holds - else of the first station whose proof holds and
+ * names one. Only an https URL is linked; the phone has checked that, and it
+ * is checked here again, as a link is what a page goes to.
+ */
+export function webPaymentOf(Check: LocationCheck | undefined, EVSEId?: string): WebPayment | null {
+
+    const verified  = (Check?.stations ?? []).filter(station => station.verified);
+    const ofEVSE    = EVSEId !== undefined ? verified.find(station => (station.evses ?? []).some(evse => evse.id === EVSEId)) : undefined;
+    const payment   = ofEVSE !== undefined
+                          ? ofEVSE.webPayment ?? null
+                          : verified.map(station => station.webPayment).find(found => found !== undefined && found !== null) ?? null;
+
+    return offeredWebPayment(payment);
+
+}
+
+
+/** A web payment page as it may be linked: an https URL only, another one said in its error. */
+export function offeredWebPayment(Payment: WebPayment | null | undefined): WebPayment | null {
+
+    return Payment !== undefined && Payment !== null && Payment.url !== null && !Payment.url.startsWith('https://')
+               ? { ...Payment, url: null, error: Payment.error ?? `'${Payment.url}' is no https URL, so it is not offered.` }
+               : Payment ?? null;
+
+}
+
+
+/** Whose web payment page it is: the proof gives the station's own, else its pool's, else its operator's. */
+export function webPaymentWord(Of: WebPayment['of']): string {
+
+    switch (Of) {
+        case 'chargingStation':  return 'of its station';
+        case 'chargingPool':     return 'of its pool';
+        default:                 return 'of its operator';
+    }
 
 }
