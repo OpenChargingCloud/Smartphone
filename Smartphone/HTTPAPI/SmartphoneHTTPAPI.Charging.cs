@@ -272,7 +272,7 @@ namespace cloud.charging.open.Smartphone
 
             await Smartphone.ReportsFromProviderAsync([ session ]);
 
-            return JSONResponse(Request, HTTPStatusCode.OK, (Smartphone.Sessions.Get(id) ?? session).ToJSON(Smartphone.TimeProvider.GetUtcNow()));
+            return JSONResponse(Request, HTTPStatusCode.OK, Smartphone.SessionJSON(Smartphone.Sessions.Get(id) ?? session, Smartphone.TimeProvider.GetUtcNow()));
 
         }
 
@@ -309,7 +309,7 @@ namespace cloud.charging.open.Smartphone
             if (start.Session is null)
                 return Refused(Request, start.Refusal, start.Error ?? "Nothing was started.");
 
-            return JSONResponse(Request, HTTPStatusCode.Created, start.Session.ToJSON(Smartphone.TimeProvider.GetUtcNow()));
+            return JSONResponse(Request, HTTPStatusCode.Created, Smartphone.SessionJSON(start.Session, Smartphone.TimeProvider.GetUtcNow()));
 
         }
 
@@ -330,7 +330,7 @@ namespace cloud.charging.open.Smartphone
             if (stop.Session is null)
                 return Refused(Request, stop.Refusal, stop.Error ?? "Nothing was stopped.");
 
-            return JSONResponse(Request, HTTPStatusCode.OK, stop.Session.ToJSON(Smartphone.TimeProvider.GetUtcNow()));
+            return JSONResponse(Request, HTTPStatusCode.OK, Smartphone.SessionJSON(stop.Session, Smartphone.TimeProvider.GetUtcNow()));
 
         }
 

@@ -330,12 +330,15 @@ namespace cloud.charging.open.Smartphone
         #region (protected override) OnStarted()
 
         /// <summary>
-        /// What a smartphone says once it is up: where its API is.
+        /// What a smartphone says once it is up: where its API is - and from
+        /// now on, the proofs of the stations of sessions that charge are kept.
         /// </summary>
         protected override Task OnStarted()
         {
 
             Log.Info($"The JSON API is at {APIURL}v1/status", "web", "http");
+
+            StartKeepingProofs();
 
             return Task.CompletedTask;
 

@@ -150,7 +150,7 @@ namespace cloud.charging.open.Smartphone.Charging
 
         #endregion
 
-        #region TryStart(Location, EVSE, StatusOf, StartedBy, Ticket, Start, out Session, out Error, out NotSaved)
+        #region TryStart(Location, EVSE, StatusOf, StartedBy, Ticket, Start, out Session, out Error, out NotSaved, Evidence = null)
 
         /// <summary>
         /// Start a session at an EVSE of a location - where it is available, or
@@ -165,6 +165,7 @@ namespace cloud.charging.open.Smartphone.Charging
         /// <param name="Session">The session started.</param>
         /// <param name="Error">Why none was.</param>
         /// <param name="NotSaved">True where the file could not be written: nothing about the request was wrong, and nothing was started.</param>
+        /// <param name="Evidence">At a station of a roaming network, the proof of its station and the price statements that held.</param>
         public Boolean TryStart(ChargingLocation                           Location,
                                 ChargingEVSE                               EVSE,
                                 Func<ChargingEVSE, DateTimeOffset, String> StatusOf,
@@ -173,7 +174,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                 ChargingStartReference?                    Start,
                                 [NotNullWhen(true)]  out ChargingSession?  Session,
                                 [NotNullWhen(false)] out String?           Error,
-                                out Boolean                                NotSaved)
+                                out Boolean                                NotSaved,
+                                SessionEvidence?                           Evidence   = null)
         {
 
             Session   = null;
@@ -201,7 +203,7 @@ namespace cloud.charging.open.Smartphone.Charging
                     return false;
                 }
 
-                var started = ChargingSession.New(NewId(), Location, EVSE, now, StartedBy, Ticket, Start);
+                var started = ChargingSession.New(NewId(), Location, EVSE, now, StartedBy, Ticket, Start, Evidence);
 
                 sessions.Add(started);
 
@@ -326,6 +328,46 @@ namespace cloud.charging.open.Smartphone.Charging
 
         #endregion
 
+        #region TryKeepProof(Id, Proof, out Error)
+
+        /// <summary>
+        /// The given proof of the station of a session, kept with it as the
+        /// latest one (<see cref="SessionEvidence.WithLatest"/>).
+        /// </summary>
+        public Boolean TryKeepProof(String                            Id,
+                                    JObject                           Proof,
+                                    [NotNullWhen(false)] out String?  Error)
+        {
+
+            lock (sync)
+            {
+
+                var index = sessions.FindIndex(session => session.Id == Id);
+
+                if (index < 0 || sessions[index].Evidence is not SessionEvidence evidence)
+                {
+                    Error = $"There is no charging session '{Id}' at a station of a roaming network on this phone.";
+                    return false;
+                }
+
+                var before = sessions[index];
+
+                sessions[index] = before with { Evidence = evidence.WithLatest(Proof) };
+
+                if (!TrySave(out Error))
+                {
+                    sessions[index] = before;
+                    return false;
+                }
+
+                return true;
+
+            }
+
+        }
+
+        #endregion
+
 
         #region (private) NewId()
 
@@ -364,8 +406,12 @@ namespace cloud.charging.open.Smartphone.Charging
                 using var reader = new JsonTextReader(new StringReader(File.ReadAllText(FilePath))) {
                                        // Times stay text, with their offsets, as
                                        // they were written - not DateTimes in
-                                       // whatever zone the machine is in.
-                                       DateParseHandling = DateParseHandling.None
+                                       // whatever zone the machine is in - and
+                                       // numbers with a fraction decimals: the
+                                       // proofs and price statements kept are
+                                       // checked as they were signed.
+                                       DateParseHandling   = DateParseHandling.None,
+                                       FloatParseHandling  = FloatParseHandling.Decimal
                                    };
 
                 array = JToken.ReadFrom(reader) as JArray

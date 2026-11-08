@@ -1,4 +1,4 @@
-import { api, type ChargingSession } from '../api/client';
+import { api, type ChargingSession, type MeterValueCheck, type SessionCheck } from '../api/client';
 import { auth } from '../auth';
 import { dayAndTime, duration, isRunning, money, reportedInWords, sessionStatusClass, sessionStatusWord, withUnit } from '../charging/words';
 import { standardWord } from '../map/stations';
@@ -14,6 +14,9 @@ import { html, nothing, render, type TemplateResult } from '@node/view';
  * cost - and, while it still starts or charges, its figures asked for again
  * every two seconds and Stop. A session the e-mobility provider reports has
  * no power, no target and no time it is full at: OCPI tells none of them.
+ * One at a station of a roaming network says how it holds against what it
+ * kept of the station: whether the meter signed the values of its charge
+ * detail record, and the price the operator stated for its start.
  */
 export const sessionPage: Page = {
 
@@ -44,6 +47,129 @@ export const sessionPage: Page = {
 
         function kv(Key: string, Value: TemplateResult | string): TemplateResult {
             return html`<div class="kv"><span class="k">${Key}</span><span class="v">${Value}</span></div>`;
+        }
+
+
+        function matches(Matches: boolean | null): TemplateResult | typeof nothing {
+            return Matches === null
+                       ? nothing
+                       : Matches
+                             ? html`<span class="chip ok"><i class="fa-solid fa-check"></i> the same</span>`
+                             : html`<span class="chip bad"><i class="fa-solid fa-xmark"></i> not the same</span>`;
+        }
+
+
+        /** How the session holds against what it kept of the station of the roaming network. */
+        function checkView(check: SessionCheck, session: ChargingSession): TemplateResult {
+
+            const values  = check.meterValues;
+            const price   = check.price;
+
+            return html`
+                <section class="card session-check">
+
+                    <h2><i class="fa-solid fa-shield-halved"></i> Checked</h2>
+
+                    ${check.error !== null ? html`<div class="error-box check-error">${check.error}</div>` : nothing}
+
+                    ${check.error === null && values === undefined ? html`
+                        <p class="small muted meter-values-pending">
+                            The meter values are checked once the charge detail record came, with the key of the
+                            energy meter the station's proof gave when they were measured.
+                        </p>
+                    ` : nothing}
+
+                    ${values !== undefined ? html`
+                        <h3>
+                            Meter values
+                            ${values.verified
+                                  ? html`<span class="chip ok"><i class="fa-solid fa-check"></i> signed by the meter</span>`
+                                  : html`<span class="chip bad"><i class="fa-solid fa-xmark"></i> not all signed by the meter</span>`}
+                        </h3>
+                        ${values.error !== null ? html`<div class="error-box meter-values-error">${values.error}</div>` : nothing}
+                        <div class="kv-list">
+                            ${values.energyKWh !== null && values.startKWh !== null && values.endKWh !== null
+                                  ? kv('Signed', `${withUnit(values.startKWh, 'kWh', 3)} to ${withUnit(values.endKWh, 'kWh', 3)}, ${withUnit(values.energyKWh, 'kWh', 3)} in all`)
+                                  : kv('Signed', 'no begin and end the meter signed')}
+                            ${values.cdrEnergyKWh !== null
+                                  ? kv('The record says', html`${withUnit(values.cdrEnergyKWh, 'kWh', 3)} ${matches(values.energyMatches)}`)
+                                  : nothing}
+                            ${values.expectedCost !== null && price?.selected
+                                  ? kv('At the price', html`${money(values.expectedCost, price.selected.currency)}
+                                                            ${values.cdrCost !== null ? html`<span class="muted">- the record says ${money(values.cdrCost, price.selected.currency)}</span>` : nothing}
+                                                            ${matches(values.costMatches)}`)
+                                  : nothing}
+                        </div>
+                        <ul class="meter-values">
+                            ${values.values.map(value => meterValueView(value))}
+                        </ul>
+                        <p class="small muted">
+                            Each checked with the key the station's proof gave for the meter of ${session.evse.evseId} at
+                            the time the meter signed - not a key the record names itself. That the meter's clock was
+                            right is not proven.
+                        </p>
+                    ` : nothing}
+
+                    ${price !== undefined ? html`
+                        <h3>Price</h3>
+                        <div class="session-price">
+                            ${price.error !== null
+                                  ? html`<div class="error-box price-error">${price.error}</div>`
+                                  : price.selected !== null
+                                        ? html`
+                                              <div class="kv-list">
+                                                  ${kv('Stated', html`${price.selected.pricePerKWh !== null
+                                                                             ? `${money(price.selected.pricePerKWh, price.selected.currency)} per kWh`
+                                                                             : 'no price per kWh'}
+                                                                       ${price.matchesSession === false
+                                                                             ? html`<span class="chip bad">this phone counted with ${money(session.cost.pricePerKWh, session.cost.currency)}</span>`
+                                                                             : nothing}`)}
+                                                  ${kv('By',       `${price.selected.signer}, for ${price.selected.entityType} ${price.selected.entityId}, number ${price.selected.sequence}, signed ${dayAndTime(price.selected.signedAt)}`)}
+                                                  ${price.selected.tariffId !== null ? kv('Tariff', html`<span class="mono">${price.selected.tariffId}</span>`) : nothing}
+                                              </div>
+                                              <p class="small muted">
+                                                  ${price.applicability === 'bound'
+                                                        ? 'In force when it started, and assigned to this session by the operator.'
+                                                        : 'In force for this charge point when it started. The operator signed no assignment of it to this session.'}
+                                              </p>`
+                                        : html`<p class="small muted price-none">
+                                                   ${price.signatures === 'missing'
+                                                         ? 'The operator stated no price for this charge point: what it costs is the tariff the station\'s proof gives.'
+                                                         : (price.diagnostics[0] ?? 'No price statement was in force when it started.')}
+                                               </p>`}
+                        </div>
+                    ` : nothing}
+
+                    <p class="small muted">Checked ${dayAndTime(check.checkedAt)}, under the identity keys of the roaming network trusted now.</p>
+
+                </section>
+            `;
+
+        }
+
+
+        function meterValueView(value: MeterValueCheck): TemplateResult {
+
+            return html`
+                <li class="meter-value ${value.verified ? 'verified' : 'not-verified'}">
+                    ${value.verified
+                          ? html`<span class="chip ok"><i class="fa-solid fa-check"></i> the meter's</span>`
+                          : html`<span class="chip bad"><i class="fa-solid fa-xmark"></i> ${value.result === null ? 'not checked' : 'not the meter\'s'}</span>`}
+                    <span>${value.nature ?? 'Meter value'}</span>
+                    ${value.readings.map(reading => html`
+                        <span>${dayAndTime(reading.measuredAt)}${reading.energyKWh !== null ? `: ${withUnit(reading.energyKWh, 'kWh', 3)}` : ''}</span>
+                    `)}
+                    ${value.meterSerialNumber !== null || value.keyId !== null ? html`
+                        <div class="small muted">
+                            ${value.meterSerialNumber !== null ? `meter ${value.meterSerialNumber}` : ''}
+                            ${value.keyId !== null ? html`, key <span class="commit">${value.keyId}</span>` : nothing}
+                            ${value.ofThisStart ? ', identified by this start' : nothing}
+                        </div>
+                    ` : nothing}
+                    ${value.error !== null ? html`<div class="small form-error">${value.error}</div>` : nothing}
+                </li>
+            `;
+
         }
 
 
@@ -188,6 +314,8 @@ export const sessionPage: Page = {
 
                         </section>
                     ` : nothing}
+
+                    ${session.check !== undefined ? checkView(session.check, session) : nothing}
 
                 </div>
 

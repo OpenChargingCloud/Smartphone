@@ -452,3 +452,34 @@ table.records.session-table {
 .mono {
     font-family: $font-mono;
 }
+
+// The meter values of a session's charge detail record, each checked.
+.session-check {
+
+    h3 {
+        font-size:  1rem;
+        margin:     0.9rem 0 0.4rem;
+    }
+
+    ul.meter-values {
+
+        list-style:  none;
+        padding:     0;
+        margin:      0.3rem 0;
+
+        li {
+            padding:     0.35rem 0;
+            border-top:  1px solid $color-border;
+        }
+
+        li > span + span {
+            margin-left:  0.5rem;
+        }
+
+        .commit {
+            word-break:  break-all;
+        }
+
+    }
+
+}

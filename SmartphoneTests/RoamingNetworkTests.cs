@@ -34,6 +34,8 @@ using cloud.charging.open.protocols.WWCP.Node.Configuration;
 using cloud.charging.open.protocols.WWCP.Node.TestKit;
 using cloud.charging.open.protocols.WWCP.POI;
 
+using cloud.charging.open.Smartphone.Charging;
+
 #endregion
 
 namespace cloud.charging.open.Smartphone.Tests
@@ -220,6 +222,51 @@ namespace cloud.charging.open.Smartphone.Tests
             return admin;
 
         }
+
+        /// <summary>
+        /// A session started through the stand-in e-mobility provider at the
+        /// DC EVSE of the roaming network, its station checked before: the
+        /// administrator, the driver, the session and the token of its start.
+        /// </summary>
+        private async Task<(HttpClient Admin, HttpClient Driver, JObject Session, String Token)> ChargingThroughTheProvider()
+        {
+
+            emsp = await TestEMSP.Start();
+
+            var admin   = await WithTheRoamingNetwork();
+            var driver  = await SignedInAs("driver1", "driver");
+
+            var (status, signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp.URL, username = "phone1", email = "phone1@example.org" });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), signedUp.ToString());
+
+            (status, var check) = await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            Assert.That(check["verified"]!.Value<Boolean>(), Is.True, check.ToString());
+
+            (status, var session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            return (admin, driver, session, session["start"]!["token"]!.Value<String>()!);
+
+        }
+
+        /// <summary>
+        /// Signed values of a charge detail record, as OCPI writes them: each
+        /// an OCMF document as its signed data.
+        /// </summary>
+        private static JArray SignedValues(params (String Nature, String OCMF)[] Values)
+
+            => new (Values.Select(value => new JObject(
+                        new JProperty("nature",       value.Nature),
+                        new JProperty("plain_data",   value.Nature),
+                        new JProperty("signed_data",  value.OCMF)
+                    )));
+
+        private static DateTimeOffset StartedAt(JObject Session)
+
+            => new (Session["startedAt"]!.Value<DateTime>().ToUniversalTime(), TimeSpan.Zero);
 
         #endregion
 
@@ -810,6 +857,197 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(Of("evse").AsText(),                             Is.EqualTo(TestRoamingNetwork.DCEVSE));
                 Assert.That(session["start"]!["token"]!.Value<String>(),     Is.EqualTo(emsp.Starts.Single().Token));
                 Assert.That(session["cost"]!["pricePerKWh"]!.Value<Decimal>(), Is.EqualTo(0.65m));
+            }
+
+        }
+
+        #endregion
+
+
+        #region TheMeterValuesOfAChargeDetailRecordAreTheMetersAsTheProofSaid()
+
+        /// <summary>
+        /// The signed meter values of the charge detail record of a session at
+        /// a station of the roaming network are checked with the key the proofs
+        /// kept of its station give for the meter of its EVSE at the times they
+        /// were measured: signed by that meter, of this start - and what they
+        /// say was charged is what the record says, at the price the operator
+        /// stated for the EVSE and that was in force at the start. The proofs
+        /// are kept with the session - the one of the start and one of its
+        /// stop - and hold after a restart as they did before.
+        /// </summary>
+        [Test]
+        public async Task TheMeterValuesOfAChargeDetailRecordAreTheMetersAsTheProofSaid()
+        {
+
+            var (admin, driver, session, token) = await ChargingThroughTheProvider();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            var id = session["id"]!.Value<String>()!;
+
+            var (status, stopped) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{id}/stop");
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), stopped.ToString());
+
+            var begin  = StartedAt(session);
+            var end    = DateTimeOffset.UtcNow;
+
+            emsp!.OperatorCDR(token, 12.5m, 8.13m, end, SignedValues(
+                ("Start",  TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, token, (begin, "B", 1000.000m))),
+                ("End",    TestRoamingNetwork.OCMF(network.DCMeter,  TestRoamingNetwork.DCMeterSerial, token, (end,   "E", 1012.500m)))
+            ));
+
+            (status, var finished) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+            var check   = finished["check"] as JObject;
+            var values  = check?["meterValues"];
+            var price   = check?["price"];
+            var keyId   = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Convert.FromBase64String(network.DCMeterKey)));
+            var kept    = JArray.Parse(File.ReadAllText(Path.Combine(directory, ChargingSessions.DefaultFileName))).Single()["evidence"];
+
+            using (Assert.EnterMultipleScope())
+            {
+
+                Assert.That(check,                                                  Is.Not.Null, finished.ToString());
+                Assert.That(check?["error"]?.Type,                                  Is.EqualTo(JTokenType.Null), check?.ToString());
+
+                Assert.That(values?["verified"]?.Value<Boolean>(),                  Is.True,  values?.ToString());
+                Assert.That(values?["values"]?.Count(),                             Is.EqualTo(2));
+                Assert.That(values?["values"]?[0]?["result"]?.Value<String>(),      Is.EqualTo("ValidSignature"));
+                Assert.That(values?["values"]?[1]?["meterSerialNumber"]?.Value<String>(), Is.EqualTo(TestRoamingNetwork.DCMeterSerial));
+                Assert.That(values?["values"]?[1]?["meterId"]?.Value<String>(),     Is.EqualTo("meter-dc-1"));
+                Assert.That(values?["values"]?[1]?["keyId"]?.Value<String>(),       Is.EqualTo(keyId), "checked with another key than the one the proof gave");
+                Assert.That(values?["values"]?[1]?["ofThisStart"]?.Value<Boolean>(), Is.True, "the meter values do not name the token of the start");
+                Assert.That(values?["startKWh"]?.Value<Decimal>(),                  Is.EqualTo(1000m));
+                Assert.That(values?["endKWh"]?.Value<Decimal>(),                    Is.EqualTo(1012.5m));
+                Assert.That(values?["energyKWh"]?.Value<Decimal>(),                 Is.EqualTo(12.5m));
+                Assert.That(values?["energyMatches"]?.Value<Boolean>(),             Is.True);
+                Assert.That(values?["expectedCost"]?.Value<Decimal>(),              Is.EqualTo(8.13m), "12.5 kWh at 0.65 per kWh");
+                Assert.That(values?["costMatches"]?.Value<Boolean>(),               Is.True);
+
+                Assert.That(price?["signatures"]?.Value<String>(),                  Is.EqualTo("valid"),   price?.ToString());
+                Assert.That(price?["applicability"]?.Value<String>(),               Is.EqualTo("unbound"), "no assignment of the operator binds the price to the session");
+                Assert.That(price?["agreement"]?.Value<String>(),                   Is.EqualTo("missing"));
+                Assert.That(price?["selected"]?["entityId"]?.Value<String>(),       Is.EqualTo(TestRoamingNetwork.DCEVSE));
+                Assert.That(price?["selected"]?["tariffId"]?.Value<String>(),       Is.EqualTo(TestRoamingNetwork.DCTariff));
+                Assert.That(price?["selected"]?["pricePerKWh"]?.Value<Decimal>(),   Is.EqualTo(0.65m));
+                Assert.That(price?["matchesSession"]?.Value<Boolean>(),             Is.True);
+
+                Assert.That(kept?["proofs"]?.Count(),                               Is.EqualTo(2), "the proof of the start and the one of the stop are kept");
+                Assert.That(kept?["priceStatements"]?.Count(),                      Is.EqualTo(1));
+
+            }
+
+            var configuration = File.ReadAllText(Path.Combine(directory, WWCPConfigFile.DefaultFileName));
+
+            await smartphone!.DisposeAsync();
+            smartphone = null;
+
+            await TestPorts.StartedOnFreshPorts(() => SmartphoneFrom(configuration));
+
+            using var again = await SignedInAs("driver2", "driver");
+
+            (status, var read) = await Send(again, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(read["check"]?["meterValues"]?["verified"]?.Value<Boolean>(), Is.True,    read.ToString());
+                Assert.That(read["check"]?["price"]?["signatures"]?.Value<String>(),      Is.EqualTo("valid"));
+            }
+
+        }
+
+        #endregion
+
+        #region AMeterValueTheMeterDidNotSignHoldsNothing()
+
+        /// <summary>
+        /// A meter value signed by another key than the one the proof gave for
+        /// the meter of the EVSE is not the meter's, whatever it says; one of
+        /// another meter, and one of a time no proof kept covers, are not
+        /// checked at all - and the energy is said of none of them.
+        /// </summary>
+        [Test]
+        public async Task AMeterValueTheMeterDidNotSignHoldsNothing()
+        {
+
+            var (admin, driver, session, token) = await ChargingThroughTheProvider();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            var id     = session["id"]!.Value<String>()!;
+            var begin  = StartedAt(session);
+            var end    = DateTimeOffset.UtcNow;
+
+            emsp!.OperatorCDR(token, 12.5m, 8.13m, end, SignedValues(
+                ("Start",         TestRoamingNetwork.OCMF(network!.DCMeter,                 TestRoamingNetwork.DCMeterSerial, token, (begin,                "B", 1000.000m))),
+                ("End",           TestRoamingNetwork.OCMF(TestRoamingNetwork.NewMeterKey(), TestRoamingNetwork.DCMeterSerial, token, (end,                  "E", 1012.500m))),
+                ("Intermediate",  TestRoamingNetwork.OCMF(network.DCMeter,                  "AC-2026-001",                    token, (end,                  "T", 1010.000m))),
+                ("Intermediate",  TestRoamingNetwork.OCMF(network.DCMeter,                  TestRoamingNetwork.DCMeterSerial, token, (begin.AddHours(-2),   "T", 990.000m)))
+            ));
+
+            var (status, finished) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+            var values = finished["check"]?["meterValues"];
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(values?["verified"]?.Value<Boolean>(),                  Is.False, finished.ToString());
+                Assert.That(values?["values"]?[0]?["verified"]?.Value<Boolean>(),   Is.True,  "the begin is the meter's");
+                Assert.That(values?["values"]?[1]?["verified"]?.Value<Boolean>(),   Is.False);
+                Assert.That(values?["values"]?[1]?["result"]?.Value<String>(),      Is.EqualTo("InvalidSignature"));
+                Assert.That(values?["values"]?[2]?["error"]?.Value<String>(),       Does.Contain("No key of the meter AC-2026-001"));
+                Assert.That(values?["values"]?[2]?["result"]?.Type,                 Is.EqualTo(JTokenType.Null), "a value of another meter is checked with no key");
+                Assert.That(values?["values"]?[3]?["error"]?.Value<String>(),       Does.Contain("No key of the meter " + TestRoamingNetwork.DCMeterSerial));
+                Assert.That(values?["energyKWh"]?.Type,                             Is.EqualTo(JTokenType.Null), "no end the meter signed");
+                Assert.That(values?["energyMatches"]?.Type,                         Is.EqualTo(JTokenType.Null));
+            }
+
+        }
+
+        #endregion
+
+        #region AKeyNoLongerTrustedChecksNothingOfASession()
+
+        /// <summary>
+        /// A session is checked under the identity keys trusted now: once an
+        /// administrator no longer trusts the keys that attested its station,
+        /// nothing of it is checked - its meter values no more than its price.
+        /// </summary>
+        [Test]
+        public async Task AKeyNoLongerTrustedChecksNothingOfASession()
+        {
+
+            var (admin, driver, session, token) = await ChargingThroughTheProvider();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            var id = session["id"]!.Value<String>()!;
+
+            emsp!.OperatorCDR(token, 12.5m, 8.13m, DateTimeOffset.UtcNow, SignedValues(
+                ("End", TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, token, (DateTimeOffset.UtcNow, "E", 1012.500m)))
+            ));
+
+            var (_, before) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+            foreach (var keyId in network.TrustAnchor.Keys)
+            {
+                var (status, withdrawn) = await Send(admin, HttpMethod.Delete, $"api/v1/configuration/roamingNetwork/trustedKeys/{keyId}");
+                Assert.That(status, Is.EqualTo(HttpStatusCode.OK), withdrawn.ToString());
+            }
+
+            var (_, after) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(before["check"]?["meterValues"]?["verified"]?.Value<Boolean>(), Is.True, before.ToString());
+                Assert.That(after ["check"]?["error"]?.Value<String>(),                     Does.StartWith("Nothing of it is checked"), after.ToString());
+                Assert.That(after ["check"]?["meterValues"],                                Is.Null);
+                Assert.That(after ["check"]?["price"],                                      Is.Null);
             }
 
         }

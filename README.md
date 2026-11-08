@@ -22,7 +22,13 @@ provider - an account key made on the phone, certified from a PKCS#10 request
 - every start has a charging ticket of its own, and the start and the stop are
 requests signed by the ticket's key and countersigned by the provider, all of
 it built and checked with the CBOR and COSE of Styx; what became of the start
-is asked of the provider, and taken only where it is of that start. Its store keeps what an
+is asked of the provider, and taken only where it is of that start. A session
+at a station of a roaming network keeps the proofs of its station and the
+price statements that held, and the signed meter values of its charge detail
+record are checked with the key those proofs give for the meter of its EVSE
+at the time each was measured - read and verified by
+[ChargyCore.NET](https://github.com/OpenChargingCloud/ChargyCore.NET) - and
+its price against the statement in force at its start. Its store keeps what an
 app has to decide about trust:
 the root CAs it believes, the server certificates it holds a server to, who it
 is as a client, and who its web interface is over HTTPS.
@@ -37,11 +43,11 @@ pins it beside the libraries it needs, builds it, and runs its tests.
 | `Smartphone/Map/` | where the map takes its stations from, the stations as OCPI locations, and the demo ones |
 | `Smartphone/Roaming/` | the trust anchor of a roaming network and the identity keys of it trusted, asking the network at its URLs, the key statement of its operator, and the check of a station's proof and price statements against a trust context of the keys trusted |
 | `Smartphone/Provider/` | the account at an e-mobility provider, its client, charging tickets - their payload, the request signed by the ticket key and the account key, and the check of what comes back - start and stop requests, signed by the ticket key, and the check of the provider's countersignature, and what the provider reports of a start, checked to be of it |
-| `Smartphone/Charging/` | a charging session - simulated, or as the provider reports it - with its ticket and its start and stop through the provider, and the file every session is kept in |
+| `Smartphone/Charging/` | a charging session - simulated, or as the provider reports it - with its ticket and its start and stop through the provider, the evidence it keeps of its station and the check of its meter values and its price against it, and the file every session is kept in |
 | `Smartphone/HTTPAPI/` | the JSON API: every node's, and `v1/map`, `v1/map/locations/{id}/check`, `v1/configuration/map`, `v1/configuration/roamingNetwork` with its `keyStatement` and `trustedKeys/{id}`, `v1/charging/sessions` and `v1/provider` |
 | `Smartphone/Frontend/` | the web interface - the map is Leaflet's - bundled by webpack with what every node shares |
-| `SmartphoneTests/` | what kind of node it is, the map and the sessions, the API with its roles, a roaming network served on the loopback and checked against the identity keys of its trust anchor trusted - none before an administrator trusts one, an e-mobility provider on the loopback issuing tickets, countersigning starts and stops and telling what its operator reported of them - and misbehaving - and WWCP_Node's conformance suite asked of a smartphone |
-| `docs/` | drafts: starting and stopping a session with a charging ticket, signed by its key and countersigned by the provider, and what the app learns of it after the start |
+| `SmartphoneTests/` | what kind of node it is, the map and the sessions, the API with its roles, a roaming network served on the loopback and checked against the identity keys of its trust anchor trusted - none before an administrator trusts one - with energy meters that sign OCMF, an e-mobility provider on the loopback issuing tickets, countersigning starts and stops and telling what its operator reported of them, signed meter values among it - and misbehaving - and WWCP_Node's conformance suite asked of a smartphone |
+| `docs/` | drafts: starting and stopping a session with a charging ticket, signed by its key and countersigned by the provider, what the app learns of it after the start, and how it checks the meter values and the price |
 
 
 ## Your participation

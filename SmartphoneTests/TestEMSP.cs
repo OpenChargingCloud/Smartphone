@@ -289,9 +289,10 @@ namespace cloud.charging.open.Smartphone.Tests
         /// <summary>
         /// The charge detail record the charge point operator pushed for the
         /// start of the given token, as OCPI 2.2.1 writes one - with signed
-        /// meter values, which the phone keeps as they came.
+        /// meter values, which the phone keeps as they came: the given ones,
+        /// or one that is no OCMF document with a signature.
         /// </summary>
-        public void OperatorCDR(String Token, Decimal KWh, Decimal Cost, DateTimeOffset End)
+        public void OperatorCDR(String Token, Decimal KWh, Decimal Cost, DateTimeOffset End, JArray? SignedValues = null)
         {
 
             var start = reported[Token];
@@ -312,7 +313,7 @@ namespace cloud.charging.open.Smartphone.Tests
                             new JProperty("total_time",               1.5m),
                             new JProperty("signed_data",              new JObject(
                                 new JProperty("encoding_method",  "OCMF"),
-                                new JProperty("signed_values",    new JArray(
+                                new JProperty("signed_values",    SignedValues ?? new JArray(
                                     new JObject(
                                         new JProperty("nature",       "End"),
                                         new JProperty("plain_data",   SignedMeterValue),

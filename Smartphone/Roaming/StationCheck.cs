@@ -114,6 +114,12 @@ namespace cloud.charging.open.Smartphone.Roaming
         public RoamingNetworkProof?                Proof                 { get; }
 
         /// <summary>
+        /// The proof as the roaming network served it, where it holds: what a
+        /// session started here keeps, to check its meter values with later.
+        /// </summary>
+        public JObject?                            ProofJSON             { get; }
+
+        /// <summary>
         /// The key statement the proof gives, evaluated against the identity
         /// keys trusted here: its signatures, its signers, its quorum and its
         /// validity - where the proof gives one of this network.
@@ -197,13 +203,15 @@ namespace cloud.charging.open.Smartphone.Roaming
                             String?                             Error,
                             IReadOnlyList<PriceStatementCheck>  PriceStatements,
                             String?                             PriceStatementsError,
-                            String?                             PriceConflict)
+                            String?                             PriceConflict,
+                            JObject?                            ProofJSON   = null)
         {
 
             this.StationId             = StationId;
             this.CheckedAt             = CheckedAt;
             this.From                  = From;
             this.Proof                 = Proof;
+            this.ProofJSON             = ProofJSON;
             this.Trust                 = Trust;
             this.Station               = Station;
             this.Error                 = Error;
@@ -320,7 +328,7 @@ namespace cloud.charging.open.Smartphone.Roaming
         /// element without restrictions that has one, or else of the first that
         /// has one at all.
         /// </summary>
-        private static Decimal? EnergyPrice(JArray? Elements)
+        internal static Decimal? EnergyPrice(JArray? Elements)
         {
 
             var elements = (Elements ?? []).OfType<JObject>().ToArray();

@@ -49,7 +49,7 @@ namespace cloud.charging.open.Smartphone
     /// | <c>PUT v1/configuration/roamingNetwork/trustedKeys/{id}</c>, <c>DELETE</c> | trust one identity key of the trust anchor, or no longer |
     /// | <c>GET v1/charging/sessions</c> | every session, the newest first; <c>?active=true</c> for those still charging |
     /// | <c>POST v1/charging/sessions</c> | <c>{ "locationId", "evseUid" }</c>: start one, 201 and the session |
-    /// | <c>GET v1/charging/sessions/{id}</c> | one session, as it is now |
+    /// | <c>GET v1/charging/sessions/{id}</c> | one session, as it is now - at a station of a roaming network with its <c>"check"</c>: its signed meter values and its price |
     /// | <c>POST v1/charging/sessions/{id}/stop</c> | stop one that is still charging |
     /// | <c>GET v1/provider</c> | the account at the e-mobility provider, without its password and key |
     /// | <c>POST v1/provider/signup</c> | <c>{ "url", "username", "email" }</c>: an account made there, with a password the phone keeps, and an account key |

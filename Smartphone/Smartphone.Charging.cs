@@ -115,9 +115,11 @@ namespace cloud.charging.open.Smartphone
 
             Func<ChargingEVSE, DateTimeOffset, String> statusOf = DemoLocations.StatusOf;
 
-            // What the driver saw, for the start request to name.
-            Byte[]?  effectiveTree  = null;
-            String?  tariffId       = null;
+            // What the driver saw, for the start request to name - and what the
+            // session keeps of it, to check its meter values and price with.
+            Byte[]?           effectiveTree  = null;
+            String?           tariffId       = null;
+            SessionEvidence?  evidence       = null;
 
             // Of a roaming network, only where the proof of its station was
             // checked and still holds: what it costs is what the proof says,
@@ -148,6 +150,7 @@ namespace cloud.charging.open.Smartphone
                 statusOf       = (_, _) => EVSEStatus.Unknown;
                 effectiveTree  = station.EffectiveTree;
                 tariffId       = tariff.TariffId;
+                evidence       = EvidenceOf(station, evse);
 
             }
 
@@ -186,7 +189,7 @@ namespace cloud.charging.open.Smartphone
 
             }
 
-            if (!Sessions.TryStart(location, evse, statusOf, Who, ticket?.Reference, start, out var session, out var error, out var notSaved))
+            if (!Sessions.TryStart(location, evse, statusOf, Who, ticket?.Reference, start, out var session, out var error, out var notSaved, evidence))
             {
 
                 // Started at the provider, and no session here to stop it with:
@@ -213,6 +216,14 @@ namespace cloud.charging.open.Smartphone
                             :  " - simulated: no e-mobility provider was asked") +
                        $". The session is {session.Id}.",
                        "charging", "web");
+
+            // The proof checked before may run out before the meter signs the
+            // first value: one asked for now covers the start of the session.
+            if (evidence?.CoveredUntil is DateTimeOffset coveredUntil && coveredUntil < TimeProvider.GetUtcNow() + 2 * ProofRefreshInterval)
+            {
+                await KeepLatestProofAsync(session, "at the start", CancellationToken);
+                session = Sessions.Get(session.Id) ?? session;
+            }
 
             return new ChargingStart(session, null, ChargingRefusal.None);
 
@@ -271,6 +282,13 @@ namespace cloud.charging.open.Smartphone
                        $". The session was {session.Id}.",
                        "charging", "web");
 
+            // What the meter signs at the end is checked with a proof of now.
+            if (session.Evidence is not null)
+            {
+                await KeepLatestProofAsync(session, "at the stop", CancellationToken);
+                session = Sessions.Get(session.Id) ?? session;
+            }
+
             return new ChargingStop(session, null, ChargingRefusal.None);
 
         }
@@ -298,7 +316,7 @@ namespace cloud.charging.open.Smartphone
                                                        : ProviderAccount is null),
                        new JProperty("active",     all.Count(session => session.IsActiveAt(now))),
                        new JProperty("total",      all.Count),
-                       new JProperty("sessions",   new JArray(shown.Select(session => session.ToJSON(now))))
+                       new JProperty("sessions",   new JArray(shown.Select(session => SessionJSON(session, now))))
                    );
 
         }

@@ -1,11 +1,11 @@
 /*
  * What the tests of the map and the charging pages are given to draw: two
  * stations as a smartphone sends them, and a charging session as it sends one;
- * and a charging pool of a roaming network, with the check of its stations.
- * Each test lays over them what it is about.
+ * a charging pool of a roaming network, with the check of its stations; and
+ * the check of a session there. Each test lays over them what it is about.
  */
 
-import type { ChargingLocation, ChargingSession, LocationCheck, MapData, StationCheck } from '../src/api/client';
+import type { ChargingLocation, ChargingSession, LocationCheck, MapData, MeterValueCheck, SessionCheck, StationCheck } from '../src/api/client';
 
 
 /** A station of the map: one available AC point and one out of order. */
@@ -115,6 +115,65 @@ export function reportedSession(more: Partial<ChargingSession> = {}): ChargingSe
     delete reported.progressPercent;
 
     return { ...reported, ...more };
+
+}
+
+
+/**
+ * The check of a session at the DC EVSE of a roaming network whose charge
+ * detail record came: its begin and its end signed by the meter, with the key
+ * the station's proof gave, and the price the operator stated for the EVSE in
+ * force at the start - as a smartphone sends it.
+ */
+export function sessionCheck(more: Partial<SessionCheck> = {}): SessionCheck {
+
+    const value = (nature: string, transaction: string, at: string, kWh: number): MeterValueCheck => ({
+        nature,
+        verified:           true,
+        error:              null,
+        result:             'ValidSignature',
+        meterSerialNumber:  'DC-2026-001',
+        meterId:            'meter-dc-1',
+        keyId:              '95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6',
+        identification:     'T-9F2C41D08A7E3B65',
+        ofThisStart:        true,
+        readings:           [ { measuredAt: at, energyKWh: kWh, transaction, status: 'G' } ]
+    });
+
+    return {
+        checkedAt:  '2026-10-10T09:31:00Z',
+        error:      null,
+        price:      {
+            error:                   null,
+            signatures:              'valid',
+            applicability:           'unbound',
+            agreement:               'missing',
+            publication:             'missing',
+            publicationBeforeStart:  'not-proven',
+            chainGaps:               false,
+            customerConsent:         'not-proven',
+            diagnostics:             [],
+            selected:                { entityType: 'EVSE', entityId: 'DE*GEF*E2*1', signer: 'DE*GEF', sequence: 0,
+                                       signedAt: '2026-10-10T07:59:59Z', digest: 'c0ffee0123456789c0ffee0123456789c0ffee0123456789c0ffee0123456789',
+                                       tariffId: 'DE*GEF*T_DC', currency: 'EUR', pricePerKWh: 0.65 },
+            matchesSession:          true
+        },
+        meterValues: {
+            verified:       true,
+            error:          null,
+            values:         [ value('Start', 'B', '2026-10-10T08:00:07Z', 1000), value('End', 'E', '2026-10-10T09:30:00Z', 1012.5) ],
+            startKWh:       1000,
+            endKWh:         1012.5,
+            energyKWh:      12.5,
+            cdrEnergyKWh:   12.5,
+            energyMatches:  true,
+            expectedCost:   8.13,
+            cdrCost:        8.13,
+            costMatches:    true,
+            timeBasis:      'signed-measurement-timestamps'
+        },
+        ...more
+    };
 
 }
 

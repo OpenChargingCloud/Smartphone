@@ -415,7 +415,8 @@ namespace cloud.charging.open.Smartphone.Roaming
                                     null,
                                     statements,
                                     statementsError,
-                                    conflict);
+                                    conflict,
+                                    ParseJSON(proofAnswer.Text) as JObject);
 
         }
 

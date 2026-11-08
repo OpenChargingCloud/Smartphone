@@ -24,6 +24,7 @@ using Newtonsoft.Json.Linq;
 using Org.BouncyCastle.Asn1.Sec;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Math;
+using Org.BouncyCastle.Security;
 using Org.BouncyCastle.X509;
 
 using org.GraphDefined.Vanaheimr.Illias;
@@ -67,6 +68,11 @@ namespace cloud.charging.open.Smartphone.Tests
         public const String  ACTariff    = "DE*GEF*T_AC";
         public const String  DCTariff    = "DE*GEF*T_DC";
 
+        /// <summary>
+        /// The serial number of the energy meter of the DC EVSE.
+        /// </summary>
+        public const String  DCMeterSerial  = "DC-2026-001";
+
         #endregion
 
         #region Properties
@@ -88,6 +94,12 @@ namespace cloud.charging.open.Smartphone.Tests
         public String                     ACMeterKey        { get; }
         public String                     DCMeterKey        { get; }
 
+        /// <summary>
+        /// The private key the energy meter of the DC EVSE signs with: what a
+        /// test signs meter values with as that meter.
+        /// </summary>
+        public ECPrivateKeyParameters     DCMeter           { get; }
+
         public String                     URL
             => TrustAnchor.URLs[0].ToString();
 
@@ -100,7 +112,8 @@ namespace cloud.charging.open.Smartphone.Tests
                                    RoamingNetworkHistory      History,
                                    RoamingNetworkTrustAnchor  TrustAnchor,
                                    String                     ACMeterKey,
-                                   String                     DCMeterKey)
+                                   String                     DCMeterKey,
+                                   ECPrivateKeyParameters     DCMeter)
         {
             this.HTTPServer   = HTTPServer;
             this.API          = API;
@@ -108,6 +121,7 @@ namespace cloud.charging.open.Smartphone.Tests
             this.TrustAnchor  = TrustAnchor;
             this.ACMeterKey   = ACMeterKey;
             this.DCMeterKey   = DCMeterKey;
+            this.DCMeter      = DCMeter;
         }
 
         #endregion
@@ -182,7 +196,7 @@ namespace cloud.charging.open.Smartphone.Tests
                                    new JProperty("lastChange",   created.ToISO8601()),
                                    new JProperty("chargingStations", new JArray(
                                        Station(ACStation, ACEVSE, "AC_ThreePhases", 22000, "IEC_62196_T2",       "SOCKET", ACTariff, "meter-ac-1", "AC-2026-001", acMeterKey, created),
-                                       Station(DCStation, DCEVSE, "DC",             150000, "IEC_62196_T2_COMBO", "CABLE",  DCTariff, "meter-dc-1", "DC-2026-001", dcMeterKey, created)
+                                       Station(DCStation, DCEVSE, "DC",             150000, "IEC_62196_T2_COMBO", "CABLE",  DCTariff, "meter-dc-1", DCMeterSerial, dcMeterKey, created)
                                    ))
                                )))
                            )))
@@ -222,9 +236,69 @@ namespace cloud.charging.open.Smartphone.Tests
                                                             [ org.GraphDefined.Vanaheimr.Hermod.HTTP.URL.Parse($"http://127.0.0.1:{httpServer.TCPPort}/RNs/{NetworkId}") ],
                                                             [ rnoIdentityKey.Id ]);
 
-            return new TestRoamingNetwork(httpServer, api, history, anchor, acMeterKey, dcMeterKey);
+            return new TestRoamingNetwork(httpServer, api, history, anchor, acMeterKey, dcMeterKey, dcMeter);
 
         }
+
+        #endregion
+
+
+        #region (static) OCMF(Meter, Serial, Identification, Readings)
+
+        /// <summary>
+        /// A meter value in OCMF, as an energy meter signs it with the given
+        /// key: "OCMF|{payload}|{signature}", its payload naming the meter and
+        /// what identified the charging, its readings each of a time, a part of
+        /// the transaction - "B", "E" - and the energy register in kWh, its
+        /// signature ECDSA over the payload, hexadecimal DER.
+        /// </summary>
+        public static String OCMF(ECPrivateKeyParameters                                           Meter,
+                                  String                                                           Serial,
+                                  String                                                           Identification,
+                                  params (DateTimeOffset At, String Transaction, Decimal EnergyKWh)[]  Readings)
+        {
+
+            var payload = new JObject(
+                              new JProperty("FV",  "1.0"),
+                              new JProperty("GI",  "GraphDefined GD-DC150"),
+                              new JProperty("GS",  DCStation),
+                              new JProperty("PG",  "T1"),
+                              new JProperty("MV",  "Kernberg DC Metering"),
+                              new JProperty("MM",  "KDM-150"),
+                              new JProperty("MS",  Serial),
+                              new JProperty("IS",  true),
+                              new JProperty("IT",  "UNDEFINED"),
+                              new JProperty("ID",  Identification),
+                              new JProperty("RD",  new JArray(Readings.Select(reading => new JObject(
+                                  new JProperty("TM",  reading.At.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss,fff", System.Globalization.CultureInfo.InvariantCulture) + "+0000 S"),
+                                  new JProperty("TX",  reading.Transaction),
+                                  new JProperty("RV",  reading.EnergyKWh),
+                                  new JProperty("RI",  "1-b:1.8.0"),
+                                  new JProperty("RU",  "kWh"),
+                                  new JProperty("RT",  "DC"),
+                                  new JProperty("ST",  "G")
+                              ))))
+                          ).ToString(Newtonsoft.Json.Formatting.None);
+
+            var signer = SignerUtilities.GetSigner("SHA-256withECDSA");
+
+            signer.Init(true, Meter);
+            signer.BlockUpdate(System.Text.Encoding.UTF8.GetBytes(payload));
+
+            return $"OCMF|{payload}|{{\"SA\":\"ECDSA-secp256r1-SHA256\",\"SD\":\"{Convert.ToHexString(signer.GenerateSignature())}\"}}";
+
+        }
+
+        #endregion
+
+        #region (static) NewMeterKey()
+
+        /// <summary>
+        /// A key of P-256 no meter of the network has.
+        /// </summary>
+        public static ECPrivateKeyParameters NewMeterKey()
+
+            => NewKey("secp256r1");
 
         #endregion
 

@@ -393,6 +393,81 @@ export interface ChargingSession {
     /** The charging ticket it was started with, where the phone has an e-mobility provider. */
     ticket?:          ChargingTicketReference;
     start?:           ChargingStartReference;
+    /** At a station of a roaming network: its meter values and its price, checked against what it kept of the station. */
+    check?:           SessionCheck;
+}
+
+/** One reading of a signed meter value: when the meter measured it, its register in kWh, "B" or "E" of the transaction. */
+export interface MeterReading {
+    measuredAt:   string;
+    energyKWh:    number | null;
+    transaction:  string | null;
+    status:       string | null;
+}
+
+/** One signed meter value of a charge detail record: whether the meter's key, as the station's proof gave it then, signed it. */
+export interface MeterValueCheck {
+    nature:             string | null;
+    verified:           boolean;
+    error:              string | null;
+    /** What ChargyCore said of its signature: "ValidSignature", "InvalidSignature", ... - null where no key was found to ask with. */
+    result:             string | null;
+    meterSerialNumber:  string | null;
+    meterId:            string | null;
+    keyId:              string | null;
+    identification:     string | null;
+    /** Whether what it says identified the charging is the token or the ticket of this start. */
+    ofThisStart:        boolean;
+    readings:           MeterReading[];
+}
+
+/** How a session holds, checked under the identity keys trusted now. */
+export interface SessionCheck {
+    checkedAt:  string;
+    /** Why nothing of it was checked. */
+    error:      string | null;
+    /** Its price, where it was started through an e-mobility provider. */
+    price?: {
+        error:                   string | null;
+        /** Whether the price statements are the operator's: "valid", "invalid", "missing". */
+        signatures:              string | null;
+        /** "unbound": in force for the EVSE at the start, not assigned to the session by the operator; "bound"; "missing"; "ambiguous"; "invalid". */
+        applicability:           string | null;
+        agreement:               string | null;
+        publication:             string | null;
+        publicationBeforeStart:  string | null;
+        chainGaps:               boolean | null;
+        customerConsent:         string | null;
+        diagnostics:             string[];
+        selected: {
+            entityType:   string;
+            entityId:     string;
+            signer:       string;
+            sequence:     number;
+            signedAt:     string;
+            digest:       string;
+            tariffId:     string | null;
+            currency:     string;
+            pricePerKWh:  number | null;
+        } | null;
+        /** Whether it is the price the phone counted with. */
+        matchesSession:          boolean | null;
+    };
+    /** The signed meter values of its charge detail record, once one came. */
+    meterValues?: {
+        verified:       boolean;
+        error:          string | null;
+        values:         MeterValueCheck[];
+        startKWh:       number | null;
+        endKWh:         number | null;
+        energyKWh:      number | null;
+        cdrEnergyKWh:   number | null;
+        energyMatches:  boolean | null;
+        expectedCost:   number | null;
+        cdrCost:        number | null;
+        costMatches:    boolean | null;
+        timeBasis:      string;
+    };
 }
 
 /** The charging sessions of this phone, the newest first. */

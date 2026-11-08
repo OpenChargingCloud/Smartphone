@@ -2,12 +2,14 @@
  * One charging session, drawn in a document of happy-dom against a stand-in
  * smartphone: what it charged and where, Stop while it starts or charges and
  * not after, one the e-mobility provider reports with the operator's figures
- * and without what OCPI does not tell, and a session that is not there said
- * so.
+ * and without what OCPI does not tell, one at a station of a roaming network
+ * with its meter values and its price checked, and a session that is not
+ * there said so.
  */
 
 import { asked, leave, open, refused, until, type Asked } from '../../test/smartphone.ts';
-import { reportedSession, session } from '../../test/charging.ts';
+import { reportedSession, session, sessionCheck } from '../../test/charging.ts';
+import type { MeterValueCheck } from '../api/client.ts';
 
 import { strict as assert }    from 'node:assert';
 import { after, describe, it } from 'node:test';
@@ -181,6 +183,89 @@ describe('a charging session', () => {
         assert.match(root.textContent!, /says nothing of the cost: that is what was charged, times the price per kWh/);
         assert.match(root.textContent!, /per kWh\)/);
         assert.equal(root.querySelector('.btn.danger'), null);
+
+    });
+
+    it('says the meter signed the values of the charge detail record, and the price the operator stated for its start', async () => {
+
+        current = reportedSession({ status: 'finished', energyKWh: 12.5, endedAt: '2026-10-10T09:30:00Z',
+                                    cost: { amount: 8.13, pricePerKWh: 0.65, currency: 'EUR', reported: true },
+                                    provider: { state: 'ended', receivedAt: '2026-10-10T09:31:00Z', cdr: true, result: 'ACCEPTED', sessionStatus: 'COMPLETED' },
+                                    check: sessionCheck() });
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                                smartphone, root => root.querySelector('.session-check') !== null);
+
+        const check = root.querySelector('.session-check')!.textContent!;
+
+        assert.match(check, /signed by the meter/);
+        assert.equal(root.querySelectorAll('.meter-value.verified').length, 2);
+        assert.match(check, /12[.,]500 kWh in all/);
+        assert.match(check, /The record says\s*12[.,]500 kWh\s*the same/);
+        assert.match(check, /95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6/);
+        assert.match(check, /identified by this start/);
+        assert.match(check, /not a key the record names itself/);
+        assert.match(root.querySelector('.session-price')!.textContent!, /DE\*GEF, for EVSE DE\*GEF\*E2\*1/);
+        assert.match(root.querySelector('.session-price')!.textContent!, /The operator signed no assignment of it to this session/);
+        assert.doesNotMatch(check, /counted with/);
+
+    });
+
+    it("says which meter value is not the meter's, and why, and where the phone counted with another price", async () => {
+
+        const checked = sessionCheck();
+
+        const forged: MeterValueCheck = { ...checked.meterValues!.values[1]!, verified: false, result: 'InvalidSignature',
+                                          error: 'It is not signed by the key 95ceb48c… of the meter DC-2026-001: InvalidSignature.' };
+
+        current = reportedSession({ status: 'finished', endedAt: '2026-10-10T09:30:00Z',
+                                    provider: { state: 'ended', receivedAt: '2026-10-10T09:31:00Z', cdr: true },
+                                    check: { ...checked,
+                                             price:        { ...checked.price!, matchesSession: false },
+                                             meterValues:  { ...checked.meterValues!, verified: false, values: [ checked.meterValues!.values[0]!, forged ],
+                                                             endKWh: 1000, energyKWh: null, energyMatches: null, expectedCost: null, costMatches: null } } });
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                                smartphone, root => root.querySelector('.session-check') !== null);
+
+        const check = root.querySelector('.session-check')!.textContent!;
+
+        assert.match(check, /not all signed by the meter/);
+        assert.equal(root.querySelectorAll('.meter-value.not-verified').length, 1);
+        assert.match(root.querySelector('.meter-value.not-verified')!.textContent!, /not the meter's/);
+        assert.match(root.querySelector('.meter-value.not-verified')!.textContent!, /InvalidSignature/);
+        assert.match(check, /no begin and end the meter signed/);
+        assert.match(check, /this phone counted with/);
+
+    });
+
+    it('says nothing of it is checked where the identity keys that attested its station are no longer trusted', async () => {
+
+        current = reportedSession({ check: { checkedAt: '2026-10-10T09:31:00Z',
+                                             error: "Nothing of it is checked: none of the identity keys of the trust anchor of 'QA' is trusted here." } });
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                                smartphone, root => root.querySelector('.session-check') !== null);
+
+        assert.match(root.querySelector('.check-error')!.textContent!, /Nothing of it is checked/);
+        assert.equal(root.querySelector('.meter-values-pending'), null, 'a promise of a check that will not come');
+        assert.equal(root.querySelector('.session-price'), null);
+
+    });
+
+    it('says the meter values are checked once the charge detail record came', async () => {
+
+        const checked = sessionCheck();
+
+        delete checked.meterValues;
+
+        current = reportedSession({ check: checked });
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.session-check') !== null);
+
+        assert.ok(root.querySelector('.meter-values-pending'), 'no word of the meter values to come');
+        assert.match(root.querySelector('.session-price')!.textContent!, /0[.,]65/);
 
     });
 

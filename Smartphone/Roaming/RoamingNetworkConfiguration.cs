@@ -550,6 +550,48 @@ namespace cloud.charging.open.Smartphone.Roaming
 
         #endregion
 
+        #region HistoricalContext(Proof, At, out Error)
+
+        /// <summary>
+        /// The permission, at the given time, to check what was true when the
+        /// given proof was served - meter values measured then, and the price
+        /// in force then: the key statement it gives, verified against the
+        /// trust anchor and the identity keys trusted here now, at the time it
+        /// was signed, so that it having ended since needs no server to ask.
+        /// Made anew for every check, and good for one (HistoricalTrustContext).
+        /// Null, and why, where the keys trusted here do not reach its quorum.
+        /// </summary>
+        public HistoricalTrustContext? HistoricalContext(RoamingNetworkProof  Proof,
+                                                         DateTimeOffset       At,
+                                                         out String?          Error)
+        {
+
+            if (!IsSet)
+            {
+                Error = "There is no trust anchor to check against.";
+                return null;
+            }
+
+            if (!Proof.TryGetKeyStatement(out var keyStatement, out var identityKeys, out var keyStatementError))
+            {
+                Error = $"The proof gives no key statement of the operator of the roaming network: {keyStatementError}";
+                return null;
+            }
+
+            if (keyStatement.RoamingNetworkId != TrustAnchor.Id)
+            {
+                Error = $"Its key statement is one of the roaming network '{keyStatement.RoamingNetworkId}', the trust anchor of '{TrustAnchor.Id}'.";
+                return null;
+            }
+
+            return HistoricalTrustContext.TryCreate(TrustAnchor, keyStatement, TrustedKeyIds, out var context, out Error, identityKeys, At)
+                       ? context
+                       : null;
+
+        }
+
+        #endregion
+
         #region ToJSON()
 
         /// <summary>

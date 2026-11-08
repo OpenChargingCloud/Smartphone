@@ -73,6 +73,11 @@ namespace cloud.charging.open.Smartphone.Charging
     /// while the operator reported no session yet, and with no power and no
     /// target, which OCPI does not tell.
     /// </para>
+    /// <para>
+    /// At a station of a roaming network it keeps what its meter values and
+    /// its price are checked against later (<see cref="Evidence"/>): the
+    /// proofs of the station and the price statements that held at the start.
+    /// </para>
     /// </remarks>
     public sealed record ChargingSession(String           Id,
                                          String           LocationId,
@@ -93,8 +98,9 @@ namespace cloud.charging.open.Smartphone.Charging
                                          DateTimeOffset?  StoppedAt  = null,
                                          String?          StoppedBy  = null,
                                          ChargingTicketReference?  Ticket  = null,
-                                         ChargingStartReference?   Start   = null,
-                                         ProviderReport?           Report  = null)
+                                         ChargingStartReference?   Start     = null,
+                                         ProviderReport?           Report    = null,
+                                         SessionEvidence?          Evidence  = null)
     {
 
         #region Data
@@ -141,21 +147,23 @@ namespace cloud.charging.open.Smartphone.Charging
         #endregion
 
 
-        #region New(Id, Location, EVSE, StartedAt, StartedBy, Ticket = null, Start = null)
+        #region New(Id, Location, EVSE, StartedAt, StartedBy, Ticket = null, Start = null, Evidence = null)
 
         /// <summary>
         /// A session started now, at an EVSE of a location - one that says
         /// what charging there costs - with the charging ticket it was started
         /// with and its start as the provider countersigned it, where the
-        /// phone has an e-mobility provider.
+        /// phone has an e-mobility provider, and at a station of a roaming
+        /// network with the evidence of its station.
         /// </summary>
         public static ChargingSession New(String                    Id,
                                           ChargingLocation          Location,
                                           ChargingEVSE              EVSE,
                                           DateTimeOffset            StartedAt,
                                           String                    StartedBy,
-                                          ChargingTicketReference?  Ticket   = null,
-                                          ChargingStartReference?   Start    = null)
+                                          ChargingTicketReference?  Ticket    = null,
+                                          ChargingStartReference?   Start     = null,
+                                          SessionEvidence?          Evidence  = null)
 
             => new (Id,
                     Location.Id,
@@ -173,8 +181,9 @@ namespace cloud.charging.open.Smartphone.Charging
                     DefaultTargetEnergyKWh,
                     StartedAt,
                     StartedBy,
-                    Ticket:  Ticket,
-                    Start:   Start);
+                    Ticket:    Ticket,
+                    Start:     Start,
+                    Evidence:  Evidence);
 
         #endregion
 
@@ -456,6 +465,9 @@ namespace cloud.charging.open.Smartphone.Charging
             if (Report is not null)
                 json.Add(new JProperty("report", Report.ToStorageJSON()));
 
+            if (Evidence is not null)
+                json.Add(new JProperty("evidence", Evidence.ToJSON()));
+
             return json;
 
         }
@@ -499,7 +511,8 @@ namespace cloud.charging.open.Smartphone.Charging
                               JSON.Value<String>("stoppedBy"),
                               ChargingTicketReference.TryParse(JSON["ticket"]),
                               ChargingStartReference. TryParse(JSON["start"]),
-                              ProviderReport.         TryParseStorage(JSON["report"])
+                              ProviderReport.         TryParseStorage(JSON["report"]),
+                              SessionEvidence.        TryParse(JSON["evidence"])
                           );
 
                 if (Session.MaxPowerKW <= 0 || Session.TargetEnergyKWh <= 0)
