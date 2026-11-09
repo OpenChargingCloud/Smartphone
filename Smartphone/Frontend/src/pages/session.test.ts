@@ -8,7 +8,7 @@
  */
 
 import { asked, leave, open, refused, until, type Asked } from '../../test/smartphone.ts';
-import { liveLinkSession, reportedSession, session, sessionCheck, wrongStartSession } from '../../test/charging.ts';
+import { liveLinkSession, reportedSession, session, sessionCheck, wrongStartSession, wrongValueSession } from '../../test/charging.ts';
 import type { MeterValueCheck } from '../api/client.ts';
 
 import { strict as assert }    from 'node:assert';
@@ -79,12 +79,35 @@ describe('a charging session', () => {
         assert.match(link.textContent!, /Signed documents\s*2/);
         assert.match(link.textContent!, /https:\/\/pay\.gef\.example\/sessions\/S1\/live/);
         assert.equal(link.querySelectorAll('ul.live-readings li').length, 2);
+        assert.equal(link.querySelectorAll('ul.live-readings li.verified').length, 2, 'a reading not said to be the meter\'s');
         assert.ok(link.querySelector('.live-start.verified'), 'its start value is not said to be the meter\'s');
         assert.match(link.querySelector('.live-start')!.textContent!, /the meter's\s*Start value/);
         assert.match(link.querySelector('.live-start')!.textContent!, /meter DC-2026-001, key 95ceb48c/);
+        assert.equal(link.querySelector('.live-wrong'), null, 'a wrong value where none is');
         assert.match(root.textContent!, /Started at the web payment page of its operator, and stopped there/);
-        assert.match(root.textContent!, /The values after it are what its signed documents say, not checked yet/);
+        assert.match(root.textContent!, /1 signed value after it is the meter's as well, and fits the values before/);
         assert.equal(root.querySelector('.btn.danger'), null, 'a Stop for a session stopped at the web payment page');
+
+    });
+
+    it('says the phone stopped a session whose signed value after the start is a wrong one, and why', async () => {
+
+        current = wrongValueSession();
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.live-wrong') !== null);
+
+        const wrong = root.querySelector<HTMLElement>('.live-wrong')!;
+
+        assert.match(wrong.textContent!, /a wrong meter value\s*After the start/);
+        assert.match(wrong.textContent!, /990[.,]000 kWh/);
+        assert.match(wrong.textContent!, /The meter counts backwards/);
+        assert.match(wrong.querySelector('.error-box')!.textContent!, /a signed meter value after its start is a wrong one/);
+        assert.match(wrong.querySelector('.error-box')!.textContent!, /stop it there/);
+        assert.ok(root.querySelector('.live-start.verified'), 'its start value held');
+        assert.equal(root.querySelectorAll('ul.live-readings li.refused').length, 1);
+        assert.match(root.querySelector('.session-status')!.textContent!, /stopped/);
+        assert.equal(root.querySelector('.btn.danger'), null, 'a Stop for a session the phone stopped');
 
     });
 

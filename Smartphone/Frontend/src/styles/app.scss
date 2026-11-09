@@ -329,11 +329,12 @@ ul.trust-keys {
 
 }
 
-// The readings a live link brought, as its signed documents say them, and
-// its signed start value, checked.
+// The readings a live link brought, as its signed documents say them, each
+// checked, its signed start value, and a wrong value after it.
 .session-live-link {
 
-    .live-start {
+    .live-start,
+    .live-wrong {
 
         padding:     0.4rem 0;
         border-top:  1px solid $color-border;
@@ -364,9 +365,14 @@ ul.trust-keys {
             border-top:  1px solid $color-border;
         }
 
-        li > span + span {
+        li > span + span,
+        li > i + span {
             margin-left:  0.5rem;
         }
+
+        li.verified  > i { color: $color-ok;    }
+        li.refused   > i { color: $color-error; }
+        li.unchecked > i { color: $color-muted; }
 
     }
 

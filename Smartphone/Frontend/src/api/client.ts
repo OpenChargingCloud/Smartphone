@@ -414,7 +414,7 @@ export interface ChargingSession {
     /** What it costs: as the operator reported it, where it did ("reported"), else charged times the price. */
     cost:             { amount: number; pricePerKWh: number; currency: string; reported?: boolean };
     stoppedBy?:       string;
-    /** Why this phone stopped it: of a live link, its signed start value is a wrong one. */
+    /** Why this phone stopped it: of a live link, one of its signed values is a wrong one. */
     stoppedBecause?:  string;
     /** What the e-mobility provider reported of it, once it did. */
     provider?:        ProviderReport;
@@ -427,7 +427,7 @@ export interface ChargingSession {
     liveLink?:        LiveLinkFollow;
 }
 
-/** The live link of a session the web payment page of its operator started: what came over it, as its signed documents say, and how its signed start value held against the proof of the station. */
+/** The live link of a session the web payment page of its operator started: what came over it, as its signed documents say, and how each signed value held against the proof of the station. */
 export interface LiveLinkFollow {
     handedOverAt:   string;
     /** The URL it was fetched from; null where its document itself was handed over. */
@@ -449,26 +449,40 @@ export interface LiveLinkFollow {
     endedBecause:   string | null;
     /** How many signed documents it brought. */
     documents:      number;
-    readings:       MeterReading[];
+    /** Its readings, each with whether the document it came in held: null while it was not checked or could not be. */
+    readings:       (MeterReading & { holds: boolean | null })[];
     energyKWh:      number | null;
     /** How its signed start value held, checked once it came; null while none came. */
     start:          LiveLinkStartCheck | null;
+    /** How the signed values after the start held: the end value is not checked yet ("notChecked"). */
+    values:         { holding: number; wrong: number; undecided: number; notChecked: number };
+    /** The signed value after the start that is a wrong one - the phone stopped the session -, or null. */
+    wrong:          LiveLinkWrongValue | null;
 }
 
-/** The signed start value of a live link, checked with the key the proof of the station gives for its meter. */
-export interface LiveLinkStartCheck {
+/** A signed value of a live link, checked with the key the proof of the station gives for its meter, and against the values before it. */
+export interface LiveLinkValueCheck {
     checkedAt:          string;
     /** Whether it holds: false where it is a wrong one - the phone stopped the session -, null where it could not be checked. */
     holds:              boolean | null;
     /** Why it does not hold, or was not checked. */
     error:              string | null;
-    /** The reading of the begin of the transaction. */
-    reading:            MeterReading | null;
     meterSerialNumber:  string | null;
     meterId:            string | null;
     keyId:              string | null;
     /** What ChargyCore said of its signature, where it was asked. */
     result:             string | null;
+}
+
+/** The signed start value of a live link, checked. */
+export interface LiveLinkStartCheck extends LiveLinkValueCheck {
+    /** The reading of the begin of the transaction. */
+    reading:            MeterReading;
+}
+
+/** A signed value after the start of a live link that is a wrong one, with its readings. */
+export interface LiveLinkWrongValue extends LiveLinkValueCheck {
+    readings:           MeterReading[];
 }
 
 /** One reading of a signed meter value: when the meter measured it, its register in kWh, "B" or "E" of the transaction. */

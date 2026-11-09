@@ -123,7 +123,7 @@ export function reportedSession(more: Partial<ChargingSession> = {}): ChargingSe
  * A session at the DC EVSE of a roaming network that the web payment page of
  * its operator started, as a smartphone sends it: followed over its live link,
  * two signed documents come, its figures what they say, its signed start value
- * the meter's as the proof of the station says.
+ * and the value after it the meter's as the proof of the station says.
  */
 export function liveLinkSession(more: Partial<ChargingSession> = {}): ChargingSession {
 
@@ -140,13 +140,15 @@ export function liveLinkSession(more: Partial<ChargingSession> = {}): ChargingSe
                           transports: [ 'https' ], updates: 7, lastUpdateAt: '2026-10-10T08:10:00Z', lastTransport: 'https',
                           lastEndpoint: 'https://pay.gef.example/sessions/S1/live', lastKind: 'OCMFChargeTransparencyRecord',
                           problem: null, endedAt: null, endedBecause: null, documents: 2,
-                          readings: [ { measuredAt: '2026-10-10T08:00:00Z', energyKWh: 1000,   transaction: 'B', status: 'G' },
-                                      { measuredAt: '2026-10-10T08:10:00Z', energyKWh: 1012.5, transaction: 'C', status: 'G' } ],
+                          readings: [ { measuredAt: '2026-10-10T08:00:00Z', energyKWh: 1000,   transaction: 'B', status: 'G', holds: true },
+                                      { measuredAt: '2026-10-10T08:10:00Z', energyKWh: 1012.5, transaction: 'C', status: 'G', holds: true } ],
                           energyKWh: 12.5,
                           start: { checkedAt: '2026-10-10T08:00:05Z', holds: true, error: null,
                                    reading: { measuredAt: '2026-10-10T08:00:00Z', energyKWh: 1000, transaction: 'B', status: 'G' },
                                    meterSerialNumber: 'DC-2026-001', meterId: 'meter-dc-1',
-                                   keyId: '95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6', result: 'ValidSignature' } }
+                                   keyId: '95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6', result: 'ValidSignature' },
+                          values: { holding: 1, wrong: 0, undecided: 0, notChecked: 0 },
+                          wrong: null }
     };
 
     delete followed.fullAt;
@@ -176,9 +178,38 @@ export function wrongStartSession(): ChargingSession {
         energyKWh:       0,
         cost:            { amount: 0, pricePerKWh: 0.65, currency: 'EUR' },
         stoppedBecause:  'Its signed start meter value is a wrong one: It is not signed by the key 95ceb48c of the meter DC-2026-001: InvalidSignature.',
-        liveLink:        { ...link, updates: 1, documents: 1, readings: [ link.readings[0]! ], energyKWh: 0,
+        liveLink:        { ...link, updates: 1, documents: 1, readings: [ { ...link.readings[0]!, holds: false } ], energyKWh: 0,
                            start: { ...link.start!, holds: false, result: 'InvalidSignature',
-                                    error: 'It is not signed by the key 95ceb48c of the meter DC-2026-001: InvalidSignature.' } }
+                                    error: 'It is not signed by the key 95ceb48c of the meter DC-2026-001: InvalidSignature.' },
+                           values: { holding: 0, wrong: 0, undecided: 0, notChecked: 0 } }
+    };
+
+}
+
+
+/**
+ * The session of a live link whose signed start value held and whose value
+ * after it is a wrong one - the meter counting backwards -, which the
+ * smartphone stopped, as it sends it.
+ */
+export function wrongValueSession(): ChargingSession {
+
+    const followed = liveLinkSession();
+    const link     = followed.liveLink!;
+    const error    = 'The meter counts backwards: 990 kWh at 2026-10-10T08:10:00.0000000+00:00, and 1000 kWh at 2026-10-10T08:00:00.0000000+00:00.';
+
+    return {
+        ...followed,
+        status:          'stopped',
+        endedAt:         '2026-10-10T08:10:05Z',
+        stoppedBecause:  `A signed meter value after its start is a wrong one: ${error}`,
+        liveLink:        { ...link,
+                           readings: [ link.readings[0]!, { ...link.readings[1]!, energyKWh: 990, holds: false } ],
+                           values:   { holding: 0, wrong: 1, undecided: 0, notChecked: 0 },
+                           wrong:    { checkedAt: '2026-10-10T08:10:05Z', holds: false, error,
+                                       meterSerialNumber: 'DC-2026-001', meterId: 'meter-dc-1',
+                                       keyId: '95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6', result: 'ValidSignature',
+                                       readings: [ { measuredAt: '2026-10-10T08:10:00Z', energyKWh: 990, transaction: 'C', status: 'G' } ] } }
     };
 
 }

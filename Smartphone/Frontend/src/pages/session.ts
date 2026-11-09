@@ -1,4 +1,4 @@
-import { api, type ChargingSession, type LiveLinkFollow, type LiveLinkStartCheck, type MeterValueCheck, type SessionCheck } from '../api/client';
+import { api, type ChargingSession, type LiveLinkFollow, type LiveLinkStartCheck, type LiveLinkValueCheck, type LiveLinkWrongValue, type MeterValueCheck, type SessionCheck } from '../api/client';
 import { auth } from '../auth';
 import { dayAndTime, duration, isRunning, money, reportedInWords, sessionStatusClass, sessionStatusWord, withUnit } from '../charging/words';
 import { standardWord } from '../map/stations';
@@ -171,10 +171,17 @@ export const sessionPage: Page = {
 
                     ${startView(link.start)}
 
+                    ${link.wrong !== null ? wrongView(link.wrong) : nothing}
+
                     ${link.readings.length > 0 ? html`
                         <ul class="live-readings">
                             ${link.readings.map(reading => html`
-                                <li>
+                                <li class="${reading.holds === true ? 'verified' : reading.holds === false ? 'refused' : 'unchecked'}">
+                                    ${reading.holds === true
+                                          ? html`<i class="fa-solid fa-check" title="the meter's"></i>`
+                                          : reading.holds === false
+                                                ? html`<i class="fa-solid fa-xmark" title="a wrong one"></i>`
+                                                : html`<i class="fa-solid fa-minus" title="not checked"></i>`}
                                     <span>${dayAndTime(reading.measuredAt)}</span>
                                     <span>${reading.energyKWh !== null ? withUnit(reading.energyKWh, 'kWh', 3) : 'no energy register'}</span>
                                     ${reading.transaction !== null ? html`<span class="muted">${reading.transaction}</span>` : nothing}
@@ -185,9 +192,9 @@ export const sessionPage: Page = {
 
                     <p class="small muted">
                         A key a live link names is no authority, the one the proof of the station gives for the meter
-                        is: the signed start value is checked with it once it comes, and a wrong one stops the session
-                        here. The values after it are what its signed documents say, not checked yet; the documents
-                        are kept, each as it came, to be checked with it.
+                        is: every signed value is checked with it as it comes, and against the values before it - none
+                        measured before the start, the meter counting forwards. A wrong one stops the session here.
+                        The end value is not checked yet. The documents are kept, each as it came.
                     </p>
 
                 </section>
@@ -211,12 +218,8 @@ export const sessionPage: Page = {
                                 ? html`<span class="chip bad"><i class="fa-solid fa-xmark"></i> a wrong start value</span>`
                                 : html`<span class="chip"><i class="fa-solid fa-question"></i> not checked</span>`}
                     <span>Start value</span>
-                    ${reading !== null ? html`
-                        <span>${dayAndTime(reading.measuredAt)}${reading.energyKWh !== null ? `: ${withUnit(reading.energyKWh, 'kWh', 3)}` : ''}</span>
-                    ` : nothing}
-                    <div class="small muted">
-                        ${start.meterSerialNumber !== null ? `meter ${start.meterSerialNumber}, ` : ''}${start.keyId !== null ? html`key <span class="commit">${start.keyId}</span>, ` : nothing}checked ${dayAndTime(start.checkedAt)}
-                    </div>
+                    <span>${dayAndTime(reading.measuredAt)}${reading.energyKWh !== null ? `: ${withUnit(reading.energyKWh, 'kWh', 3)}` : ''}</span>
+                    ${checkedWith(start)}
                     ${start.error !== null ? html`<div class="small">${start.error}</div>` : nothing}
                     ${start.holds === false ? html`
                         <div class="error-box">
@@ -224,6 +227,39 @@ export const sessionPage: Page = {
                             page of its operator gives this phone no link to stop the station with: stop it there.
                         </div>
                     ` : nothing}
+                </div>
+            `;
+
+        }
+
+
+        function wrongView(wrong: LiveLinkWrongValue): TemplateResult {
+
+            return html`
+                <div class="live-wrong">
+                    <span class="chip bad"><i class="fa-solid fa-xmark"></i> a wrong meter value</span>
+                    <span>After the start</span>
+                    ${wrong.readings.map(reading => html`
+                        <span>${dayAndTime(reading.measuredAt)}${reading.energyKWh !== null ? `: ${withUnit(reading.energyKWh, 'kWh', 3)}` : ''}</span>
+                    `)}
+                    ${checkedWith(wrong)}
+                    ${wrong.error !== null ? html`<div class="small">${wrong.error}</div>` : nothing}
+                    <div class="error-box">
+                        This phone stopped the session: a signed meter value after its start is a wrong one. The web
+                        payment page of its operator gives this phone no link to stop the station with: stop it there.
+                    </div>
+                </div>
+            `;
+
+        }
+
+
+        /** The meter and its key a signed value of a live link was checked with, and when. */
+        function checkedWith(check: LiveLinkValueCheck): TemplateResult {
+
+            return html`
+                <div class="small muted">
+                    ${check.meterSerialNumber !== null ? `meter ${check.meterSerialNumber}, ` : ''}${check.keyId !== null ? html`key <span class="commit">${check.keyId}</span>, ` : nothing}checked ${dayAndTime(check.checkedAt)}
                 </div>
             `;
 

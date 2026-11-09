@@ -309,73 +309,168 @@ namespace cloud.charging.open.Smartphone.Charging
 
         #endregion
 
-        #region (static) StartOf(Configuration, Session, Now)
+        #region (static) ValuesOf(Configuration, Session, Now)
 
         /// <summary>
-        /// The signed start value of a session the web payment page of the
-        /// operator of its station started, as its live link brought it,
-        /// checked now - or null while no reading the meter signed as the
-        /// begin of the transaction ("B") came over it.
+        /// The signed documents of a session the web payment page of the
+        /// operator of its station started, as its live link brought them,
+        /// checked now - those not checked or not decided yet, in the order
+        /// they came: its start value, the reading the meter signed as the
+        /// begin of the transaction ("B"), and every value after it but the
+        /// end value (<see cref="LiveLinkFollow.ToCheck"/>).
         /// </summary>
         /// <remarks>
         /// <para>
-        /// It holds where the meter says it is good - its status "G", no
-        /// error flagged - and it is a reading of an energy register, of the
-        /// meter the proof of the station names for the EVSE, signed by the
-        /// key the proofs kept give for that meter at the time it was
-        /// measured, as ChargyCore checks the signature.
+        /// A value holds where it is signed by the key the proofs kept give
+        /// for the meter the proof of the station names for the EVSE, at the
+        /// time it was measured, as ChargyCore checks the signature; where the
+        /// meter says each of its readings is good - its status "G", no error
+        /// flagged - and of an energy register; and where it fits the values
+        /// that held before it: not measured before the start value, and the
+        /// meter not counting backwards - no reading measured later with less
+        /// energy, none measured earlier with more, none at the same time
+        /// with another.
         /// </para>
         /// <para>
-        /// It does not hold - a wrong start value - where the meter says it is
-        /// not good, it is of another meter, or it is not signed by that key.
-        /// It is not checked where this phone can not decide: the identity
-        /// keys trusted here do not suffice, or no proof kept attests a key
-        /// of the meter for the time it was measured - one that names a time
-        /// to come as well.
+        /// It does not hold - a wrong meter value - where it is of another
+        /// meter, not signed by that key, not good as the meter says, or does
+        /// not fit. It is not checked where this phone can not decide: the
+        /// identity keys trusted here do not suffice, or no proof kept attests
+        /// a key of the meter for the time it was measured - one that names a
+        /// time to come as well.
         /// </para>
         /// <para>
-        /// That the start value is of this very session is not proven: its
-        /// live link names the charge point, and nothing binds the payment
-        /// at the page to what the meter signs.
+        /// That the values are of this very session is not proven: its live
+        /// link names the charge point, and nothing binds the payment at the
+        /// page to what the meter signs.
         /// </para>
         /// </remarks>
-        public static LiveLinkStartCheck? StartOf(RoamingNetworkConfiguration  Configuration,
-                                                  ChargingSession              Session,
-                                                  DateTimeOffset               Now)
+        public static IReadOnlyList<(LiveLinkDocument Document, LiveLinkValueCheck Check)> ValuesOf(RoamingNetworkConfiguration  Configuration,
+                                                                                                    ChargingSession              Session,
+                                                                                                    DateTimeOffset               Now)
         {
 
-            if (Session.LiveLink?.StartDocument is not (LiveLinkDocument document, MeterReading reading))
-                return null;
-
-            LiveLinkStartCheck Checked(Boolean? Holds, String? Error, MeterValueCheck? Value = null)
-                => new (Now, Holds, Error, document.Text, Value?.MeterSerialNumber, Value?.MeterId, Value?.KeyId, Value?.Result);
+            if (Session.LiveLink is not LiveLinkFollow follow || follow.ToCheck is not { Count: > 0 } toCheck)
+                return [];
 
             if (Session.Evidence is not SessionEvidence evidence)
-                return Checked(null, "The session keeps no proof of its station to check it with.");
+                return [.. toCheck.Select(document => (document, new LiveLinkValueCheck(Now, null, "The session keeps no proof of its station to check it with.")))];
 
             if (AuthorityOf(Configuration, evidence, Now, out var authorityError) is not IRoamingNetworkTrustAuthority authority)
-                return Checked(null, authorityError);
+                return [.. toCheck.Select(document => (document, new LiveLinkValueCheck(Now, null, authorityError)))];
 
-            var value = CheckDocument(authority, evidence.MeterEvidence, evidence.EVSEId, "Start", document.Text, Session, out var noKey);
+            var start   = follow.StartDocument;
+            var held    = follow.Signed.Where(document => document.Check?.Holds == true).SelectMany(document => document.Readings).ToList();
+            var begin   = start?.Document.Check?.Holds == true ? start.Value.Reading : null;
+            var checks  = new List<(LiveLinkDocument, LiveLinkValueCheck)>();
 
-            if (!value.Verified)
-                return value.MeterSerialNumber is String named && evidence.MeterSerialNumber is String expected && named != expected
-                           ? Checked(false, $"It is of the meter {named}, and the proof of {evidence.StationId} names the meter {expected} for {evidence.EVSEId}.", value)
-                           : Checked(noKey ? null : false, value.Error, value);
+            foreach (var document in toCheck)
+            {
 
-            // The meter's, and what the meter says of it itself.
-            if (reading.Status is String status && status != "G")
-                return Checked(false, $"The meter says its start value is not good: its status is \"{status}\"{StatusInWords(status)}.", value);
+                var isStart  = ReferenceEquals(document, start?.Document);
+                var check    = CheckValue(authority, evidence, document, isStart, isStart ? null : begin, held, Session, Now);
 
-            if (reading.ErrorFlags is { Length: > 0 } flags)
-                return Checked(false, $"The meter flags an error of its start value: \"{flags}\"{ErrorFlagsInWords(flags)}.", value);
+                checks.Add((document, check));
 
-            if (reading.EnergyKWh is null)
-                return Checked(false, "Its start value is no energy register in kWh or Wh.", value);
+                // A wrong one stops the session: nothing after it is checked.
+                if (check.Holds == false)
+                    break;
 
-            return Checked(true, null, value);
+                if (check.Holds == true)
+                {
+
+                    held.AddRange(document.Readings);
+
+                    if (isStart)
+                        begin = start!.Value.Reading;
+
+                }
+
+            }
+
+            return checks;
 
         }
+
+        #endregion
+
+        #region (private static) CheckValue(Authority, Evidence, Document, IsStart, Begin, Held, Session, Now)
+
+        /// <summary>
+        /// One signed document of a live link, checked: its signature with the
+        /// key of the meter, what the meter says of its readings, and how they
+        /// fit the begin of the transaction and the readings that held before.
+        /// </summary>
+        private static LiveLinkValueCheck CheckValue(IRoamingNetworkTrustAuthority  Authority,
+                                                     SessionEvidence                Evidence,
+                                                     LiveLinkDocument               Document,
+                                                     Boolean                        IsStart,
+                                                     MeterReading?                  Begin,
+                                                     IReadOnlyList<MeterReading>    Held,
+                                                     ChargingSession                Session,
+                                                     DateTimeOffset                 Now)
+        {
+
+            var value = CheckDocument(Authority, Evidence.MeterEvidence, Evidence.EVSEId, IsStart ? "Start" : "Intermediate", Document.Text, Session, out var noKey);
+
+            LiveLinkValueCheck Checked(Boolean? Holds, String? Error)
+                => new (Now, Holds, Error, value.MeterSerialNumber, value.MeterId, value.KeyId, value.Result);
+
+            if (!value.Verified)
+                return value.MeterSerialNumber is String named && Evidence.MeterSerialNumber is String expected && named != expected
+                           ? Checked(false, $"It is of the meter {named}, and the proof of {Evidence.StationId} names the meter {expected} for {Evidence.EVSEId}.")
+                           : Checked(noKey ? null : false, value.Error);
+
+            // The meter's: what the meter says of it itself.
+            foreach (var reading in Document.Readings)
+            {
+
+                var which = IsStart && reading.Transaction == "B" ? "its start value" : $"its value of {reading.MeasuredAt:o}";
+
+                if (reading.Status is String status && status != "G")
+                    return Checked(false, $"The meter says {which} is not good: its status is \"{status}\"{StatusInWords(status)}.");
+
+                if (reading.ErrorFlags is { Length: > 0 } flags)
+                    return Checked(false, $"The meter flags an error of {which}: \"{flags}\"{ErrorFlagsInWords(flags)}.");
+
+                if (reading.EnergyKWh is null)
+                    return Checked(false, $"{Capital(which)} is no energy register in kWh or Wh.");
+
+            }
+
+            // How it fits what held before it.
+            foreach (var reading in Document.Readings)
+            {
+
+                if (Begin is MeterReading begin && reading.MeasuredAt < begin.MeasuredAt)
+                    return Checked(false, $"It was measured at {reading.MeasuredAt:o}, before the start value of {begin.MeasuredAt:o}.");
+
+                foreach (var before in Held)
+                {
+
+                    if (before.EnergyKWh is not Decimal was)
+                        continue;
+
+                    if ((before.MeasuredAt < reading.MeasuredAt && was > reading.EnergyKWh) ||
+                        (before.MeasuredAt > reading.MeasuredAt && was < reading.EnergyKWh))
+                        return Checked(false, $"The meter counts backwards: {Figure(reading.EnergyKWh!.Value)} kWh at {reading.MeasuredAt:o}, and {Figure(was)} kWh at {before.MeasuredAt:o}.");
+
+                    if (before.MeasuredAt == reading.MeasuredAt && was != reading.EnergyKWh)
+                        return Checked(false, $"It says {Figure(reading.EnergyKWh!.Value)} kWh at {reading.MeasuredAt:o}, where a value before says {Figure(was)} kWh at that time.");
+
+                }
+
+            }
+
+            return Checked(true, null);
+
+        }
+
+        private static String Capital(String Text)
+            => Text.Length > 0 ? Char.ToUpperInvariant(Text[0]) + Text[1..] : Text;
+
+        private static String Figure(Decimal Value)
+            => Value.ToString(CultureInfo.InvariantCulture);
 
         #endregion
 

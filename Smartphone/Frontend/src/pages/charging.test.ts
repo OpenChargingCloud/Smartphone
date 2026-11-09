@@ -7,7 +7,7 @@
  */
 
 import { asked, leave, open, refused, until, type Asked } from '../../test/smartphone.ts';
-import { liveLinkSession, reportedSession, session, wrongStartSession } from '../../test/charging.ts';
+import { liveLinkSession, reportedSession, session, wrongStartSession, wrongValueSession } from '../../test/charging.ts';
 
 import { strict as assert }    from 'node:assert';
 import { after, describe, it } from 'node:test';
@@ -90,7 +90,25 @@ describe('the charging page', () => {
         assert.match(card.textContent!, /Started at the web payment page of its operator, and stopped there/);
         assert.match(card.textContent!, /7 updates came over its live link/);
         assert.match(card.textContent!, /Its signed start value, 1[.,]000[.,]000 kWh at [^,]+, is the meter's, by the key the proof of the station gives for it/);
+        assert.match(card.textContent!, /1 signed value after it is the meter's as well/);
         assert.equal(card.querySelector('.btn.danger'), null, 'a Stop for a session stopped at the web payment page');
+
+    });
+
+    it('says the phone stopped a session whose signed value after the start is a wrong one', async () => {
+
+        running    = [ wrongValueSession() ];
+        stopAnswer = undefined;
+
+        const root = await open(chargingPage, '/charging', [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelectorAll('.session-card').length === 1);
+
+        const card = root.querySelector<HTMLElement>('.session-card')!;
+
+        assert.match(card.textContent!, /This phone stopped it: a signed meter value after its start is a wrong one/);
+        assert.match(card.textContent!, /The meter counts backwards/);
+        assert.match(card.textContent!, /stop it there/);
+        assert.equal(card.querySelector('.btn.danger'), null, 'a Stop for a session the phone stopped');
 
     });
 

@@ -369,6 +369,68 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
+        #region ALiveLinkKeepsHowEachOfItsDocumentsHeld()
+
+        /// <summary>
+        /// A live link keeps how each signed document it brought held, with the
+        /// document: kept and read again as it was - and the check of its start
+        /// a store kept beside its documents, before each kept its own, is read
+        /// as the check of the document of its start. A document that held or
+        /// did not stays as it was.
+        /// </summary>
+        [Test]
+        public void ALiveLinkKeepsHowEachOfItsDocumentsHeld()
+        {
+
+            var at      = new DateTimeOffset(2026, 10, 10, 8, 10, 5, TimeSpan.Zero);
+            var meter   = TestRoamingNetwork.NewMeterKey();
+            var begin   = TestRoamingNetwork.OCMF(meter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (at.AddMinutes(-10), "B", 1000m));
+            var after   = TestRoamingNetwork.OCMF(meter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (at,                 "C", 1012.5m));
+            var link    = new JObject(new JProperty("@context", "https://open.charging.cloud/contexts/chargeTransparency/live/link/1.0"));
+
+            var follow  = new LiveLinkFollow(link, null, at.AddMinutes(-11)).
+                              WithUpdate(at.AddMinutes(-10), "https", "https://pay.example/live", "OCMF", [ begin ]).
+                              WithUpdate(at,                 "https", "https://pay.example/live", "OCMF", [ after ]).
+                              WithChecks([ (begin, new LiveLinkValueCheck(at, true,  null, "DC-2026-001", "meter-dc-1", "95ceb48c", "ValidSignature")),
+                                           (after, new LiveLinkValueCheck(at, false, "The meter counts backwards.", "DC-2026-001")) ]);
+
+            var read    = LiveLinkFollow.TryParse(follow.ToStorageJSON())!;
+
+            // As a store kept it beside its documents.
+            var before  = follow.ToStorageJSON();
+
+            foreach (var document in before["documents"]!.Children<JObject>())
+                document.Remove("check");
+
+            before.Add(new JProperty("start", new JObject(new JProperty("checkedAt", at.ToString("o")), new JProperty("holds", true),
+                                                          new JProperty("keyId", "95ceb48c"), new JProperty("text", begin))));
+
+            var older   = LiveLinkFollow.TryParse(before)!;
+
+            Assert.Multiple(() => {
+
+                Assert.That(follow.Start?.Holds,                Is.True);
+                Assert.That(follow.Wrong?.Text,                 Is.EqualTo(after));
+                Assert.That(follow.RefusedBecause,              Does.StartWith("A signed meter value after its start is a wrong one: The meter counts backwards."));
+                Assert.That(follow.ToCheck,                     Is.Empty, "a document that held or did not is checked again");
+
+                Assert.That(read.Start?.KeyId,                  Is.EqualTo("95ceb48c"));
+                Assert.That(read.Wrong?.Check?.Error,           Is.EqualTo("The meter counts backwards."));
+                Assert.That(read.ToJSON()["values"]?["wrong"]?.Value<Int32>(), Is.EqualTo(1));
+
+                Assert.That(older.Start?.Holds,                 Is.True,  "the check of its start kept beside its documents is lost");
+                Assert.That(older.Start?.KeyId,                 Is.EqualTo("95ceb48c"));
+                Assert.That(older.Wrong,                        Is.Null);
+                Assert.That(older.ToCheck.Select(document => document.Text), Is.EqualTo(new[] { after }));
+
+                Assert.That(follow.WithChecks([ (after, new LiveLinkValueCheck(at, true, null)) ]).Wrong?.Text, Is.EqualTo(after), "a wrong one became one that holds");
+
+            });
+
+        }
+
+        #endregion
+
     }
 
 }
