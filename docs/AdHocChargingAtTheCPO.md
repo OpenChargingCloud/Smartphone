@@ -78,8 +78,10 @@ sequenceDiagram
     D->>P: chooses a limit and pays
     C->>S: RequestStartTransaction with transactionLimit
     S->>S: meter signs the begin, ID = payment reference
-    P-->>D: live link, stop link, dispute link, payment reference
-    D->>A: hands them over at the EVSE paid for
+    P-->>D: the URL of its hand-over
+    D->>A: hands it over at the EVSE paid for
+    A->>P: GET the hand-over, at the host of the signed webPaymentURL alone
+    P-->>A: live link, stop link, dispute link, payment reference, limit
     A->>N: proof of the station again
     loop while it charges
         S-->>A: signed meter values over the live link
@@ -269,7 +271,9 @@ link and their answers - is [WebPaymentPageInterface.md](WebPaymentPageInterface
 4. The station writes the **reference of the payment** into the identification
    of every meter value it signs for the session (OCMF `ID`), so that the meter
    signs whose session it is.
-5. The page gives the driver:
+5. The page gives the driver a **hand-over**: one JSON document, at an `https`
+   URL of this session alone on the host of the page, which names all of the
+   following - or, where it gives none, each of them on its own:
 
 | | What it is | |
 |---|---|---|
@@ -279,15 +283,44 @@ link and their answers - is [WebPaymentPageInterface.md](WebPaymentPageInterface
 | **payment reference** | the reference of the payment, as the station writes it into OCMF `ID` | optional, but without it the values are not proven to be of this session |
 | **limit** | the limit chosen, as OCPP 2.1 says it | optional |
 
+```json
+{
+  "@context":          "https://open.charging.cloud/contexts/wwcp/webPayment/handOver/v1",
+  "liveLink":          "https://pay.gef.example/liveLinks/4711",
+  "stopLink":          "https://pay.gef.example/sessions/4711/stop?key=9f2c...",
+  "disputeLink":       "https://pay.gef.example/sessions/4711/dispute?key=41ab...",
+  "paymentReference":  "GEF-2026-11-09-0815",
+  "limit":             { "maxEnergy": 20000 }
+}
+```
+
 The stop link and the dispute link work for whoever has them, so they are
-secrets of the session.
+secrets of the session - and so is the URL of the hand-over, which names them.
+What else a hand-over must and should be is
+[WebPaymentPageInterface.md, The hand-over](WebPaymentPageInterface.md#the-hand-over).
 
 
 ## Step 2 - Handing the session over to the app
 
 In the popup of the station, at the charge point paid for, the driver enters
-what the page gave: **Paid there? The live link its page gave**, the stop link,
-the dispute link, the payment reference and the limit. The app's API:
+the URL of the hand-over the page gave: **Paid there? The hand-over its page
+gave**. The app takes the hand-over from the **host of the web payment page**
+the proof of the station names - the signed `webPaymentURL` of
+[A5](#a5---opening-the-web-payment-page), port included - and asks no other
+host. Where the page gives no hand-over, the driver enters the live link, the
+stop link, the dispute link, the payment reference and the limit on their own
+instead. The app's API takes either:
+
+```http
+POST /api/v1/charging/sessions
+Content-Type: application/json
+
+{
+  "locationId":  "DE*GEF*P1",
+  "evseUid":     "DE*GEF*E2*1",
+  "handOver":    "https://pay.gef.example/handOvers/4711"
+}
+```
 
 ```http
 POST /api/v1/charging/sessions
@@ -304,12 +337,19 @@ Content-Type: application/json
 }
 ```
 
+`handOver` beside one of the others is refused (`400`). It may also be the
+hand-over document itself, pasted.
+
 The app takes it over only where
 
 - a roaming network is set, and the station and its EVSE are on the map
   (`404` otherwise);
 - the station **was checked and its proof holds now** (`409`);
 - the phone is not charging at that EVSE already (`409`);
+- a hand-over at a URL is at the host of the web payment page the proof names,
+  and the proof names one (`409`, before anything is asked), and answers there
+  with a hand-over: a JSON document naming its `@context` and its `liveLink`
+  (`400`; `502` where the host could not be reached);
 - the live link is one: given as its document, or fetched from its `https`
   URL, and recognized by ChargyCore as a Charge Transparency LiveLink (`400`;
   `502` where its URL could not be reached);
@@ -320,12 +360,21 @@ The app takes it over only where
   at most 255 characters without control characters, and the limit uses
   OCPP 2.1's names and units (`400`).
 
+**What is the CPO's.** The host of the web payment page is in the station's
+proof, signed by a CPO key that may sign `payments`, and TLS proves who answers
+there. So the **payment reference** of a hand-over the app took from that host
+is the CPO's, and so is every **stop link and dispute link at that host**,
+however it came. A link at another host, and a payment reference typed or
+pasted - a pasted hand-over among it - are the word of whoever gave them. The
+session's page says which is which. Nothing of the hand-over itself is signed.
+
 Then the session exists, `201`. It keeps, as **evidence**, the proof of its
 station checked before and the price statements that held - its price is fixed
 from now on - and the app asks for the proof once more right away, so that the
 first signed values are covered even where the first attestation runs out soon.
 The session is kept in `charging-sessions.json`; a restart of the phone follows
-it on. Of the stop and dispute links only the host is shown and logged.
+it on. Of the hand-over, the stop link and the dispute link only the host is
+shown and logged.
 
 
 ## Step 3 - Following the live link while it charges
@@ -504,6 +553,7 @@ dispute link, the driver is told to dispute the session at the page.
 |---|---|---|
 | the station, its meters and its prices are what the CPO published | the proof, attested by the RNO, verified against the identity keys trusted on the phone | the right keys trusted in Step 0 |
 | the web payment page is the CPO's (path A) | `webPaymentURL` in the proof, signed by a CPO key that may sign `payments` | - |
+| the payment reference and the links are the CPO's | a hand-over taken from the host of that `webPaymentURL`, over TLS | the page gives a hand-over there, its links at that host |
 | the payer stands in front of this EVSE (path B) | the TOTP of the dynamic QR code, checked by the CSMS | the CPO checks it |
 | every meter value is the meter's | its signature, with the key the RNO attested for the meter at that time | a proof covering its time |
 | the values are of this payment | the payment reference in OCMF `ID`, signed by the meter | the page gives the reference, the station signs it |
@@ -518,13 +568,18 @@ dispute link, the driver is told to dispute the session at the page.
   the app does not take the EVSE ID out of it, and does not compare the host of
   its URL with the signed `webPaymentURL` - the format of the URL is the CPO's
   own template, and nothing says the two have to be the same site.
-- **The handover is typed or pasted.** Nothing says how the page hands the live
-  link, the stop link, the dispute link, the payment reference and the limit to
-  the app: a redirect to an app link, a QR code of its own, a download. Nor
-  does a static `webPaymentURL` tell the page which EVSE was picked in the app.
-- **Stop link, dispute link and payment reference are conventions** of this
-  family - a POST of JSON, taken with a `2xx` - and no standard. A Charge
-  Transparency LiveLink carries none of them yet.
+- **The driver still carries the hand-over** from the page to the app, as one
+  URL to copy: there is no app link the page redirects to, and no QR code of it
+  the app scans. Nor does a static `webPaymentURL` tell the page which EVSE was
+  picked in the app.
+- **Not everything is bound to the CPO:** a link at another host than that of
+  the web payment page, and a payment reference typed or pasted, are the word
+  of whoever gave them. Binding them would take the CPO signing the hand-over
+  with a key the roaming network attests for `payments`.
+- **The hand-over, the stop link, the dispute link and the payment reference
+  are conventions** of this family - a hand-over of its own `@context`, a POST
+  of JSON taken with a `2xx` - and no standard. A Charge Transparency LiveLink
+  carries none of them yet.
 - **The amount actually taken** at the page is not compared with the cost the
   app works out: the page gives no receipt, signed or not.
 - **The price is not bound to the session:** the CPO signs no assignment of the
@@ -542,8 +597,8 @@ dispute link, the driver is told to dispute the session at the page.
 - **The payment reference in OCMF `ID`** is up to the station and its CSMS;
   the app only checks that it is there.
 - **The CPO side** - the web payment page, the TOTP check, the start with its
-  limit, the live link, the stop and dispute links - exists in this repository
-  only as the stand-in of the tests
+  limit, the hand-over, the live link, the stop and dispute links - exists in
+  this repository only as the stand-in of the tests
   ([`SmartphoneTests/TestCPO.cs`](../SmartphoneTests/TestCPO.cs)). What it has
   to do is [WebPaymentPageInterface.md](WebPaymentPageInterface.md).
 
@@ -555,7 +610,7 @@ dispute link, the driver is told to dispute the session at the page.
 | 0 | [`Smartphone/Roaming/RoamingNetworkConfiguration.cs`](../Smartphone/Roaming/RoamingNetworkConfiguration.cs), [`KeyStatementCheck.cs`](../Smartphone/Roaming/KeyStatementCheck.cs) |
 | A1 | [`Smartphone/Roaming/RoamingNetworkClient.cs`](../Smartphone/Roaming/RoamingNetworkClient.cs), [`RoamingNetworkStatus.cs`](../Smartphone/Roaming/RoamingNetworkStatus.cs), [`Frontend/src/pages/map.ts`](../Smartphone/Frontend/src/pages/map.ts) |
 | A2-A5 | [`Smartphone/Roaming/StationCheck.cs`](../Smartphone/Roaming/StationCheck.cs) |
-| 2 | [`Smartphone/HTTPAPI/SmartphoneHTTPAPI.Charging.cs`](../Smartphone/HTTPAPI/SmartphoneHTTPAPI.Charging.cs), [`Smartphone/Smartphone.LiveLinks.cs`](../Smartphone/Smartphone.LiveLinks.cs) |
+| 2 | [`Smartphone/HTTPAPI/SmartphoneHTTPAPI.Charging.cs`](../Smartphone/HTTPAPI/SmartphoneHTTPAPI.Charging.cs), [`Smartphone/Smartphone.LiveLinks.cs`](../Smartphone/Smartphone.LiveLinks.cs), [`Smartphone/Charging/WebPaymentHandOver.cs`](../Smartphone/Charging/WebPaymentHandOver.cs) |
 | 3 | [`Smartphone/Charging/LiveLinkFollow.cs`](../Smartphone/Charging/LiveLinkFollow.cs), [`Smartphone/Smartphone.Evidence.cs`](../Smartphone/Smartphone.Evidence.cs), [`Charging/SessionEvidence.cs`](../Smartphone/Charging/SessionEvidence.cs) |
 | 4 | [`Smartphone/Charging/SessionCheck.cs`](../Smartphone/Charging/SessionCheck.cs) |
 | 5, 7 | [`Smartphone/Smartphone.LiveLinks.cs`](../Smartphone/Smartphone.LiveLinks.cs) |
