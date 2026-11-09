@@ -146,10 +146,11 @@ export function liveLinkSession(more: Partial<ChargingSession> = {}): ChargingSe
                           start: { checkedAt: '2026-10-10T08:00:05Z', holds: true, error: null,
                                    reading: { measuredAt: '2026-10-10T08:00:00Z', energyKWh: 1000, transaction: 'B', status: 'G' },
                                    meterSerialNumber: 'DC-2026-001', meterId: 'meter-dc-1',
-                                   keyId: '95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6', result: 'ValidSignature' },
+                                   keyId: '95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6', result: 'ValidSignature',
+                                   identification: 'web-payment-S1' },
                           values: { holding: 1, wrong: 0, undecided: 0, notChecked: 0 },
                           wrong: null, refused: false, end: null, stopLink: null, limit: null, stop: null, limits: [], ending: null,
-                          disputeBecause: null, disputeLink: null, dispute: null }
+                          disputeBecause: null, disputeLink: null, dispute: null, paymentReference: 'web-payment-S1' }
     };
 
     delete followed.fullAt;
@@ -206,6 +207,7 @@ export function endedAtLimitSession(): ChargingSession {
                       end: { checkedAt: '2026-10-10T08:16:05Z', holds: true, error: null,
                              meterSerialNumber: 'DC-2026-001', meterId: 'meter-dc-1',
                              keyId: '95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6', result: 'ValidSignature',
+                             identification: 'web-payment-S1',
                              readings: [ { measuredAt: '2026-10-10T08:16:00Z', energyKWh: 1020, transaction: 'E', status: 'G' } ] },
                       limits: [ { kind: 'energy', limit: 20, unit: 'kWh', value: 20, reached: true } ],
                       ending: { reason: 'limit', transaction: 'E',
@@ -264,6 +266,7 @@ export function wrongValueSession(): ChargingSession {
                            wrong:    { checkedAt: '2026-10-10T08:10:05Z', holds: false, error,
                                        meterSerialNumber: 'DC-2026-001', meterId: 'meter-dc-1',
                                        keyId: '95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6', result: 'ValidSignature',
+                                       identification: 'web-payment-S1',
                                        readings: [ { measuredAt: '2026-10-10T08:10:00Z', energyKWh: 990, transaction: 'C', status: 'G' } ] } }
     };
 
@@ -292,6 +295,7 @@ export function wrongEndSession(): ChargingSession {
                       values: { ...link.values, wrong: 1 },
                       end: { checkedAt: '2026-10-10T08:16:05Z', holds: false, error,
                              meterSerialNumber: 'DC-2026-001', meterId: null, keyId: null, result: 'InvalidSignature',
+                             identification: 'web-payment-S1',
                              readings: [ { measuredAt: '2026-10-10T08:16:00Z', energyKWh: 1020, transaction: 'E', status: 'G' } ] },
                       ending: { reason: 'wrong', transaction: null,
                                 because: `Its signed end meter value is a wrong one: ${error} How it ended, and against its limit, this phone takes nothing of it.` },

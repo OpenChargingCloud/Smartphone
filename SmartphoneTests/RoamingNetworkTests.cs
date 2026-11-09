@@ -862,7 +862,9 @@ namespace cloud.charging.open.Smartphone.Tests
         /// station, the session is starting until something comes over it,
         /// charging from the first signed document on, its energy what the
         /// documents say, and finished once the meter signs the end - stopped
-        /// at the page, not here, and kept as it was across a restart.
+        /// at the page, not here, and kept as it was across a restart. Each
+        /// signed value names the payment the page took for it, as the page
+        /// gave its reference.
         /// </summary>
         [Test]
         public async Task AWebPaymentPageStartsASessionThePhoneFollowsOverItsLiveLink()
@@ -880,7 +882,7 @@ namespace cloud.charging.open.Smartphone.Tests
             var liveLinkURL = cpo.LiveLinkURL("S1");
 
             var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
-                                               new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, liveLink = liveLinkURL });
+                                               new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, liveLink = liveLinkURL, paymentReference = "web-payment-1" });
 
             Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
 
@@ -889,6 +891,7 @@ namespace cloud.charging.open.Smartphone.Tests
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(session["status"]!.Value<String>(),                     Is.EqualTo("starting"), "nothing came over it yet");
+                Assert.That(session["liveLink"]!["paymentReference"]!.Value<String>(), Is.EqualTo("web-payment-1"));
                 Assert.That(session["simulated"]!.Value<Boolean>(),                 Is.False);
                 Assert.That(session["cost"]!["pricePerKWh"]!.Value<Decimal>(),      Is.EqualTo(0.65m), "the price its checked proof gives");
                 Assert.That(session["liveLink"]!["from"]!.Value<String>(),          Is.EqualTo(liveLinkURL));
@@ -925,6 +928,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(start["meterSerialNumber"]!.Value<String>(),                   Is.EqualTo(TestRoamingNetwork.DCMeterSerial));
                 Assert.That(start["meterId"]!.Value<String>(),                             Is.EqualTo("meter-dc-1"));
                 Assert.That(start["keyId"]!.Value<String>(),                               Is.EqualTo(keyId), "checked with another key than the one the proof gave");
+                Assert.That(start["identification"]!.Value<String>(),                      Is.EqualTo("web-payment-1"), "the payment it names");
                 Assert.That(start["reading"]!["energyKWh"]!.Value<Decimal>(),              Is.EqualTo(1000m));
                 Assert.That(start["reading"]!["transaction"]!.Value<String>(),             Is.EqualTo("B"));
             }
@@ -991,6 +995,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(read["liveLink"]!["documents"]!.Value<Int32>(),         Is.EqualTo(3));
                 Assert.That(read["liveLink"]!["from"]!.Value<String>(),             Is.EqualTo(liveLinkURL));
                 Assert.That(read["liveLink"]!["start"]!["holds"]!.Value<Boolean?>(), Is.True, "how its start value held was not kept");
+                Assert.That(read["liveLink"]!["paymentReference"]!.Value<String>(), Is.EqualTo("web-payment-1"), "its payment reference was not kept");
             }
 
         }
@@ -1645,6 +1650,171 @@ namespace cloud.charging.open.Smartphone.Tests
 
             Assert.That(cpo.Disputes.Select(one => one.Session), Is.EqualTo(new[] { "S1", "S2", "S3", "S4" }));
             Assert.That(cpo.Stops,                               Is.Empty, "a session whose end value is a wrong one was stopped");
+
+        }
+
+        #endregion
+
+        #region AValueOfAnotherPaymentIsAWrongOne()
+
+        /// <summary>
+        /// Where the web payment page gave the reference of the payment it
+        /// took, a signed value holds only where the meter signed it as what
+        /// identified the charging ("ID"): a start value of another payment
+        /// stops the session and the station, as a value after it that names
+        /// none does, and an end value of another payment disputes it - each
+        /// the meter's. Where the page gave none, what the values name binds
+        /// nothing. A reference that is none is refused.
+        /// </summary>
+        [Test]
+        public async Task AValueOfAnotherPaymentIsAWrongOne()
+        {
+
+            await WithTheRoamingNetwork();
+
+            using var driver = await SignedInAs("driver1", "driver");
+
+            await Send(driver, HttpMethod.Get, "api/v1/map");
+            await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            var page = cpo = await TestCPO.Start();
+
+            foreach (var (reference, error) in new (Object Reference, String Error)[] {
+                                                   (42,                    "'paymentReference' is the reference of the payment"),
+                                                   ("web-payment\u0001",   "is no payment reference"),
+                                                   (new String('x', 256),  "is no payment reference")
+                                               })
+            {
+
+                var (refusedStatus, refused) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                                          new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, liveLink = page.LiveLinkURL("P0"), paymentReference = reference });
+
+                Assert.That(refusedStatus,                      Is.EqualTo(HttpStatusCode.BadRequest), refused.ToString());
+                Assert.That(refused["error"]!.Value<String>(),  Does.Contain(error));
+
+            }
+
+            async Task<String> Follow(String Session, String? Reference)
+            {
+
+                var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                                   new { locationId        = TestRoamingNetwork.PoolId,
+                                                         evseUid           = TestRoamingNetwork.DCEVSE,
+                                                         liveLink          = page.LiveLinkURL(Session),
+                                                         stopLink          = page.StopLinkURL(Session),
+                                                         disputeLink       = page.DisputeLinkURL(Session),
+                                                         paymentReference  = Reference });
+
+                Assert.That(status, Is.EqualTo(HttpStatusCode.Created), $"{Session}: {session}");
+
+                return session["id"]!.Value<String>()!;
+
+            }
+
+            Task<JObject> Started(String Id)
+                => SessionWhen(driver, Id, json => json["liveLink"]?["start"] is JObject start && start["holds"]?.Value<Boolean?>() == true);
+
+            Task<JObject> Holding(String Id, Int32 Count)
+                => SessionWhen(driver, Id, json => json["liveLink"]?["values"]?["holding"]?.Value<Int32>() == Count);
+
+            var meter   = network!.DCMeter;
+            var serial  = TestRoamingNetwork.DCMeterSerial;
+
+            // A start value of another payment: the session and its station stopped.
+            page.Send(TestRoamingNetwork.OCMF(meter, serial, "web-payment-other", (DateTimeOffset.UtcNow, "B", 1000.000m)));
+
+            var p1       = await Follow("P1", "web-payment-P1");
+            var stopped  = await SessionWhen(driver, p1, json => json["status"]?.Value<String>() == "stopped" && json["liveLink"]?["dispute"] is JObject);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(stopped["stoppedBecause"]!.Value<String>(),                    Does.StartWith("Its signed start meter value is a wrong one: It is of another session: it names \"web-payment-other\"").
+                                                                                                And.Contain("\"web-payment-P1\""), stopped.ToString());
+                Assert.That(stopped["liveLink"]!["paymentReference"]!.Value<String>(),     Is.EqualTo("web-payment-P1"));
+                Assert.That(stopped["liveLink"]!["start"]!["holds"]!.Value<Boolean?>(),    Is.False);
+                Assert.That(stopped["liveLink"]!["start"]!["result"]!.Value<String>(),     Is.EqualTo("ValidSignature"), "the meter's, of another payment");
+                Assert.That(stopped["liveLink"]!["start"]!["identification"]!.Value<String>(), Is.EqualTo("web-payment-other"));
+                Assert.That(stopped["liveLink"]!["dispute"]!["reason"]!.Value<String>(),   Does.Contain("It is of another session"));
+                Assert.That(page.Stops.Select(one => one.Session),                         Is.EqualTo(new[] { "P1" }));
+            }
+
+            // A value after the start that names no payment: stopped as well.
+            page.Send(TestRoamingNetwork.OCMF(meter, serial, "web-payment-P2", (DateTimeOffset.UtcNow, "B", 1000.000m)));
+
+            var p2 = await Follow("P2", "web-payment-P2");
+
+            await Started(p2);
+
+            page.Send(TestRoamingNetwork.OCMF(meter, serial, null, (DateTimeOffset.UtcNow, "C", 1004.000m)));
+
+            var unnamed = await SessionWhen(driver, p2, json => json["status"]?.Value<String>() == "stopped" && json["liveLink"]?["dispute"] is JObject);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(unnamed["stoppedBecause"]!.Value<String>(),                    Does.StartWith("A signed meter value after its start is a wrong one: It names no identification of the charging (\"ID\")").
+                                                                                                And.Contain("\"web-payment-P2\""), unnamed.ToString());
+                Assert.That(unnamed["liveLink"]!["start"]!["identification"]!.Value<String>(), Is.EqualTo("web-payment-P2"));
+                Assert.That(unnamed["liveLink"]!["wrong"]!["identification"]!.Type,        Is.EqualTo(JTokenType.Null));
+                Assert.That(unnamed["energyKWh"]!.Value<Decimal>(),                        Is.EqualTo(0m), "a value of no payment counts");
+                Assert.That(page.Stops.Select(one => one.Session),                         Is.EqualTo(new[] { "P1", "P2" }));
+            }
+
+            // An end value of another payment: disputed, not stopped.
+            page.Send(TestRoamingNetwork.OCMF(meter, serial, "web-payment-P3", (DateTimeOffset.UtcNow, "B", 1000.000m)));
+
+            var p3 = await Follow("P3", "web-payment-P3");
+
+            await Started(p3);
+
+            page.Send(TestRoamingNetwork.OCMF(meter, serial, "web-payment-P3", (DateTimeOffset.UtcNow, "C", 1005.000m)));
+
+            await Holding(p3, 1);
+
+            page.Send(TestRoamingNetwork.OCMF(meter, serial, "web-payment-other", (DateTimeOffset.UtcNow, "E", 1010.000m)));
+
+            var disputed = await SessionWhen(driver, p3, json => json["liveLink"]?["dispute"] is JObject);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(disputed["status"]!.Value<String>(),                           Is.EqualTo("finished"), disputed.ToString());
+                Assert.That(disputed["liveLink"]!["end"]!["holds"]!.Value<Boolean?>(),     Is.False);
+                Assert.That(disputed["liveLink"]!["end"]!["identification"]!.Value<String>(), Is.EqualTo("web-payment-other"));
+                Assert.That(disputed["liveLink"]!["refused"]!.Value<Boolean>(),            Is.False, "an end value of another payment stops the session");
+                Assert.That(disputed["liveLink"]!["disputeBecause"]!.Value<String>(),      Does.StartWith("Its signed end meter value is a wrong one: It is of another session"));
+                Assert.That(disputed["liveLink"]!["ending"]!["reason"]!.Value<String>(),   Is.EqualTo("wrong"));
+                Assert.That(disputed["energyKWh"]!.Value<Decimal>(),                       Is.EqualTo(5m), "an end value of another payment counts");
+            }
+
+            // No reference given: what the values name binds nothing.
+            page.Send(TestRoamingNetwork.OCMF(meter, serial, "web-payment-x", (DateTimeOffset.UtcNow, "B", 1000.000m)));
+
+            var p4 = await Follow("P4", null);
+
+            await Started(p4);
+
+            page.Send(TestRoamingNetwork.OCMF(meter, serial, "web-payment-y", (DateTimeOffset.UtcNow, "C", 1005.000m)));
+
+            await Holding(p4, 1);
+
+            page.Send(TestRoamingNetwork.OCMF(meter, serial, null, (DateTimeOffset.UtcNow, "E", 1010.000m)));
+
+            var unbound = await SessionWhen(driver, p4, json => json["status"]?.Value<String>() == "finished" && json["liveLink"]?["end"] is JObject);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(unbound["liveLink"]!["paymentReference"]!.Type,                Is.EqualTo(JTokenType.Null), unbound.ToString());
+                Assert.That(unbound["liveLink"]!["start"]!["identification"]!.Value<String>(), Is.EqualTo("web-payment-x"));
+                Assert.That(unbound["liveLink"]!["end"]!["holds"]!.Value<Boolean?>(),      Is.True);
+                Assert.That(unbound["liveLink"]!["end"]!["identification"]!.Type,          Is.EqualTo(JTokenType.Null));
+                Assert.That(unbound["liveLink"]!["disputeBecause"]!.Type,                  Is.EqualTo(JTokenType.Null));
+                Assert.That(unbound["energyKWh"]!.Value<Decimal>(),                        Is.EqualTo(10m));
+            }
+
+            // Stopped and disputed once each.
+            await Task.Delay(1000);
+
+            Assert.That(page.Stops.Select(one => one.Session),     Is.EqualTo(new[] { "P1", "P2" }));
+            Assert.That(page.Disputes.Select(one => one.Session),  Is.EqualTo(new[] { "P1", "P2", "P3" }));
 
         }
 

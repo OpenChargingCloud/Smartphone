@@ -42,13 +42,15 @@ namespace cloud.charging.open.Smartphone.Charging
     /// <param name="MeterId">The meter, as the proof names it, where its key was found.</param>
     /// <param name="KeyId">The key it was checked with.</param>
     /// <param name="Result">What ChargyCore said of its signature, where it was asked.</param>
+    /// <param name="Identification">What the document says identified the charging - its "ID" -, where it was read.</param>
     public sealed record LiveLinkValueCheck(DateTimeOffset  CheckedAt,
                                             Boolean?        Holds,
                                             String?         Error,
                                             String?         MeterSerialNumber  = null,
                                             String?         MeterId            = null,
                                             String?         KeyId              = null,
-                                            String?         Result             = null)
+                                            String?         Result             = null,
+                                            String?         Identification     = null)
     {
 
         public JObject ToJSON()
@@ -59,7 +61,8 @@ namespace cloud.charging.open.Smartphone.Charging
                     new JProperty("meterSerialNumber",  MeterSerialNumber),
                     new JProperty("meterId",            MeterId),
                     new JProperty("keyId",              KeyId),
-                    new JProperty("result",             Result));
+                    new JProperty("result",             Result),
+                    new JProperty("identification",     Identification));
 
         /// <summary>
         /// A check as the store kept it, or null where it kept none.
@@ -75,7 +78,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                             json.Value<String>("meterSerialNumber"),
                                             json.Value<String>("meterId"),
                                             json.Value<String>("keyId"),
-                                            json.Value<String>("result"))
+                                            json.Value<String>("result"),
+                                            json.Value<String>("identification"))
                    : null;
 
     }
@@ -303,6 +307,14 @@ namespace cloud.charging.open.Smartphone.Charging
     /// which this phone sends why it disputes the session to, with the signed
     /// values it disputes (<see cref="Dispute"/>).
     /// </para>
+    /// <para>
+    /// And the reference of the payment the page took
+    /// (<see cref="PaymentReference"/>), which the station writes into the
+    /// identification ("ID") of every signed value of the session: a value
+    /// that names another, or none, is of another session - a wrong one. Where
+    /// the page gave none, that the values are of this very session is not
+    /// proven: the live link names the charge point alone.
+    /// </para>
     /// </remarks>
     /// <param name="Link">The live link, its JSON document as it was handed over or fetched.</param>
     /// <param name="From">The URL it was fetched from, or null where the document itself was handed over.</param>
@@ -321,6 +333,7 @@ namespace cloud.charging.open.Smartphone.Charging
     /// <param name="Stop">The stop this phone asked the page for last, where it asked for one.</param>
     /// <param name="DisputeLink">The dispute link the web payment page gave for the session, where it gave one.</param>
     /// <param name="Dispute">The dispute this phone sent the page last, where it sent one.</param>
+    /// <param name="PaymentReference">The reference of the payment the page took, which every signed value of the session names as its identification, where the page gave one.</param>
     public sealed record LiveLinkFollow(JObject                           Link,
                                         String?                           From,
                                         DateTimeOffset                    HandedOverAt,
@@ -336,8 +349,9 @@ namespace cloud.charging.open.Smartphone.Charging
                                         String?                           StopLink       = null,
                                         TransactionLimit?                 Limit          = null,
                                         LiveLinkStop?                     Stop           = null,
-                                        String?                           DisputeLink    = null,
-                                        LiveLinkDispute?                  Dispute        = null)
+                                        String?                           DisputeLink       = null,
+                                        LiveLinkDispute?                  Dispute           = null,
+                                        String?                           PaymentReference  = null)
     {
 
         #region Data
@@ -701,7 +715,8 @@ namespace cloud.charging.open.Smartphone.Charging
         /// where one is, and how its signed end value held. Where its stop link
         /// goes - its host, not the link -, the limit the driver chose, and the
         /// stop this phone asked for. Why this phone disputes the session,
-        /// where its dispute link goes, and the dispute it sent.
+        /// where its dispute link goes, and the dispute it sent. And the
+        /// reference of the payment its signed values are to name.
         /// </summary>
         public JObject ToJSON()
         {
@@ -761,7 +776,8 @@ namespace cloud.charging.open.Smartphone.Charging
                         new JProperty("stop",           Stop?. ToJSON()),
                         new JProperty("disputeBecause", DisputeBecause),
                         new JProperty("disputeLink",    DisputeLinkHost),
-                        new JProperty("dispute",        Dispute?.ToJSON()));
+                        new JProperty("dispute",        Dispute?.ToJSON()),
+                        new JProperty("paymentReference", PaymentReference));
 
         }
 
@@ -798,6 +814,7 @@ namespace cloud.charging.open.Smartphone.Charging
             if (Stop          is not null)  json.Add(new JProperty("stop",           Stop. ToJSON()));
             if (DisputeLink   is not null)  json.Add(new JProperty("disputeLink",    DisputeLink));
             if (Dispute       is not null)  json.Add(new JProperty("dispute",        Dispute.ToJSON()));
+            if (PaymentReference is not null) json.Add(new JProperty("paymentReference", PaymentReference));
 
             return json;
 
@@ -847,7 +864,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                       limit,
                                       LiveLinkStop.   TryParse(json["stop"]),
                                       json.Value<String>("disputeLink"),
-                                      LiveLinkDispute.TryParse(json["dispute"]));
+                                      LiveLinkDispute.TryParse(json["dispute"]),
+                                      json.Value<String>("paymentReference"));
 
         }
 

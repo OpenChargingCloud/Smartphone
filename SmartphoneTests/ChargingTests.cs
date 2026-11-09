@@ -507,7 +507,8 @@ namespace cloud.charging.open.Smartphone.Tests
         /// came at its end alone, and is a wrong one. A stream the station
         /// ended with no end value signed is disputed as well, with the last
         /// value that came - and a live link keeps its dispute link and the
-        /// dispute it sent, showing the host of the link only.
+        /// dispute it sent, showing the host of the link only, and the
+        /// payment reference the page gave, and what each value named.
         /// </summary>
         [Test]
         public void AWrongEndOrNoneIsDisputed()
@@ -521,13 +522,14 @@ namespace cloud.charging.open.Smartphone.Tests
             var whole   = TestRoamingNetwork.OCMF(meter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (at.AddMinutes(-10), "B", 1000m), (at, "E", 1012m));
             var link    = new JObject(new JProperty("@context", "https://open.charging.cloud/contexts/chargeTransparency/live/link/1.0"));
             var holds   = new LiveLinkValueCheck(at, true,  null);
-            var wrong   = new LiveLinkValueCheck(at, false, "The meter counts backwards.");
+            var wrong   = new LiveLinkValueCheck(at, false, "The meter counts backwards.", Identification: "web-payment-1");
 
             ChargingSession SessionOf(LiveLinkFollow Follow)
                 => new ("S1", "pool-1", "Jena", "Holzmarkt 1", "Jena", "GraphDefined", "dc-1", TestRoamingNetwork.DCEVSE, "CCS", "DC",
                         150m, 0.65m, "EUR", ChargingSession.DefaultTargetEnergyKWh, at.AddMinutes(-11), "driver1", LiveLink: Follow);
 
-            var wrongEnd  = new LiveLinkFollow(link, null, at.AddMinutes(-11), Limit: new TransactionLimit(MaxEnergy: 12000m), DisputeLink: "https://pay.example/sessions/S1/dispute").
+            var wrongEnd  = new LiveLinkFollow(link, null, at.AddMinutes(-11), Limit: new TransactionLimit(MaxEnergy: 12000m), DisputeLink: "https://pay.example/sessions/S1/dispute",
+                                               PaymentReference: "web-payment-1").
                                 WithUpdate(at.AddMinutes(-10), "https", "https://pay.example/live", "OCMF", [ begin ]).
                                 WithUpdate(at.AddMinutes(-5),  "https", "https://pay.example/live", "OCMF", [ after ]).
                                 WithUpdate(at,                 "https", "https://pay.example/live", "OCMF", [ end ]).
@@ -578,6 +580,10 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(read.DisputePending,                 Is.False, "disputed again");
                 Assert.That(read.ToJSON()["disputeLink"]?.Value<String>(), Is.EqualTo("pay.example"), "the dispute link itself is shown");
                 Assert.That(read.ToJSON()["end"]?["holds"]?.Value<Boolean?>(), Is.False);
+                Assert.That(read.PaymentReference,               Is.EqualTo("web-payment-1"));
+                Assert.That(read.End?.Identification,            Is.EqualTo("web-payment-1"), "what its end value named");
+                Assert.That(read.ToJSON()["paymentReference"]?.Value<String>(), Is.EqualTo("web-payment-1"));
+                Assert.That(read.ToJSON()["end"]?["identification"]?.Value<String>(), Is.EqualTo("web-payment-1"));
 
             });
 

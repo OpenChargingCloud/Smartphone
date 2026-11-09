@@ -364,6 +364,10 @@ export const mapPage: Page = {
                                 <input name="disputeLink" type="text" autocomplete="off" placeholder="https://..." ?disabled=${busy}>
                             </label>
                             <label class="small">
+                                The reference of the payment it took, where it gave one:
+                                <input name="paymentReference" type="text" autocomplete="off" ?disabled=${busy}>
+                            </label>
+                            <label class="small">
                                 The limit chosen there:
                                 <span class="limit-input">
                                     <input name="limitValue" type="number" min="0" step="any" ?disabled=${busy}>
@@ -507,13 +511,14 @@ export const mapPage: Page = {
 
         /**
          * Take over the live link the web payment page gave for the session it started at an EVSE - with its stop link, its dispute
-         * link and the limit the driver chose there, where there are - and show the session.
+         * link, the reference of the payment it took and the limit the driver chose there, where there are - and show the session.
          */
         async function followLiveLink(location: ChargingLocation, evseUid: string | undefined, form: HTMLElement): Promise<void> {
 
             const liveLink     = form.querySelector<HTMLInputElement>('input[name="liveLink"]')!.value.trim();
             const stopLink     = form.querySelector<HTMLInputElement>('input[name="stopLink"]')?.value.trim()    ?? '';
             const disputeLink  = form.querySelector<HTMLInputElement>('input[name="disputeLink"]')?.value.trim() ?? '';
+            const reference    = form.querySelector<HTMLInputElement>('input[name="paymentReference"]')?.value.trim() ?? '';
             const limit        = limitOf(form.querySelector<HTMLSelectElement>('select[name="limitKind"]')?.value ?? '',
                                          Number(form.querySelector<HTMLInputElement>('input[name="limitValue"]')?.value.trim() || Number.NaN));
 
@@ -530,6 +535,7 @@ export const mapPage: Page = {
                 const session = await api.charging.follow(location.id, evseUid, liveLink, {
                                         ...(stopLink    !== '' ? { stopLink }    : {}),
                                         ...(disputeLink !== '' ? { disputeLink } : {}),
+                                        ...(reference   !== '' ? { paymentReference: reference } : {}),
                                         ...(limit !== undefined ? { limit }      : {})
                                     });
 

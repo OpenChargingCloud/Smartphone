@@ -344,9 +344,11 @@ namespace cloud.charging.open.Smartphone.Charging
         /// time to come as well.
         /// </para>
         /// <para>
-        /// That the values are of this very session is not proven: its live
-        /// link names the charge point, and nothing binds the payment at the
-        /// page to what the meter signs.
+        /// Where the page gave the reference of the payment it took, a value
+        /// holds only where the meter signed it as its identification ("ID"):
+        /// one that names another, or none, is of another session. Where the
+        /// page gave none, that the values are of this very session is not
+        /// proven: its live link names the charge point alone.
         /// </para>
         /// </remarks>
         public static IReadOnlyList<(LiveLinkDocument Document, LiveLinkValueCheck Check)> ValuesOf(RoamingNetworkConfiguration  Configuration,
@@ -372,7 +374,7 @@ namespace cloud.charging.open.Smartphone.Charging
             {
 
                 var isStart  = ReferenceEquals(document, start?.Document);
-                var check    = CheckValue(authority, evidence, document, isStart, isStart ? null : begin, held, Session, Now);
+                var check    = CheckValue(authority, evidence, document, isStart, isStart ? null : begin, held, follow.PaymentReference, Session, Now);
 
                 checks.Add((document, check));
 
@@ -398,13 +400,14 @@ namespace cloud.charging.open.Smartphone.Charging
 
         #endregion
 
-        #region (private static) CheckValue(Authority, Evidence, Document, IsStart, Begin, Held, Session, Now)
+        #region (private static) CheckValue(Authority, Evidence, Document, IsStart, Begin, Held, Reference, Session, Now)
 
         /// <summary>
         /// One signed document of a live link, checked: its signature with the
-        /// key of the meter, what the meter says of its readings, and how they
-        /// fit the begin of the transaction, the readings that held before and
-        /// each other - and its end, where it ends the transaction.
+        /// key of the meter, the payment it names, what the meter says of its
+        /// readings, and how they fit the begin of the transaction, the
+        /// readings that held before and each other - and its end, where it
+        /// ends the transaction.
         /// </summary>
         private static LiveLinkValueCheck CheckValue(IRoamingNetworkTrustAuthority  Authority,
                                                      SessionEvidence                Evidence,
@@ -412,6 +415,7 @@ namespace cloud.charging.open.Smartphone.Charging
                                                      Boolean                        IsStart,
                                                      MeterReading?                  Begin,
                                                      IReadOnlyList<MeterReading>    Held,
+                                                     String?                        Reference,
                                                      ChargingSession                Session,
                                                      DateTimeOffset                 Now)
         {
@@ -421,7 +425,7 @@ namespace cloud.charging.open.Smartphone.Charging
                                       Document.Text, Session, out var noKey);
 
             LiveLinkValueCheck Checked(Boolean? Holds, String? Error)
-                => new (Now, Holds, Error, value.MeterSerialNumber, value.MeterId, value.KeyId, value.Result);
+                => new (Now, Holds, Error, value.MeterSerialNumber, value.MeterId, value.KeyId, value.Result, value.Identification);
 
             static Boolean Ends(MeterReading Reading)
                 => Reading.Transaction is String transaction && LiveLinkDocument.EndingTransactions.Contains(transaction);
@@ -430,6 +434,13 @@ namespace cloud.charging.open.Smartphone.Charging
                 return value.MeterSerialNumber is String named && Evidence.MeterSerialNumber is String expected && named != expected
                            ? Checked(false, $"It is of the meter {named}, and the proof of {Evidence.StationId} names the meter {expected} for {Evidence.EVSEId}.")
                            : Checked(noKey ? null : false, value.Error);
+
+            // Of this very session: the meter signed the payment the web
+            // payment page took for it as what identified the charging.
+            if (Reference is not null && value.Identification != Reference)
+                return Checked(false, value.Identification is null
+                                          ? $"It names no identification of the charging (\"ID\"), and the web payment page took the payment \"{Reference}\" for this session: it is not proven to be of it."
+                                          : $"It is of another session: it names \"{value.Identification}\" as the identification of the charging (\"ID\"), and the web payment page took the payment \"{Reference}\" for this session.");
 
             // The meter's: what the meter says of it itself.
             foreach (var reading in Document.Readings)

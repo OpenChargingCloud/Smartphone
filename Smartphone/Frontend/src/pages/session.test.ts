@@ -87,7 +87,8 @@ describe('a charging session', () => {
         assert.equal(link.querySelectorAll('ul.live-readings li.verified').length, 2, 'a reading not said to be the meter\'s');
         assert.ok(link.querySelector('.live-start.verified'), 'its start value is not said to be the meter\'s');
         assert.match(link.querySelector('.live-start')!.textContent!, /the meter's\s*Start value/);
-        assert.match(link.querySelector('.live-start')!.textContent!, /meter DC-2026-001, key 95ceb48c/);
+        assert.match(link.querySelector('.live-start')!.textContent!, /meter DC-2026-001, key 95ceb48c[^]*identified by\s*web-payment-S1/);
+        assert.match(link.textContent!, /Payment reference\s*web-payment-S1: every signed value is to name it/);
         assert.equal(link.querySelector('.live-wrong'), null, 'a wrong value where none is');
         assert.match(root.textContent!, /Started at the web payment page of its operator, and stopped there/);
         assert.match(root.textContent!, /1 signed value after it is the meter's as well, and fits the values before/);
@@ -231,6 +232,30 @@ describe('a charging session', () => {
         assert.ok(root.querySelector('.live-end.verified'));
         assert.equal(root.querySelector('.live-dispute'), null, 'a session whose values hold is disputed');
         assert.match(root.querySelector('.session-live-link')!.textContent!, /Dispute link\s*none given: it is disputed at the page/);
+
+    });
+
+    it('says the phone stopped a session whose signed value names another payment, and where none was given that nothing binds its values', async () => {
+
+        const followed = wrongValueSession();
+        const link     = followed.liveLink!;
+        const error    = 'It is of another session: it names "web-payment-S2" as the identification of the charging ("ID"), and the web payment page took the payment "web-payment-S1" for this session.';
+
+        current = { ...followed, stoppedBecause: `A signed meter value after its start is a wrong one: ${error}`,
+                    liveLink: { ...link, disputeBecause: `A signed meter value after its start is a wrong one: ${error}`,
+                                wrong: { ...link.wrong!, error, identification: 'web-payment-S2' } } };
+
+        let root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                              smartphone, root => root.querySelector('.live-wrong') !== null);
+
+        assert.match(root.querySelector('.live-wrong')!.textContent!, /identified by\s*web-payment-S2[^]*It is of another session/);
+
+        current = liveLinkSession({ liveLink: { ...liveLinkSession().liveLink!, paymentReference: null } });
+
+        root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                          smartphone, root => root.querySelector('.session-live-link') !== null);
+
+        assert.match(root.querySelector('.session-live-link')!.textContent!, /Payment reference\s*none given: that its values are of this payment is not proven/);
 
     });
 

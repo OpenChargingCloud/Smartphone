@@ -171,6 +171,9 @@ export const sessionPage: Page = {
                                                       : 'none yet')}
                         ${link.lastEndpoint !== null ? kv('Last from', html`<span class="mono">${link.lastEndpoint}</span>`) : nothing}
                         ${kv('Signed documents',  String(link.documents))}
+                        ${kv('Payment reference', link.paymentReference !== null
+                                                      ? html`<span class="mono">${link.paymentReference}</span>: every signed value is to name it`
+                                                      : 'none given: that its values are of this payment is not proven')}
                         ${link.problem      !== null ? kv('Now',   link.problem)      : nothing}
                         ${link.endedBecause !== null ? kv('Ended', link.endedBecause) : nothing}
                         ${kv('Stop link',         link.stopLink !== null ? html`at <span class="mono">${link.stopLink}</span>` : 'none given: it is stopped at the page')}
@@ -227,7 +230,9 @@ export const sessionPage: Page = {
                     <p class="small muted">
                         A key a live link names is no authority, the one the proof of the station gives for the meter
                         is: every signed value is checked with it as it comes, and against the values before it - none
-                        measured before the start, the meter counting forwards, nothing after the end. A wrong one stops
+                        measured before the start, the meter counting forwards, nothing after the end -, and where the
+                        page gave the reference of the payment it took, it is to name it as what identified the charging:
+                        one of another payment, or of none, is of another session. A wrong one stops
                         the session here, and the station through the stop link of the page, where it gave one. A wrong
                         end value stops nothing - nor does none, where the station ended the stream -: like a wrong value
                         before it, it disputes the session through the dispute link of the page, where it gave one. At
@@ -362,7 +367,7 @@ export const sessionPage: Page = {
 
             return html`
                 <div class="small muted">
-                    ${check.meterSerialNumber !== null ? `meter ${check.meterSerialNumber}, ` : ''}${check.keyId !== null ? html`key <span class="commit">${check.keyId}</span>, ` : nothing}checked ${dayAndTime(check.checkedAt)}
+                    ${check.meterSerialNumber !== null ? `meter ${check.meterSerialNumber}, ` : ''}${check.keyId !== null ? html`key <span class="commit">${check.keyId}</span>, ` : nothing}${check.identification !== null ? html`identified by <span class="mono">${check.identification}</span>, ` : nothing}checked ${dayAndTime(check.checkedAt)}
                 </div>
             `;
 

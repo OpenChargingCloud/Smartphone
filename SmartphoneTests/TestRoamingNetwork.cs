@@ -260,13 +260,14 @@ namespace cloud.charging.open.Smartphone.Tests
         /// <summary>
         /// A meter value in OCMF, as an energy meter signs it with the given
         /// key: "OCMF|{payload}|{signature}", its payload naming the meter and
-        /// what identified the charging, its readings each of a time, a part of
-        /// the transaction - "B", "E" - and the energy register in kWh, its
-        /// signature ECDSA over the payload, hexadecimal DER.
+        /// what identified the charging - none, where it is null -, its readings
+        /// each of a time, a part of the transaction - "B", "E" - and the energy
+        /// register in kWh, its signature ECDSA over the payload, hexadecimal
+        /// DER.
         /// </summary>
         public static String OCMF(ECPrivateKeyParameters                                           Meter,
                                   String                                                           Serial,
-                                  String                                                           Identification,
+                                  String?                                                          Identification,
                                   params (DateTimeOffset At, String Transaction, Decimal EnergyKWh)[]  Readings)
 
             => OCMFOfStatus(Meter, Serial, Identification, "G", Readings);
@@ -282,12 +283,12 @@ namespace cloud.charging.open.Smartphone.Tests
         /// </summary>
         public static String OCMFOfStatus(ECPrivateKeyParameters                                           Meter,
                                           String                                                           Serial,
-                                          String                                                           Identification,
+                                          String?                                                          Identification,
                                           String                                                           Status,
                                           params (DateTimeOffset At, String Transaction, Decimal EnergyKWh)[]  Readings)
         {
 
-            var payload = new JObject(
+            var json = new JObject(
                               new JProperty("FV",  "1.0"),
                               new JProperty("GI",  "GraphDefined GD-DC150"),
                               new JProperty("GS",  DCStation),
@@ -295,9 +296,8 @@ namespace cloud.charging.open.Smartphone.Tests
                               new JProperty("MV",  "Kernberg DC Metering"),
                               new JProperty("MM",  "KDM-150"),
                               new JProperty("MS",  Serial),
-                              new JProperty("IS",  true),
-                              new JProperty("IT",  "UNDEFINED"),
-                              new JProperty("ID",  Identification),
+                              new JProperty("IS",  Identification is not null),
+                              new JProperty("IT",  Identification is not null ? "UNDEFINED" : "NONE"),
                               new JProperty("RD",  new JArray(Readings.Select(reading => new JObject(
                                   new JProperty("TM",  reading.At.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss,fff", System.Globalization.CultureInfo.InvariantCulture) + "+0000 S"),
                                   new JProperty("TX",  reading.Transaction),
@@ -307,7 +307,13 @@ namespace cloud.charging.open.Smartphone.Tests
                                   new JProperty("RT",  "DC"),
                                   new JProperty("ST",  Status)
                               ))))
-                          ).ToString(Newtonsoft.Json.Formatting.None);
+                          );
+
+            // No "ID" at all, where nothing identified the charging.
+            if (Identification is not null)
+                json.Property("IT")!.AddAfterSelf(new JProperty("ID", Identification));
+
+            var payload = json.ToString(Newtonsoft.Json.Formatting.None);
 
             var signer = SignerUtilities.GetSigner("SHA-256withECDSA");
 

@@ -82,7 +82,7 @@ namespace cloud.charging.open.Smartphone
         #endregion
 
 
-        #region FollowLiveLinkAsync(LocationId, EVSEUid, LiveLink, Who, StopLink = null, Limit = null, DisputeLink = null, CancellationToken = default)
+        #region FollowLiveLinkAsync(LocationId, EVSEUid, LiveLink, Who, StopLink = null, Limit = null, DisputeLink = null, PaymentReference = null, CancellationToken = default)
 
         /// <summary>
         /// Take over the live link of a charging session that the web payment
@@ -91,8 +91,9 @@ namespace cloud.charging.open.Smartphone
         /// a roaming network whose proof was checked and still holds: the
         /// session keeps its evidence and its price, as one this phone starts.
         /// With the stop link the page gave, where it gave one, to stop it
-        /// with, the limit the driver chose there, and the dispute link the
-        /// page gave, to dispute it with.
+        /// with, the limit the driver chose there, the dispute link the page
+        /// gave, to dispute it with, and the reference of the payment it took,
+        /// which every signed value of the session is to name.
         /// </summary>
         /// <param name="LocationId">The station, by the id the map gave it.</param>
         /// <param name="EVSEUid">Its EVSE, by the uid the map gave it.</param>
@@ -101,6 +102,7 @@ namespace cloud.charging.open.Smartphone
         /// <param name="StopLink">The stop link the page gave: an https URL of this session alone, which a POST stops it at.</param>
         /// <param name="Limit">The limit the driver chose at the page, as OCPP 2.1 says it to the station.</param>
         /// <param name="DisputeLink">The dispute link the page gave: an https URL of this session alone, which a POST disputes it at.</param>
+        /// <param name="PaymentReference">The reference of the payment the page took, which the station writes into the identification ("ID") of every signed value of the session.</param>
         /// <param name="CancellationToken">To stop fetching its document.</param>
         public async Task<ChargingStart> FollowLiveLinkAsync(String             LocationId,
                                                              String             EVSEUid,
@@ -109,6 +111,7 @@ namespace cloud.charging.open.Smartphone
                                                              String?            StopLink           = null,
                                                              TransactionLimit?  Limit              = null,
                                                              String?            DisputeLink        = null,
+                                                             String?            PaymentReference   = null,
                                                              CancellationToken  CancellationToken  = default)
         {
 
@@ -117,6 +120,9 @@ namespace cloud.charging.open.Smartphone
 
             if (DisputeLink is not null && !TryLinkURL(DisputeLink, out _))
                 return ChargingStart.Refused(ChargingRefusal.Invalid, $"'{DisputeLink}' is no dispute link: it is the https URL the web payment page gave to dispute the session with.");
+
+            if (PaymentReference is not null && !IsPaymentReference(PaymentReference.Trim()))
+                return ChargingStart.Refused(ChargingRefusal.Invalid, $"'{PaymentReference}' is no payment reference: it is the reference of the payment the web payment page took, as the station writes it into the identification (\"ID\") of the signed meter values - a text of at most {MaxPaymentReferenceLength} characters, none of them a control character.");
 
             var network = RoamingNetwork;
 
@@ -147,7 +153,8 @@ namespace cloud.charging.open.Smartphone
                 return ChargingStart.Refused(unreachable ? ChargingRefusal.Unreachable : ChargingRefusal.Invalid,
                                              problem ?? "No live link was handed over.");
 
-            var follow = new LiveLinkFollow(document, from, TimeProvider.GetUtcNow(), StopLink: StopLink?.Trim(), Limit: Limit, DisputeLink: DisputeLink?.Trim());
+            var follow = new LiveLinkFollow(document, from, TimeProvider.GetUtcNow(), StopLink: StopLink?.Trim(), Limit: Limit, DisputeLink: DisputeLink?.Trim(),
+                                            PaymentReference: PaymentReference?.Trim());
 
             if (follow.EVSEId is String named && named != evse.EVSEId)
                 return ChargingStart.Refused(ChargingRefusal.Conflict, $"The live link is of {named}, not of {evse.EVSEId} at {location.Name}: it was handed over at the wrong charge point.");
@@ -161,6 +168,7 @@ namespace cloud.charging.open.Smartphone
                        $", for {session.PricePerKWh:0.00##} {session.Currency} per kWh, as its checked proof says" +
                        (follow.StopLinkHost is String stopAt ? $", with a stop link at {stopAt}" : ", with no stop link") +
                        (follow.DisputeLinkHost is String disputeAt ? $", a dispute link at {disputeAt}" : ", no dispute link") +
+                       (follow.PaymentReference is String reference ? $", the payment \"{reference}\" its signed values are to name" : ", no payment reference: that its signed values are of it is not proven") +
                        (Limit is not null ? $" and the limit {Limit.InWords(session.Currency)}" : "") +
                        $". The session is {session.Id}.",
                        "charging", "web");
@@ -276,6 +284,25 @@ namespace cloud.charging.open.Smartphone
 
             => Uri.TryCreate(Text.Trim(), UriKind.Absolute, out URI) &&
                (URI.Scheme == Uri.UriSchemeHttps || (URI.Scheme == Uri.UriSchemeHttp && URI.IsLoopback));
+
+        #endregion
+
+        #region (private static) IsPaymentReference(Text)
+
+        /// <summary>
+        /// How long a payment reference is at most.
+        /// </summary>
+        public const Int32 MaxPaymentReferenceLength = 255;
+
+        /// <summary>
+        /// Whether the given text is a reference of a payment the web payment
+        /// page may give, as the station writes it into the identification
+        /// ("ID") of an OCMF document: a text, no control character in it.
+        /// </summary>
+        private static Boolean IsPaymentReference(String Text)
+
+            => Text.Length is > 0 and <= MaxPaymentReferenceLength &&
+               !Text.Any(Char.IsControl);
 
         #endregion
 

@@ -478,13 +478,16 @@ export interface LiveLinkFollow {
     disputeLink:    string | null;
     /** The dispute this phone sent the page last, over its dispute link; null while it sent none. */
     dispute:        LiveLinkDispute | null;
+    /** The reference of the payment the page took, which every signed value is to name as what identified the charging ("ID"); null where the page gave none: that its values are of this session is not proven. */
+    paymentReference: string | null;
 }
 
-/** What is handed over with a live link, where the web payment page gave it: its stop link, its dispute link, and the limit chosen there. */
+/** What is handed over with a live link, where the web payment page gave it: its stop link, its dispute link, the reference of the payment it took, and the limit chosen there. */
 export interface LiveLinkHandOver {
-    stopLink?:     string;
-    disputeLink?:  string;
-    limit?:        TransactionLimit;
+    stopLink?:          string;
+    disputeLink?:       string;
+    paymentReference?:  string;
+    limit?:             TransactionLimit;
 }
 
 /** The limit a driver chose at the web payment page, as OCPP 2.1 says it in the "transactionLimit" of RequestStartTransaction. */
@@ -553,6 +556,8 @@ export interface LiveLinkValueCheck {
     keyId:              string | null;
     /** What ChargyCore said of its signature, where it was asked. */
     result:             string | null;
+    /** What it says identified the charging - its "ID": of a web payment, the reference of the payment -, where it was read. */
+    identification:     string | null;
 }
 
 /** The signed start value of a live link, checked. */
@@ -692,13 +697,14 @@ export const api = {
         start:        (locationId: string, evseUid: string) => request<ChargingSession> ('POST', '/charging/sessions', { locationId, evseUid }),
         /**
          * Take over the live link the web payment page of the operator gave - its https URL, or its document - of the session it started there,
-         * with the stop link and the dispute link it gave and the limit the driver chose there, where there are.
+         * with the stop link and the dispute link it gave, the reference of the payment it took and the limit the driver chose there, where there are.
          */
         follow:       (locationId: string, evseUid: string, liveLink: string, handOver: LiveLinkHandOver = {}) =>
                           request<ChargingSession>('POST', '/charging/sessions', { locationId, evseUid, liveLink,
-                                                                                   ...(handOver.stopLink    !== undefined ? { stopLink:    handOver.stopLink }    : {}),
-                                                                                   ...(handOver.disputeLink !== undefined ? { disputeLink: handOver.disputeLink } : {}),
-                                                                                   ...(handOver.limit       !== undefined ? { limit:       handOver.limit }       : {}) }),
+                                                                                   ...(handOver.stopLink         !== undefined ? { stopLink:         handOver.stopLink }         : {}),
+                                                                                   ...(handOver.disputeLink      !== undefined ? { disputeLink:      handOver.disputeLink }      : {}),
+                                                                                   ...(handOver.paymentReference !== undefined ? { paymentReference: handOver.paymentReference } : {}),
+                                                                                   ...(handOver.limit            !== undefined ? { limit:            handOver.limit }            : {}) }),
         /** Stop a session - of a live link through the stop link of the page: the one handed over, or the one given now. */
         stop:         (id: string, stopLink?: string)       => request<ChargingSession> ('POST', `${session(id)}/stop`, stopLink !== undefined ? { stopLink } : {}),
         /** Dispute a session of a live link through the dispute link of the page - the one handed over, or the one given now - for why the phone disputes it. */

@@ -299,10 +299,12 @@ namespace cloud.charging.open.Smartphone
         /// or the proof of the station does not hold, 502 where its URL could
         /// not be fetched. With the "stopLink" the page gave as well, where it
         /// gave one - the https URL a POST stops the session at -, its
-        /// "disputeLink" - the https URL a POST disputes it at - and the
-        /// "limit" the driver chose there, as OCPP 2.1 says it to the station:
-        /// { "maxEnergy" in Wh, "maxCost", "maxTime" in seconds, "maxSoC" in
-        /// percent }; 400 where one is none.
+        /// "disputeLink" - the https URL a POST disputes it at -, its
+        /// "paymentReference" - the reference of the payment it took, which
+        /// every signed value of the session is to name as its identification
+        /// ("ID") - and the "limit" the driver chose there, as OCPP 2.1 says it
+        /// to the station: { "maxEnergy" in Wh, "maxCost", "maxTime" in
+        /// seconds, "maxSoC" in percent }; 400 where one is none.
         /// </summary>
         private async Task<HTTPResponse> PostChargingSession(HTTPRequest Request)
         {
@@ -327,16 +329,19 @@ namespace cloud.charging.open.Smartphone
                     return ErrorJSON(Request, HTTPStatusCode.BadRequest,
                                      "'liveLink' is the URL of the live link the web payment page of the operator gave, or its document.");
 
-                if (!TryLink(json, "stopLink", StopLinkIs, out var stopLink, out var stopLinkError))
+                if (!TryText(json, "stopLink", StopLinkIs, out var stopLink, out var stopLinkError))
                     return ErrorJSON(Request, HTTPStatusCode.BadRequest, stopLinkError);
 
-                if (!TryLink(json, "disputeLink", DisputeLinkIs, out var disputeLink, out var disputeLinkError))
+                if (!TryText(json, "disputeLink", DisputeLinkIs, out var disputeLink, out var disputeLinkError))
                     return ErrorJSON(Request, HTTPStatusCode.BadRequest, disputeLinkError);
+
+                if (!TryText(json, "paymentReference", PaymentReferenceIs, out var paymentReference, out var paymentReferenceError))
+                    return ErrorJSON(Request, HTTPStatusCode.BadRequest, paymentReferenceError);
 
                 if (!TransactionLimit.TryParse(json["limit"], out var limit, out var limitError))
                     return ErrorJSON(Request, HTTPStatusCode.BadRequest, limitError);
 
-                var followed = await Smartphone.FollowLiveLinkAsync(locationId, evseUid, liveLink, user.Id.ToString(), stopLink, limit, disputeLink);
+                var followed = await Smartphone.FollowLiveLinkAsync(locationId, evseUid, liveLink, user.Id.ToString(), stopLink, limit, disputeLink, paymentReference);
 
                 if (followed.Session is null)
                     return Refused(Request, followed.Refusal, followed.Error ?? "No live link is followed.");
@@ -377,7 +382,7 @@ namespace cloud.charging.open.Smartphone
                 if (!TryParseJSONObject(Request, out var json, out var errorResponse))
                     return errorResponse;
 
-                if (!TryLink(json, "stopLink", StopLinkIs, out stopLink, out var stopLinkError))
+                if (!TryText(json, "stopLink", StopLinkIs, out stopLink, out var stopLinkError))
                     return ErrorJSON(Request, HTTPStatusCode.BadRequest, stopLinkError);
 
             }
@@ -419,7 +424,7 @@ namespace cloud.charging.open.Smartphone
                 if (!TryParseJSONObject(Request, out var json, out var errorResponse))
                     return errorResponse;
 
-                if (!TryLink(json, "disputeLink", DisputeLinkIs, out disputeLink, out var disputeLinkError))
+                if (!TryText(json, "disputeLink", DisputeLinkIs, out disputeLink, out var disputeLinkError))
                     return ErrorJSON(Request, HTTPStatusCode.BadRequest, disputeLinkError);
 
             }
@@ -436,24 +441,25 @@ namespace cloud.charging.open.Smartphone
         #endregion
 
 
-        #region (private static) TryLink(JSON, Name, What, out Link, out Error)
+        #region (private static) TryText(JSON, Name, What, out Text, out Error)
 
-        private const String StopLinkIs     = "the https URL the web payment page of the operator gave to stop the session with";
-        private const String DisputeLinkIs  = "the https URL the web payment page of the operator gave to dispute the session with";
+        private const String StopLinkIs          = "the https URL the web payment page of the operator gave to stop the session with";
+        private const String DisputeLinkIs       = "the https URL the web payment page of the operator gave to dispute the session with";
+        private const String PaymentReferenceIs  = "the reference of the payment the web payment page of the operator took, as the station writes it into the identification (\"ID\") of the signed meter values of the session";
 
         /// <summary>
-        /// A link of a request the web payment page gave, where it names one -
-        /// its "stopLink" or its "disputeLink": a text. Whether it is one, the
-        /// phone says.
+        /// What of a request the web payment page gave, where it names it -
+        /// its "stopLink", its "disputeLink" or its "paymentReference": a
+        /// text. Whether it is one, the phone says.
         /// </summary>
-        private static Boolean TryLink(JObject                           JSON,
+        private static Boolean TryText(JObject                           JSON,
                                        String                            Name,
                                        String                            What,
-                                       out String?                       Link,
+                                       out String?                       Text,
                                        [NotNullWhen(false)] out String?  Error)
         {
 
-            Link   = null;
+            Text   = null;
             Error  = null;
 
             switch (JSON[Name])
@@ -462,8 +468,8 @@ namespace cloud.charging.open.Smartphone
                 case null or { Type: JTokenType.Null }:
                     return true;
 
-                case JValue { Type: JTokenType.String } text when text.Value<String>() is String link:
-                    Link = String.IsNullOrWhiteSpace(link) ? null : link.Trim();
+                case JValue { Type: JTokenType.String } value when value.Value<String>() is String text:
+                    Text = String.IsNullOrWhiteSpace(text) ? null : text.Trim();
                     return true;
 
                 default:
