@@ -48,7 +48,7 @@ namespace cloud.charging.open.Smartphone
         Invalid,
         /// <summary>The live link handed over by its URL could not be fetched.</summary>
         Unreachable,
-        /// <summary>The web payment page of the operator did not take the stop over its stop link, or could not be reached.</summary>
+        /// <summary>The web payment page of the operator did not take the stop or the dispute over its link, or could not be reached.</summary>
         Operator
     }
 
@@ -76,6 +76,21 @@ namespace cloud.charging.open.Smartphone
     {
 
         public static ChargingStop Refused(ChargingRefusal Refusal, String Error)
+            => new (null, Error, Refusal);
+
+    }
+
+
+    /// <summary>
+    /// What came of "Dispute": the session disputed at the web payment page of
+    /// the operator of its station, or why it was not.
+    /// </summary>
+    public sealed record ChargingDispute(ChargingSession?  Session,
+                                         String?           Error,
+                                         ChargingRefusal   Refusal)
+    {
+
+        public static ChargingDispute Refused(ChargingRefusal Refusal, String Error)
             => new (null, Error, Refusal);
 
     }

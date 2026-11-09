@@ -1,6 +1,6 @@
-import { api, type ChargingSession, type LiveLinkEnding, type LiveLinkFollow, type LiveLinkStartCheck, type LiveLinkValueCheck, type LiveLinkWrongValue, type MeterValueCheck, type SessionCheck } from '../api/client';
+import { api, type ChargingSession, type LiveLinkEndCheck, type LiveLinkEnding, type LiveLinkFollow, type LiveLinkStartCheck, type LiveLinkValueCheck, type LiveLinkWrongValue, type MeterValueCheck, type SessionCheck } from '../api/client';
 import { auth } from '../auth';
-import { dayAndTime, duration, isRunning, limitFigure, money, reportedInWords, sessionStatusClass, sessionStatusWord, stationStopInWords, withUnit } from '../charging/words';
+import { dayAndTime, disputeInWords, duration, isRunning, limitFigure, money, reportedInWords, sessionStatusClass, sessionStatusWord, stationStopInWords, withUnit } from '../charging/words';
 import { standardWord } from '../map/stations';
 import { toURL } from '@node/basePath';
 import type { Page } from '@node/router';
@@ -13,7 +13,9 @@ import { html, nothing, render, type TemplateResult } from '@node/view';
  * at which charge point, from when to when, what it charged and what it
  * cost - and, while it still starts or charges, its figures asked for again
  * every two seconds and Stop - of one the web payment page of its operator
- * started, where the page gave a stop link. A session the e-mobility
+ * started, where the page gave a stop link. One this phone disputes says
+ * why and how, and offers to dispute it again where the page did not take
+ * it. A session the e-mobility
  * provider reports has no power, no target and no time it is full at: OCPI
  * tells none of them.
  * One at a station of a roaming network says how it holds against what it
@@ -41,9 +43,11 @@ export const sessionPage: Page = {
 
         const mayStop = auth.can('charging', 'run');
 
-        let cancelled  = false;
-        let stopping   = false;
-        let failed:    string | null = null;
+        let cancelled      = false;
+        let stopping       = false;
+        let disputing      = false;
+        let failed:        string | null = null;
+        let disputeFailed: string | null = null;
         let timer:     ReturnType<typeof setTimeout> | undefined;
 
 
@@ -172,6 +176,9 @@ export const sessionPage: Page = {
                         ${kv('Stop link',         link.stopLink !== null ? html`at <span class="mono">${link.stopLink}</span>` : 'none given: it is stopped at the page')}
                         ${link.stop !== null ? kv('Stop asked', html`${dayAndTime(link.stop.requestedAt)} by ${link.stop.requestedBy}:
                                                                      <span class="${link.stop.accepted ? 'stop-taken' : 'form-error'}">${link.stop.accepted ? 'taken' : 'not taken'} - ${link.stop.answer}</span>`) : nothing}
+                        ${kv('Dispute link',      link.disputeLink !== null ? html`at <span class="mono">${link.disputeLink}</span>` : 'none given: it is disputed at the page')}
+                        ${link.dispute !== null ? kv('Dispute sent', html`${dayAndTime(link.dispute.requestedAt)} by ${link.dispute.requestedBy}:
+                                                                          <span class="${link.dispute.accepted ? 'stop-taken' : 'form-error'}">${link.dispute.accepted ? 'taken' : 'not taken'} - ${link.dispute.answer}</span>`) : nothing}
                     </div>
 
                     ${link.limits.length > 0 ? html`
@@ -196,6 +203,10 @@ export const sessionPage: Page = {
 
                     ${link.wrong !== null ? wrongView(link, link.wrong) : nothing}
 
+                    ${link.end !== null ? endView(link.end) : nothing}
+
+                    ${link.disputeBecause !== null ? disputeView(link) : nothing}
+
                     ${link.readings.length > 0 ? html`
                         <ul class="live-readings">
                             ${link.readings.map(reading => html`
@@ -216,10 +227,12 @@ export const sessionPage: Page = {
                     <p class="small muted">
                         A key a live link names is no authority, the one the proof of the station gives for the meter
                         is: every signed value is checked with it as it comes, and against the values before it - none
-                        measured before the start, the meter counting forwards. A wrong one stops the session here, and
-                        the station through the stop link of the page, where it gave one. At the end, what the signed
-                        values say is compared with the limit chosen at the page; the end value itself is not checked
-                        yet. The documents are kept, each as it came.
+                        measured before the start, the meter counting forwards, nothing after the end. A wrong one stops
+                        the session here, and the station through the stop link of the page, where it gave one. A wrong
+                        end value stops nothing - nor does none, where the station ended the stream -: like a wrong value
+                        before it, it disputes the session through the dispute link of the page, where it gave one. At
+                        the end, what the signed values that count say is compared with the limit chosen at the page.
+                        The documents are kept, each as it came.
                     </p>
 
                 </section>
@@ -233,7 +246,9 @@ export const sessionPage: Page = {
 
             return html`
                 <div class="live-ending ${ending.reason}">
-                    ${ending.reason === 'stopped'
+                    ${ending.reason === 'wrong'
+                          ? html`<span class="chip bad"><i class="fa-solid fa-xmark"></i> a wrong end value</span>`
+                          : ending.reason === 'stopped'
                           ? html`<span class="chip"><i class="fa-solid fa-stop"></i> stopped by this phone</span>`
                           : ending.reason === 'limit'
                                 ? html`<span class="chip ok"><i class="fa-solid fa-flag-checkered"></i> at its limit</span>`
@@ -265,7 +280,7 @@ export const sessionPage: Page = {
                     <span>${dayAndTime(reading.measuredAt)}${reading.energyKWh !== null ? `: ${withUnit(reading.energyKWh, 'kWh', 3)}` : ''}</span>
                     ${checkedWith(start)}
                     ${start.error !== null ? html`<div class="small">${start.error}</div>` : nothing}
-                    ${start.holds === false ? html`
+                    ${start.holds === false && link.refused ? html`
                         <div class="error-box">
                             This phone stopped the session: its signed start meter value is a wrong one. ${stationStopInWords(link)}
                         </div>
@@ -290,6 +305,52 @@ export const sessionPage: Page = {
                     <div class="error-box">
                         This phone stopped the session: a signed meter value after its start is a wrong one. ${stationStopInWords(link)}
                     </div>
+                </div>
+            `;
+
+        }
+
+
+        /** The signed end value of a live link - the end of the transaction, or all of it -, as it held. */
+        function endView(end: LiveLinkEndCheck): TemplateResult {
+
+            return html`
+                <div class="live-end ${end.holds === true ? 'verified' : end.holds === false ? 'refused' : 'unchecked'}">
+                    ${end.holds === true
+                          ? html`<span class="chip ok"><i class="fa-solid fa-check"></i> the meter's</span>`
+                          : end.holds === false
+                                ? html`<span class="chip bad"><i class="fa-solid fa-xmark"></i> a wrong end value</span>`
+                                : html`<span class="chip"><i class="fa-solid fa-question"></i> not checked</span>`}
+                    <span>End value</span>
+                    ${end.readings.map(reading => html`
+                        <span>${dayAndTime(reading.measuredAt)}${reading.energyKWh !== null ? `: ${withUnit(reading.energyKWh, 'kWh', 3)}` : ''}${reading.transaction !== null ? ` (${reading.transaction})` : ''}</span>
+                    `)}
+                    ${checkedWith(end)}
+                    ${end.error !== null ? html`<div class="small">${end.error}</div>` : nothing}
+                </div>
+            `;
+
+        }
+
+
+        /** Why this phone disputes a session of a live link, and how - with Dispute again, where the page did not take it. */
+        function disputeView(link: LiveLinkFollow): TemplateResult {
+
+            const taken = link.dispute?.accepted === true;
+
+            return html`
+                <div class="live-dispute ${taken ? 'taken' : 'open'}">
+                    <span class="chip bad"><i class="fa-solid fa-gavel"></i> ${taken ? 'disputed' : 'to dispute'}</span>
+                    <span>${link.disputeBecause}</span>
+                    <div class="${taken ? 'small' : 'error-box'}">${disputeInWords(link)}</div>
+                    ${mayStop && link.dispute !== null && !taken ? html`
+                        <div class="form-actions">
+                            <button type="button" class="btn dispute" ?disabled=${disputing} @click=${() => void dispute()}>
+                                <i class="fa-solid fa-gavel"></i> ${disputing ? 'Disputing ...' : 'Dispute again'}
+                            </button>
+                            ${disputeFailed !== null ? html`<span class="form-error" role="alert">${disputeFailed}</span>` : nothing}
+                        </div>
+                    ` : nothing}
                 </div>
             `;
 
@@ -506,6 +567,34 @@ export const sessionPage: Page = {
             finally
             {
                 stopping = false;
+            }
+
+            if (!cancelled)
+                await load();
+
+        }
+
+
+        async function dispute(): Promise<void> {
+
+            disputing      = true;
+            disputeFailed  = null;
+
+            try
+            {
+                const disputed = await api.charging.dispute(id);
+
+                if (!cancelled)
+                    draw(disputed);
+            }
+            catch (error)
+            {
+                if (!cancelled)
+                    disputeFailed = errorMessage(error);
+            }
+            finally
+            {
+                disputing = false;
             }
 
             if (!cancelled)

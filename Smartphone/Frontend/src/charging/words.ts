@@ -111,7 +111,8 @@ export function reportedInWords(Session: ChargingSession): string {
  * started says, in a line or two: how it is stopped - there, or here through
  * the stop link the page gave -, or that this phone stopped it, one of its
  * signed values a wrong one; what came over it, or how it ended against its
- * limit; and how its signed values held against the proof of the station.
+ * limit; how its signed values held against the proof of the station; and
+ * how it is disputed, where it is.
  */
 export function liveLinkInWords(Session: ChargingSession): string {
 
@@ -120,9 +121,9 @@ export function liveLinkInWords(Session: ChargingSession): string {
     if (link === undefined)
         return '';
 
-    if (link.wrong !== null || link.start?.holds === false)
+    if (link.refused)
         return `This phone stopped it: ${link.wrong !== null ? 'a signed meter value after its start' : 'its signed start meter value'} is a wrong one. ` +
-               `${(link.wrong ?? link.start)?.error ?? ''} ${stationStopInWords(link)}`;
+               `${(link.wrong ?? link.start)?.error ?? ''} ${stationStopInWords(link)} ${disputeInWords(link)}`;
 
     const how  = link.stopLink === null
                      ? 'Started at the web payment page of its operator, and stopped there.'
@@ -142,7 +143,40 @@ export function liveLinkInWords(Session: ChargingSession): string {
                       ? ` Its limit: ${link.limits.map(one => one.value !== null ? `${limitFigure(one, one.limit)}, ${limitFigure(one, one.value)} so far` : limitFigure(one, one.limit)).join('; ')}.`
                       : '';
 
-    return `${how} ${what}${limit} ${startInWords(link.start)}${valuesInWords(link)}`;
+    const end = link.end?.holds === null
+                    ? ` Its signed end value could not be checked: ${link.end.error ?? ''}`
+                    : '';
+
+    const dispute = link.disputeBecause !== null
+                        ? ` ${disputeInWords(link)}`
+                        : '';
+
+    return `${how} ${what}${limit} ${startInWords(link.start)}${valuesInWords(link)}${end}${dispute}`;
+
+}
+
+
+/**
+ * How a session this phone disputes is disputed, in a sentence: by this
+ * phone, through the dispute link the web payment page gave - or there, by
+ * the driver, where the page gave none or did not take the dispute. Nothing
+ * where it is not disputed.
+ */
+export function disputeInWords(Link: LiveLinkFollow): string {
+
+    if (Link.disputeBecause === null)
+        return '';
+
+    if (Link.dispute?.accepted === true)
+        return `This phone disputed it through the dispute link of the web payment page at ${clock(Link.dispute.requestedAt)}.`;
+
+    if (Link.dispute !== null)
+        return `The web payment page did not take the dispute this phone sent: ${Link.dispute.answer} Dispute it there.`;
+
+    if (Link.disputeLink !== null)
+        return 'This phone disputes it through the dispute link of the web payment page.';
+
+    return 'The web payment page of its operator gave this phone no dispute link: dispute it there.';
 
 }
 
@@ -209,10 +243,10 @@ export function startInWords(Start: LiveLinkStartCheck | null): string {
 
 
 /**
- * How the signed values after the start of a live link held, in a sentence
- * or two, each with a space before it: how many are the meter's as well, how
- * many could not be checked, and how many are not checked yet - its end
- * value is not.
+ * How the signed values after the start of a live link held, its end value
+ * among them, in a sentence or two, each with a space before it: how many are
+ * the meter's as well, how many could not be checked, and how many are not
+ * checked yet.
  */
 export function valuesInWords(Link: LiveLinkFollow): string {
 

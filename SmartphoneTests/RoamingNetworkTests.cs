@@ -952,7 +952,11 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(finished["liveLink"]!["documents"]!.Value<Int32>(),            Is.EqualTo(3));
                 Assert.That(finished["liveLink"]!["endedBecause"]!.Value<String>(),        Does.Contain("end of the transaction"));
                 Assert.That(finished["endedAt"]?.Type,                                     Is.AnyOf(JTokenType.String, JTokenType.Date), "when it ended");
-                Assert.That(finished["liveLink"]!["values"]!["notChecked"]!.Value<Int32>(), Is.EqualTo(1), "the end value is checked already");
+                Assert.That(finished["liveLink"]!["values"]!["notChecked"]!.Value<Int32>(), Is.EqualTo(0), "the end value is not checked");
+                Assert.That(finished["liveLink"]!["values"]!["holding"]!.Value<Int32>(),    Is.EqualTo(2));
+                Assert.That(finished["liveLink"]!["end"]!["holds"]!.Value<Boolean?>(),       Is.True, finished["liveLink"]!["end"]!.ToString());
+                Assert.That(finished["liveLink"]!["end"]!["readings"]![0]!["transaction"]!.Value<String>(), Is.EqualTo("E"));
+                Assert.That(finished["liveLink"]!["disputeBecause"]!.Type,                  Is.EqualTo(JTokenType.Null), "a session whose signed values hold is disputed");
                 Assert.That(finished["liveLink"]!["ending"]!["reason"]!.Value<String>(),    Is.EqualTo("other"), "with no limit, ended by nothing else");
                 Assert.That(finished["liveLink"]!["ending"]!["because"]!.Value<String>(),   Does.Contain("no limit handed over"));
                 Assert.That(finished["liveLink"]!["ending"]!["transaction"]!.Value<String>(), Is.EqualTo("E"));
@@ -1506,13 +1510,18 @@ namespace cloud.charging.open.Smartphone.Tests
             cpo.Send(TestRoamingNetwork.OCMF(TestRoamingNetwork.NewMeterKey(), TestRoamingNetwork.DCMeterSerial, "web-payment-1", (DateTimeOffset.UtcNow, "B", 1000.000m)));
 
             var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
-                                               new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, liveLink = cpo.LiveLinkURL("S1"), stopLink = cpo.StopLinkURL("S1") });
+                                               new { locationId   = TestRoamingNetwork.PoolId,
+                                                     evseUid      = TestRoamingNetwork.DCEVSE,
+                                                     liveLink     = cpo.LiveLinkURL("S1"),
+                                                     stopLink     = cpo.StopLinkURL("S1"),
+                                                     disputeLink  = cpo.DisputeLinkURL("S1") });
 
             Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
 
             var id       = session["id"]!.Value<String>()!;
-            var stopped  = await SessionWhen(driver, id, json => json["status"]?.Value<String>() == "stopped" && json["liveLink"]?["stop"] is JObject);
+            var stopped  = await SessionWhen(driver, id, json => json["status"]?.Value<String>() == "stopped" && json["liveLink"]?["dispute"] is JObject);
             var stop     = stopped["liveLink"]!["stop"]!;
+            var dispute  = stopped["liveLink"]!["dispute"]!;
 
             using (Assert.EnterMultipleScope())
             {
@@ -1522,12 +1531,260 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(cpo.Stops.Select(one => one.Session),                Is.EqualTo(new[] { "S1" }));
                 Assert.That(JObject.Parse(cpo.Stops[0].Body)["reason"]?.Value<String>(), Does.Contain("Its signed start meter value is a wrong one"));
                 Assert.That(stopped["liveLink"]!["ending"]!.Type,                Is.EqualTo(JTokenType.Null), "stopped for a wrong value, not ended");
+                Assert.That(stopped["liveLink"]!["refused"]!.Value<Boolean>(),   Is.True);
+                Assert.That(dispute["accepted"]!.Value<Boolean>(),               Is.True, dispute.ToString());
+                Assert.That(dispute["requestedBy"]!.Value<String>(),             Is.EqualTo("this phone"));
+                Assert.That(dispute["reason"]!.Value<String>(),                  Does.Contain("Its signed start meter value is a wrong one"));
+                Assert.That(stopped["liveLink"]!["disputeLink"]!.Value<String>(), Is.EqualTo(new Uri(cpo.URL).Authority), "its host, not the link");
+                Assert.That(cpo.Disputes.Select(one => one.Session),             Is.EqualTo(new[] { "S1" }));
+                Assert.That(JObject.Parse(cpo.Disputes[0].Body)["signedValues"]!.Count(), Is.EqualTo(1), "the wrong start value, as it came");
             }
 
-            // Stopped once, and followed no more.
+            // Stopped once, disputed once, and followed no more.
             await Task.Delay(1000);
 
-            Assert.That(cpo.Stops.Count, Is.EqualTo(1), "the station was stopped again");
+            Assert.That(cpo.Stops.Count,     Is.EqualTo(1), "the station was stopped again");
+            Assert.That(cpo.Disputes.Count,  Is.EqualTo(1), "the session was disputed again");
+
+        }
+
+        #endregion
+
+        #region AWrongSignedEndValueDisputesTheSession()
+
+        /// <summary>
+        /// A signed end value is checked as the values before it: one the
+        /// meter's key did not sign, one where the meter counts backwards, a
+        /// whole transaction that began other than its start value says, and
+        /// an end measured before a value of the transaction that held are
+        /// wrong ones. A wrong end value stops nothing: this phone disputes the
+        /// session through the dispute link of the web payment page, with why
+        /// and the signed values it disputes, as they came - and counts the
+        /// wrong one for nothing.
+        /// </summary>
+        [Test]
+        public async Task AWrongSignedEndValueDisputesTheSession()
+        {
+
+            await WithTheRoamingNetwork();
+
+            using var driver = await SignedInAs("driver1", "driver");
+
+            await Send(driver, HttpMethod.Get, "api/v1/map");
+            await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            cpo = await TestCPO.Start();
+
+            var cases = new (String Session, Boolean Between, Func<DateTimeOffset, DateTimeOffset, String> End, String Error, Decimal Energy)[] {
+                            ("S1", false, (begin, between) => TestRoamingNetwork.OCMF(TestRoamingNetwork.NewMeterKey(), TestRoamingNetwork.DCMeterSerial, "web-payment-S1", (DateTimeOffset.UtcNow, "E", 1020.000m)),
+                                   "is not signed by the key",                                    0m),
+                            ("S2", false, (begin, between) => TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-S2", (DateTimeOffset.UtcNow, "E", 999.000m)),
+                                   "The meter counts backwards: 999",                             0m),
+                            ("S3", false, (begin, between) => TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-S3", (begin, "B", 1000.500m), (DateTimeOffset.UtcNow, "E", 1020.000m)),
+                                   "It says the transaction began with 1000.5 kWh",               0m),
+                            ("S4", true,  (begin, between) => TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-S4", (between.AddMilliseconds(-1), "E", 1005.000m)),
+                                   "and a value of it was measured after its end",                5m)
+                        };
+
+            foreach (var (name, between, end, error, energy) in cases)
+            {
+
+                var begin = DateTimeOffset.UtcNow;
+
+                cpo.Send(TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, $"web-payment-{name}", (begin, "B", 1000.000m)));
+
+                var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                                   new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, liveLink = cpo.LiveLinkURL(name), disputeLink = cpo.DisputeLinkURL(name) });
+
+                Assert.That(status, Is.EqualTo(HttpStatusCode.Created), $"{name}: {session}");
+
+                var id = session["id"]!.Value<String>()!;
+
+                await SessionWhen(driver, id, json => json["liveLink"]?["start"] is JObject start && start["holds"]?.Value<Boolean?>() == true);
+
+                var at = DateTimeOffset.UtcNow;
+
+                if (between)
+                {
+                    await Task.Delay(20);
+                    at = DateTimeOffset.UtcNow;
+                    cpo.Send(TestRoamingNetwork.OCMF(network.DCMeter, TestRoamingNetwork.DCMeterSerial, $"web-payment-{name}", (at, "C", 1005.000m)));
+                    await SessionWhen(driver, id, json => json["liveLink"]?["values"]?["holding"]?.Value<Int32>() == 1);
+                }
+
+                cpo.Send(end(begin, at));
+
+                var disputed = await SessionWhen(driver, id, json => json["liveLink"]?["dispute"] is JObject);
+                var link     = disputed["liveLink"]!;
+                var sent     = JObject.Parse(cpo.Disputes.Last().Body);
+
+                using (Assert.EnterMultipleScope())
+                {
+                    Assert.That(disputed["status"]!.Value<String>(),                  Is.EqualTo("finished"),            $"{name}: {disputed}");
+                    Assert.That(link["end"]!["holds"]!.Value<Boolean?>(),             Is.False,                          name);
+                    Assert.That(link["end"]!["error"]!.Value<String>(),               Does.Contain(error),               name);
+                    Assert.That(link["refused"]!.Value<Boolean>(),                    Is.False,                          $"{name}: a wrong end value stops the session");
+                    Assert.That(link["wrong"]!.Type,                                  Is.EqualTo(JTokenType.Null),       name);
+                    Assert.That(link["ending"]!["reason"]!.Value<String>(),           Is.EqualTo("wrong"),               name);
+                    Assert.That(link["ending"]!["transaction"]!.Type,                 Is.EqualTo(JTokenType.Null),       $"{name}: how a wrong end value says it ended");
+                    Assert.That(link["disputeBecause"]!.Value<String>(),              Does.StartWith("Its signed end meter value is a wrong one").And.Contain(error), name);
+                    Assert.That(link["dispute"]!["accepted"]!.Value<Boolean>(),       Is.True,                           name);
+                    Assert.That(link["dispute"]!["requestedBy"]!.Value<String>(),     Is.EqualTo("this phone"),          name);
+                    Assert.That(link["dispute"]!["answer"]!.Value<String>(),          Does.StartWith("200").And.Contain("The dispute is taken."), name);
+                    Assert.That(cpo.Disputes.Last().Session,                          Is.EqualTo(name));
+                    Assert.That(sent["reason"]!.Value<String>(),                      Is.EqualTo(link["disputeBecause"]!.Value<String>()), name);
+                    Assert.That(sent["signedValues"]!.Count(),                        Is.EqualTo(2),                     $"{name}: its start value and its end value, as they came");
+                    Assert.That(disputed["energyKWh"]!.Value<Decimal>(),              Is.EqualTo(energy),                $"{name}: a wrong end value counts");
+                    Assert.That(disputed.ToString(),                                  Does.Not.Contain($"/sessions/{name}/dispute"), $"{name}: the dispute link itself is shown");
+                }
+
+            }
+
+            // Disputed once each, and nothing stopped.
+            await Task.Delay(1000);
+
+            Assert.That(cpo.Disputes.Select(one => one.Session), Is.EqualTo(new[] { "S1", "S2", "S3", "S4" }));
+            Assert.That(cpo.Stops,                               Is.Empty, "a session whose end value is a wrong one was stopped");
+
+        }
+
+        #endregion
+
+        #region ADisputeIsSentWithTheDisputeLinkHandedOverLater()
+
+        /// <summary>
+        /// A live link is taken with a dispute link that is one only. A
+        /// session is disputed only where this phone has why: not while it
+        /// charges and its values hold, not once it ended and they held. Where
+        /// the page gave no dispute link, its end value a wrong one, it is
+        /// disputed with the one handed over then; one the page does not take
+        /// is none, and is sent again when asked - once taken, not again.
+        /// </summary>
+        [Test]
+        public async Task ADisputeIsSentWithTheDisputeLinkHandedOverLater()
+        {
+
+            await WithTheRoamingNetwork();
+
+            using var driver = await SignedInAs("driver1", "driver");
+
+            await Send(driver, HttpMethod.Get, "api/v1/map");
+            await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            cpo = await TestCPO.Start();
+
+            var refusals = new (Object Request, String Error)[] {
+                               (new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, liveLink = cpo.LiveLinkURL("S1"), disputeLink = "ftp://cpo.example/dispute" }, "is no dispute link"),
+                               (new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, liveLink = cpo.LiveLinkURL("S1"), disputeLink = 42 },                          "'disputeLink' is the https URL")
+                           };
+
+            foreach (var (request, error) in refusals)
+            {
+
+                var (refusedStatus, refused) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", request);
+
+                Assert.That(refusedStatus,                       Is.EqualTo(HttpStatusCode.BadRequest), $"{error}: {refused}");
+                Assert.That(refused["error"]!.Value<String>(),   Does.Contain(error));
+
+            }
+
+            // Its values hold: nothing to dispute, while it charges and once it ended.
+            cpo.Send(TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (DateTimeOffset.UtcNow, "B", 1000.000m)));
+
+            var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                               new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, liveLink = cpo.LiveLinkURL("S1"), disputeLink = cpo.DisputeLinkURL("S1") });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            var holding = session["id"]!.Value<String>()!;
+
+            await SessionWhen(driver, holding, json => json["liveLink"]?["start"] is JObject start && start["holds"]?.Value<Boolean?>() == true);
+
+            (status, var charges) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{holding}/dispute");
+
+            Assert.That(status,                             Is.EqualTo(HttpStatusCode.Conflict), charges.ToString());
+            Assert.That(charges["error"]!.Value<String>(),  Does.Contain("charges still"));
+
+            cpo.Send(TestRoamingNetwork.OCMF(network.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (DateTimeOffset.UtcNow, "E", 1010.000m)));
+
+            await SessionWhen(driver, holding, json => json["liveLink"]?["end"] is JObject end && end["holds"]?.Value<Boolean?>() == true);
+
+            (status, var holds) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{holding}/dispute");
+
+            Assert.That(status,                             Is.EqualTo(HttpStatusCode.Conflict), holds.ToString());
+            Assert.That(holds["error"]!.Value<String>(),    Does.Contain("hold: this phone has nothing to dispute"));
+            Assert.That(cpo.Disputes,                       Is.Empty);
+
+            // Its end value a wrong one, and no dispute link given.
+            cpo.Send(TestRoamingNetwork.OCMF(network.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-2", (DateTimeOffset.UtcNow, "B", 1000.000m)));
+
+            (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                           new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, liveLink = cpo.LiveLinkURL("S2") });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            var id = session["id"]!.Value<String>()!;
+
+            await SessionWhen(driver, id, json => json["liveLink"]?["start"] is JObject start && start["holds"]?.Value<Boolean?>() == true);
+
+            cpo.Send(TestRoamingNetwork.OCMF(TestRoamingNetwork.NewMeterKey(), TestRoamingNetwork.DCMeterSerial, "web-payment-2", (DateTimeOffset.UtcNow, "E", 1010.000m)));
+
+            var wrong = await SessionWhen(driver, id, json => json["liveLink"]?["end"] is JObject end && end["holds"]?.Value<Boolean?>() == false);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(wrong["liveLink"]!["disputeBecause"]!.Value<String>(),  Does.StartWith("Its signed end meter value is a wrong one"), wrong.ToString());
+                Assert.That(wrong["liveLink"]!["disputeLink"]!.Type,                Is.EqualTo(JTokenType.Null));
+                Assert.That(wrong["liveLink"]!["dispute"]!.Type,                    Is.EqualTo(JTokenType.Null), "disputed with no dispute link");
+            }
+
+            (status, var noLink) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{id}/dispute");
+
+            Assert.That(status,                             Is.EqualTo(HttpStatusCode.Conflict), noLink.ToString());
+            Assert.That(noLink["error"]!.Value<String>(),   Does.Contain("gave no dispute link"));
+
+            (status, var noURL) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{id}/dispute", new { disputeLink = "http://cpo.example/dispute" });
+
+            Assert.That(status,                             Is.EqualTo(HttpStatusCode.BadRequest), noURL.ToString());
+            Assert.That(noURL["error"]!.Value<String>(),    Does.Contain("is no dispute link"));
+
+            cpo.DisputeAnswer = HTTPStatusCode.Conflict;
+
+            (status, var notTaken) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{id}/dispute", new { disputeLink = cpo.DisputeLinkURL("S2") });
+
+            Assert.That(status,                                 Is.EqualTo(HttpStatusCode.BadGateway), notTaken.ToString());
+            Assert.That(notTaken["error"]!.Value<String>(),     Does.Contain("took no dispute").And.Contain("409").And.Contain("Nothing is disputed here."));
+
+            (_, var kept) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(kept["liveLink"]!["dispute"]!["accepted"]!.Value<Boolean>(),  Is.False, kept.ToString());
+                Assert.That(kept["liveLink"]!["disputeLink"]!.Value<String>(),            Is.EqualTo(new Uri(cpo.URL).Authority), "the dispute link handed over is not kept");
+            }
+
+            cpo.DisputeAnswer = HTTPStatusCode.Accepted;
+
+            (status, var disputed) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{id}/dispute");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                                                            Is.EqualTo(HttpStatusCode.OK), disputed.ToString());
+                Assert.That(disputed["liveLink"]!["dispute"]!["accepted"]!.Value<Boolean>(),    Is.True);
+                Assert.That(disputed["liveLink"]!["dispute"]!["answer"]!.Value<String>(),       Does.StartWith("202"));
+                Assert.That(disputed["liveLink"]!["dispute"]!["requestedBy"]!.Value<String>(),  Is.Not.EqualTo("this phone"));
+                Assert.That(cpo.Disputes.Select(one => one.Session),                           Is.EqualTo(new[] { "S2", "S2" }));
+            }
+
+            (status, var again) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{id}/dispute");
+
+            Assert.That(status,                             Is.EqualTo(HttpStatusCode.Conflict), again.ToString());
+            Assert.That(again["error"]!.Value<String>(),    Does.Contain("disputed at").And.Contain("already"));
+            Assert.That(cpo.Disputes.Count,                 Is.EqualTo(2), "a session disputed was disputed again");
+
+            (status, var none) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions/nothing/dispute");
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.NotFound), none.ToString());
 
         }
 

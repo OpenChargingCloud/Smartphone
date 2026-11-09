@@ -37,7 +37,8 @@ namespace cloud.charging.open.Smartphone.Tests
     /// at /sessions/{session}/live, asked again and again over "https", as a
     /// test sets it. Nothing is there to ask before the test sets something.
     /// Its stop link, at /sessions/{session}/stop, takes a POST - and answers
-    /// what the test sets, 200 at first.
+    /// what the test sets, 200 at first. So does its dispute link, at
+    /// /sessions/{session}/dispute.
     /// </summary>
     public sealed class TestCPO : IAsyncDisposable
     {
@@ -47,7 +48,8 @@ namespace cloud.charging.open.Smartphone.Tests
         private readonly HTTPServer                                   server;
         private volatile String?                                      live;
         private          Int32                                        liveRequests;
-        private readonly ConcurrentQueue<(String Session, String Body)>  stops  = new();
+        private readonly ConcurrentQueue<(String Session, String Body)>  stops     = new();
+        private readonly ConcurrentQueue<(String Session, String Body)>  disputes  = new();
 
         #endregion
 
@@ -77,6 +79,18 @@ namespace cloud.charging.open.Smartphone.Tests
         /// </summary>
         public HTTPStatusCode StopAnswer { get; set; } = HTTPStatusCode.OK;
 
+        /// <summary>
+        /// The disputes sent over its dispute links: of which session, and
+        /// what was sent.
+        /// </summary>
+        public IReadOnlyList<(String Session, String Body)> Disputes
+            => [.. disputes];
+
+        /// <summary>
+        /// What its dispute links answer: 200 at first.
+        /// </summary>
+        public HTTPStatusCode DisputeAnswer { get; set; } = HTTPStatusCode.OK;
+
         #endregion
 
         #region Constructor(s)
@@ -101,6 +115,7 @@ namespace cloud.charging.open.Smartphone.Tests
             api.AddHandler(HTTPPath.Parse("/liveLinks/{session}"),      request => Task.FromResult(cpo.GetLiveLink(request)),  HTTPMethod.GET);
             api.AddHandler(HTTPPath.Parse("/sessions/{session}/live"),  request => Task.FromResult(cpo.GetLive(request)),      HTTPMethod.GET);
             api.AddHandler(HTTPPath.Parse("/sessions/{session}/stop"),  request => Task.FromResult(cpo.PostStop(request)),     HTTPMethod.POST);
+            api.AddHandler(HTTPPath.Parse("/sessions/{session}/dispute"), request => Task.FromResult(cpo.PostDispute(request)), HTTPMethod.POST);
 
             await server.Start();
 
@@ -111,7 +126,7 @@ namespace cloud.charging.open.Smartphone.Tests
         #endregion
 
 
-        #region LiveLinkURL(Session) / StopLinkURL(Session) / LiveLink(Session, EVSEId = TestRoamingNetwork.DCEVSE)
+        #region LiveLinkURL(Session) / StopLinkURL(Session) / DisputeLinkURL(Session) / LiveLink(Session, EVSEId = TestRoamingNetwork.DCEVSE)
 
         /// <summary>
         /// Where the live link of the given session is.
@@ -124,6 +139,12 @@ namespace cloud.charging.open.Smartphone.Tests
         /// </summary>
         public String StopLinkURL(String Session)
             => $"{URL}/sessions/{Session}/stop";
+
+        /// <summary>
+        /// Where the dispute link of the given session is.
+        /// </summary>
+        public String DisputeLinkURL(String Session)
+            => $"{URL}/sessions/{Session}/dispute";
 
         /// <summary>
         /// The live link of the given session: of the given EVSE of the DC
@@ -170,7 +191,7 @@ namespace cloud.charging.open.Smartphone.Tests
         #endregion
 
 
-        #region (private) GetLiveLink(Request) / GetLive(Request) / PostStop(Request)
+        #region (private) GetLiveLink(Request) / GetLive(Request) / PostStop(Request) / PostDispute(Request)
 
         private HTTPResponse GetLiveLink(HTTPRequest Request)
 
@@ -197,6 +218,18 @@ namespace cloud.charging.open.Smartphone.Tests
 
             return Response(Request, answer, HTTPContentType.Application.JSON_UTF8,
                             new JObject(new JProperty("message", answer.IsSuccessful ? "The station stops." : "This session stops nowhere here.")).ToString());
+
+        }
+
+        private HTTPResponse PostDispute(HTTPRequest Request)
+        {
+
+            disputes.Enqueue((Request.ParsedURLParameters[0], Request.HTTPBodyAsUTF8String ?? ""));
+
+            var answer = DisputeAnswer;
+
+            return Response(Request, answer, HTTPContentType.Application.JSON_UTF8,
+                            new JObject(new JProperty("message", answer.IsSuccessful ? "The dispute is taken." : "Nothing is disputed here.")).ToString());
 
         }
 

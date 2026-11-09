@@ -350,13 +350,15 @@ ul.trust-keys {
 }
 
 // The readings a live link brought, as its signed documents say them, each
-// checked, its signed start value, and a wrong value after it - its limit
-// against them, and how it ended.
+// checked, its signed start value, a wrong value after it and its end value -
+// its limit against them, how it ended, and why and how it is disputed.
 .session-live-link {
 
     .live-start,
     .live-wrong,
-    .live-ending {
+    .live-end,
+    .live-ending,
+    .live-dispute {
 
         padding:     0.4rem 0;
         border-top:  1px solid $color-border;
@@ -371,6 +373,10 @@ ul.trust-keys {
         }
 
         .error-box {
+            margin-top:  0.4rem;
+        }
+
+        .form-actions {
             margin-top:  0.4rem;
         }
 

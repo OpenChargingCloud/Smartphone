@@ -316,8 +316,10 @@ namespace cloud.charging.open.Smartphone.Charging
         /// operator of its station started, as its live link brought them,
         /// checked now - those not checked or not decided yet, in the order
         /// they came: its start value, the reading the meter signed as the
-        /// begin of the transaction ("B"), and every value after it but the
-        /// end value (<see cref="LiveLinkFollow.ToCheck"/>).
+        /// begin of the transaction ("B"), every value after it, and its end
+        /// value - a reading that ends the transaction ("E", "L", "R", "A",
+        /// "P"), alone or in the whole transaction from its begin to its end
+        /// (<see cref="LiveLinkFollow.ToCheck"/>).
         /// </summary>
         /// <remarks>
         /// <para>
@@ -326,10 +328,12 @@ namespace cloud.charging.open.Smartphone.Charging
         /// time it was measured, as ChargyCore checks the signature; where the
         /// meter says each of its readings is good - its status "G", no error
         /// flagged - and of an energy register; and where it fits the values
-        /// that held before it: not measured before the start value, and the
-        /// meter not counting backwards - no reading measured later with less
-        /// energy, none measured earlier with more, none at the same time
-        /// with another.
+        /// that held before it, and its readings each other: not measured
+        /// before the start value, and the meter not counting backwards - no
+        /// reading measured later with less energy, none measured earlier with
+        /// more, none at the same time with another. A begin of the transaction
+        /// it says again is the start value that held; and nothing of the
+        /// transaction is measured after its end.
         /// </para>
         /// <para>
         /// It does not hold - a wrong meter value - where it is of another
@@ -399,7 +403,8 @@ namespace cloud.charging.open.Smartphone.Charging
         /// <summary>
         /// One signed document of a live link, checked: its signature with the
         /// key of the meter, what the meter says of its readings, and how they
-        /// fit the begin of the transaction and the readings that held before.
+        /// fit the begin of the transaction, the readings that held before and
+        /// each other - and its end, where it ends the transaction.
         /// </summary>
         private static LiveLinkValueCheck CheckValue(IRoamingNetworkTrustAuthority  Authority,
                                                      SessionEvidence                Evidence,
@@ -411,10 +416,15 @@ namespace cloud.charging.open.Smartphone.Charging
                                                      DateTimeOffset                 Now)
         {
 
-            var value = CheckDocument(Authority, Evidence.MeterEvidence, Evidence.EVSEId, IsStart ? "Start" : "Intermediate", Document.Text, Session, out var noKey);
+            var value = CheckDocument(Authority, Evidence.MeterEvidence, Evidence.EVSEId,
+                                      IsStart ? "Start" : Document.Ends ? "End" : "Intermediate",
+                                      Document.Text, Session, out var noKey);
 
             LiveLinkValueCheck Checked(Boolean? Holds, String? Error)
                 => new (Now, Holds, Error, value.MeterSerialNumber, value.MeterId, value.KeyId, value.Result);
+
+            static Boolean Ends(MeterReading Reading)
+                => Reading.Transaction is String transaction && LiveLinkDocument.EndingTransactions.Contains(transaction);
 
             if (!value.Verified)
                 return value.MeterSerialNumber is String named && Evidence.MeterSerialNumber is String expected && named != expected
@@ -425,7 +435,11 @@ namespace cloud.charging.open.Smartphone.Charging
             foreach (var reading in Document.Readings)
             {
 
-                var which = IsStart && reading.Transaction == "B" ? "its start value" : $"its value of {reading.MeasuredAt:o}";
+                var which = IsStart && reading.Transaction == "B"
+                                ? "its start value"
+                                : Ends(reading)
+                                      ? "its end value"
+                                      : $"its value of {reading.MeasuredAt:o}";
 
                 if (reading.Status is String status && status != "G")
                     return Checked(false, $"The meter says {which} is not good: its status is \"{status}\"{StatusInWords(status)}.");
@@ -438,14 +452,21 @@ namespace cloud.charging.open.Smartphone.Charging
 
             }
 
-            // How it fits what held before it.
+            // A transaction begins once: a begin it says again - the whole
+            // transaction, at its end - is the start value that held.
+            if (Begin is MeterReading began && Document.Begin is MeterReading again &&
+                (again.MeasuredAt != began.MeasuredAt || again.EnergyKWh != began.EnergyKWh))
+                return Checked(false, $"It says the transaction began with {Figure(again.EnergyKWh!.Value)} kWh at {again.MeasuredAt:o}, " +
+                                      $"and the start value that held says {Figure(began.EnergyKWh!.Value)} kWh at {began.MeasuredAt:o}.");
+
+            // How it fits what held before it, and its readings each other.
             foreach (var reading in Document.Readings)
             {
 
                 if (Begin is MeterReading begin && reading.MeasuredAt < begin.MeasuredAt)
                     return Checked(false, $"It was measured at {reading.MeasuredAt:o}, before the start value of {begin.MeasuredAt:o}.");
 
-                foreach (var before in Held)
+                foreach (var before in Held.Concat(Document.Readings.Where(other => !ReferenceEquals(other, reading))))
                 {
 
                     if (before.EnergyKWh is not Decimal was)
@@ -459,6 +480,20 @@ namespace cloud.charging.open.Smartphone.Charging
                         return Checked(false, $"It says {Figure(reading.EnergyKWh!.Value)} kWh at {reading.MeasuredAt:o}, where a value before says {Figure(was)} kWh at that time.");
 
                 }
+
+            }
+
+            // Nothing of the transaction is measured after its end.
+            var all = Held.Concat(Document.Readings).ToArray();
+
+            foreach (var reading in Document.Readings)
+            {
+
+                if (Ends(reading) && all.Where(other => other.MeasuredAt > reading.MeasuredAt).MaxBy(other => other.MeasuredAt) is MeterReading later)
+                    return Checked(false, $"It ends the transaction at {reading.MeasuredAt:o}, and a value of it was measured after its end, at {later.MeasuredAt:o}.");
+
+                if (all.Where(Ends).Where(other => other.MeasuredAt < reading.MeasuredAt).MinBy(other => other.MeasuredAt) is MeterReading ended)
+                    return Checked(false, $"It was measured at {reading.MeasuredAt:o}, after the end of the transaction at {ended.MeasuredAt:o}.");
 
             }
 

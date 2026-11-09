@@ -454,10 +454,14 @@ export interface LiveLinkFollow {
     energyKWh:      number | null;
     /** How its signed start value held, checked once it came; null while none came. */
     start:          LiveLinkStartCheck | null;
-    /** How the signed values after the start held: the end value is not checked yet ("notChecked"). */
+    /** How the signed values after the start held, its end value among them - "notChecked" while one was not checked yet. */
     values:         { holding: number; wrong: number; undecided: number; notChecked: number };
-    /** The signed value after the start that is a wrong one - the phone stopped the session -, or null. */
+    /** The signed value after the start and before the end that is a wrong one - the phone stopped the session -, or null. */
     wrong:          LiveLinkWrongValue | null;
+    /** Whether one of its signed values before the end is a wrong one: the phone stopped the session. */
+    refused:        boolean;
+    /** How its signed end value held, checked once it came - the whole transaction, where it came so; null while none came. */
+    end:            LiveLinkEndCheck | null;
     /** Where the stop link the page gave goes: its host, not the link; null where the page gave none. */
     stopLink:       string | null;
     /** The limit the driver chose at the page, as OCPP 2.1 says it to the station; null where none was handed over. */
@@ -468,6 +472,19 @@ export interface LiveLinkFollow {
     limits:         LimitValue[];
     /** How it ended, against its limit, once it did; null while it did not, or where the phone stopped it for a wrong value. */
     ending:         LiveLinkEnding | null;
+    /** Why the phone disputes it: a signed value is a wrong one, its end value as well, or none signed its end; null where it does not. */
+    disputeBecause: string | null;
+    /** Where the dispute link the page gave goes: its host, not the link; null where the page gave none. */
+    disputeLink:    string | null;
+    /** The dispute this phone sent the page last, over its dispute link; null while it sent none. */
+    dispute:        LiveLinkDispute | null;
+}
+
+/** What is handed over with a live link, where the web payment page gave it: its stop link, its dispute link, and the limit chosen there. */
+export interface LiveLinkHandOver {
+    stopLink?:     string;
+    disputeLink?:  string;
+    limit?:        TransactionLimit;
 }
 
 /** The limit a driver chose at the web payment page, as OCPP 2.1 says it in the "transactionLimit" of RequestStartTransaction. */
@@ -491,6 +508,16 @@ export interface LiveLinkStop {
     answer:       string;
 }
 
+/** A dispute the phone sent the web payment page, over its dispute link: why, whether the page took it, and what it answered. */
+export interface LiveLinkDispute {
+    requestedAt:  string;
+    /** "this phone", where it sent it once it knew; the driver, asking again. */
+    requestedBy:  string;
+    reason:       string;
+    accepted:     boolean;
+    answer:       string;
+}
+
 /** One part of the limit of a session against what its signed values say. */
 export interface LimitValue {
     kind:     'energy' | 'cost' | 'time' | 'soc';
@@ -503,9 +530,12 @@ export interface LimitValue {
     reached:  boolean | null;
 }
 
-/** How a session followed over its live link ended: stopped by the phone, at its limit, for another reason - or unknown whether at its limit. */
+/**
+ * How a session followed over its live link ended: stopped by the phone, at its limit, for another reason - or unknown whether at its limit;
+ * or its signed end value is a wrong one, and says nothing.
+ */
 export interface LiveLinkEnding {
-    reason:       'stopped' | 'limit' | 'other' | 'unknown';
+    reason:       'stopped' | 'limit' | 'other' | 'unknown' | 'wrong';
     because:      string;
     /** How the meter says the transaction ended ("TX"), or null where it signed no end. */
     transaction:  string | null;
@@ -533,6 +563,11 @@ export interface LiveLinkStartCheck extends LiveLinkValueCheck {
 
 /** A signed value after the start of a live link that is a wrong one, with its readings. */
 export interface LiveLinkWrongValue extends LiveLinkValueCheck {
+    readings:           MeterReading[];
+}
+
+/** The signed end value of a live link, checked, with its readings: the end of the transaction, or all of it. */
+export interface LiveLinkEndCheck extends LiveLinkValueCheck {
     readings:           MeterReading[];
 }
 
@@ -657,14 +692,17 @@ export const api = {
         start:        (locationId: string, evseUid: string) => request<ChargingSession> ('POST', '/charging/sessions', { locationId, evseUid }),
         /**
          * Take over the live link the web payment page of the operator gave - its https URL, or its document - of the session it started there,
-         * with the stop link it gave and the limit the driver chose there, where there are.
+         * with the stop link and the dispute link it gave and the limit the driver chose there, where there are.
          */
-        follow:       (locationId: string, evseUid: string, liveLink: string, stopLink?: string, limit?: TransactionLimit) =>
+        follow:       (locationId: string, evseUid: string, liveLink: string, handOver: LiveLinkHandOver = {}) =>
                           request<ChargingSession>('POST', '/charging/sessions', { locationId, evseUid, liveLink,
-                                                                                   ...(stopLink !== undefined ? { stopLink } : {}),
-                                                                                   ...(limit    !== undefined ? { limit }    : {}) }),
+                                                                                   ...(handOver.stopLink    !== undefined ? { stopLink:    handOver.stopLink }    : {}),
+                                                                                   ...(handOver.disputeLink !== undefined ? { disputeLink: handOver.disputeLink } : {}),
+                                                                                   ...(handOver.limit       !== undefined ? { limit:       handOver.limit }       : {}) }),
         /** Stop a session - of a live link through the stop link of the page: the one handed over, or the one given now. */
-        stop:         (id: string, stopLink?: string)       => request<ChargingSession> ('POST', `${session(id)}/stop`, stopLink !== undefined ? { stopLink } : {})
+        stop:         (id: string, stopLink?: string)       => request<ChargingSession> ('POST', `${session(id)}/stop`, stopLink !== undefined ? { stopLink } : {}),
+        /** Dispute a session of a live link through the dispute link of the page - the one handed over, or the one given now - for why the phone disputes it. */
+        dispute:      (id: string, disputeLink?: string)    => request<ChargingSession> ('POST', `${session(id)}/dispute`, disputeLink !== undefined ? { disputeLink } : {})
     }
 
 };

@@ -87,7 +87,9 @@ namespace cloud.charging.open.Smartphone.Charging
     /// what it charged is what its signed documents say. Stopped where this
     /// phone stopped it through the stop link of the page, once the meter
     /// signed its end - and at once where one of its signed values is a
-    /// wrong one.
+    /// wrong one. Disputed through the dispute link of the page where one of
+    /// its signed values is a wrong one, its end value as well, or none
+    /// signed its end: finished or stopped all the same.
     /// </para>
     /// </remarks>
     public sealed record ChargingSession(String           Id,

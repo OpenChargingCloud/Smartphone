@@ -360,6 +360,10 @@ export const mapPage: Page = {
                                 <input name="stopLink" type="text" autocomplete="off" placeholder="https://..." ?disabled=${busy}>
                             </label>
                             <label class="small">
+                                Its dispute link, where it gave one:
+                                <input name="disputeLink" type="text" autocomplete="off" placeholder="https://..." ?disabled=${busy}>
+                            </label>
+                            <label class="small">
                                 The limit chosen there:
                                 <span class="limit-input">
                                     <input name="limitValue" type="number" min="0" step="any" ?disabled=${busy}>
@@ -502,15 +506,16 @@ export const mapPage: Page = {
 
 
         /**
-         * Take over the live link the web payment page gave for the session it started at an EVSE - with its stop link, and the limit
-         * the driver chose there, where there are - and show the session.
+         * Take over the live link the web payment page gave for the session it started at an EVSE - with its stop link, its dispute
+         * link and the limit the driver chose there, where there are - and show the session.
          */
         async function followLiveLink(location: ChargingLocation, evseUid: string | undefined, form: HTMLElement): Promise<void> {
 
-            const liveLink  = form.querySelector<HTMLInputElement>('input[name="liveLink"]')!.value.trim();
-            const stopLink  = form.querySelector<HTMLInputElement>('input[name="stopLink"]')?.value.trim() ?? '';
-            const limit     = limitOf(form.querySelector<HTMLSelectElement>('select[name="limitKind"]')?.value ?? '',
-                                      Number(form.querySelector<HTMLInputElement>('input[name="limitValue"]')?.value.trim() || Number.NaN));
+            const liveLink     = form.querySelector<HTMLInputElement>('input[name="liveLink"]')!.value.trim();
+            const stopLink     = form.querySelector<HTMLInputElement>('input[name="stopLink"]')?.value.trim()    ?? '';
+            const disputeLink  = form.querySelector<HTMLInputElement>('input[name="disputeLink"]')?.value.trim() ?? '';
+            const limit        = limitOf(form.querySelector<HTMLSelectElement>('select[name="limitKind"]')?.value ?? '',
+                                         Number(form.querySelector<HTMLInputElement>('input[name="limitValue"]')?.value.trim() || Number.NaN));
 
             if (evseUid === undefined || liveLink === '' || starting.has(location.id))
                 return;
@@ -522,7 +527,11 @@ export const mapPage: Page = {
             try
             {
 
-                const session = await api.charging.follow(location.id, evseUid, liveLink, stopLink !== '' ? stopLink : undefined, limit);
+                const session = await api.charging.follow(location.id, evseUid, liveLink, {
+                                        ...(stopLink    !== '' ? { stopLink }    : {}),
+                                        ...(disputeLink !== '' ? { disputeLink } : {}),
+                                        ...(limit !== undefined ? { limit }      : {})
+                                    });
 
                 paying.delete(location.id);
 

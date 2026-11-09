@@ -82,7 +82,7 @@ namespace cloud.charging.open.Smartphone
         #endregion
 
 
-        #region FollowLiveLinkAsync(LocationId, EVSEUid, LiveLink, Who, StopLink = null, Limit = null, CancellationToken = default)
+        #region FollowLiveLinkAsync(LocationId, EVSEUid, LiveLink, Who, StopLink = null, Limit = null, DisputeLink = null, CancellationToken = default)
 
         /// <summary>
         /// Take over the live link of a charging session that the web payment
@@ -91,7 +91,8 @@ namespace cloud.charging.open.Smartphone
         /// a roaming network whose proof was checked and still holds: the
         /// session keeps its evidence and its price, as one this phone starts.
         /// With the stop link the page gave, where it gave one, to stop it
-        /// with, and the limit the driver chose there.
+        /// with, the limit the driver chose there, and the dispute link the
+        /// page gave, to dispute it with.
         /// </summary>
         /// <param name="LocationId">The station, by the id the map gave it.</param>
         /// <param name="EVSEUid">Its EVSE, by the uid the map gave it.</param>
@@ -99,6 +100,7 @@ namespace cloud.charging.open.Smartphone
         /// <param name="Who">Who handed it over, for the log and the session.</param>
         /// <param name="StopLink">The stop link the page gave: an https URL of this session alone, which a POST stops it at.</param>
         /// <param name="Limit">The limit the driver chose at the page, as OCPP 2.1 says it to the station.</param>
+        /// <param name="DisputeLink">The dispute link the page gave: an https URL of this session alone, which a POST disputes it at.</param>
         /// <param name="CancellationToken">To stop fetching its document.</param>
         public async Task<ChargingStart> FollowLiveLinkAsync(String             LocationId,
                                                              String             EVSEUid,
@@ -106,11 +108,15 @@ namespace cloud.charging.open.Smartphone
                                                              String             Who,
                                                              String?            StopLink           = null,
                                                              TransactionLimit?  Limit              = null,
+                                                             String?            DisputeLink        = null,
                                                              CancellationToken  CancellationToken  = default)
         {
 
             if (StopLink is not null && !TryLinkURL(StopLink, out _))
                 return ChargingStart.Refused(ChargingRefusal.Invalid, $"'{StopLink}' is no stop link: it is the https URL the web payment page gave to stop the session with.");
+
+            if (DisputeLink is not null && !TryLinkURL(DisputeLink, out _))
+                return ChargingStart.Refused(ChargingRefusal.Invalid, $"'{DisputeLink}' is no dispute link: it is the https URL the web payment page gave to dispute the session with.");
 
             var network = RoamingNetwork;
 
@@ -141,7 +147,7 @@ namespace cloud.charging.open.Smartphone
                 return ChargingStart.Refused(unreachable ? ChargingRefusal.Unreachable : ChargingRefusal.Invalid,
                                              problem ?? "No live link was handed over.");
 
-            var follow = new LiveLinkFollow(document, from, TimeProvider.GetUtcNow(), StopLink: StopLink?.Trim(), Limit: Limit);
+            var follow = new LiveLinkFollow(document, from, TimeProvider.GetUtcNow(), StopLink: StopLink?.Trim(), Limit: Limit, DisputeLink: DisputeLink?.Trim());
 
             if (follow.EVSEId is String named && named != evse.EVSEId)
                 return ChargingStart.Refused(ChargingRefusal.Conflict, $"The live link is of {named}, not of {evse.EVSEId} at {location.Name}: it was handed over at the wrong charge point.");
@@ -154,6 +160,7 @@ namespace cloud.charging.open.Smartphone
                        (from is not null ? $", from {from}" : "") +
                        $", for {session.PricePerKWh:0.00##} {session.Currency} per kWh, as its checked proof says" +
                        (follow.StopLinkHost is String stopAt ? $", with a stop link at {stopAt}" : ", with no stop link") +
+                       (follow.DisputeLinkHost is String disputeAt ? $", a dispute link at {disputeAt}" : ", no dispute link") +
                        (Limit is not null ? $" and the limit {Limit.InWords(session.Currency)}" : "") +
                        $". The session is {session.Id}.",
                        "charging", "web");
@@ -261,8 +268,8 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// Whether the given text is a link the web payment page may give - of
-        /// a live link, or to stop a session with: an https URL, or an http URL
-        /// on this machine's loopback.
+        /// a live link, or to stop or dispute a session with: an https URL, or
+        /// an http URL on this machine's loopback.
         /// </summary>
         private static Boolean TryLinkURL(String                         Text,
                                           [NotNullWhen(true)] out Uri?   URI)
@@ -356,6 +363,153 @@ namespace cloud.charging.open.Smartphone
 
         #endregion
 
+        #region DisputeChargingAsync(Id, Who, DisputeLink = null, CancellationToken = default)
+
+        /// <summary>
+        /// Dispute a session the web payment page of the operator of its station
+        /// started, through the dispute link the page gave - handed over with
+        /// its live link, or now -, for why this phone disputes it: one of its
+        /// signed values is a wrong one, or none signed its end. This phone
+        /// sends it itself once it knows, where the page gave a dispute link:
+        /// asked here, it sends it again, where the page did not take it, or
+        /// with the dispute link given only now.
+        /// </summary>
+        /// <param name="Id">The session.</param>
+        /// <param name="Who">Who asked, for the log and the session.</param>
+        /// <param name="DisputeLink">The dispute link the page gave, where it was not handed over with the live link.</param>
+        /// <param name="CancellationToken">To stop asking the page.</param>
+        public async Task<ChargingDispute> DisputeChargingAsync(String             Id,
+                                                                String             Who,
+                                                                String?            DisputeLink        = null,
+                                                                CancellationToken  CancellationToken  = default)
+        {
+
+            var session = Sessions.Get(Id);
+
+            if (session is null)
+                return ChargingDispute.Refused(ChargingRefusal.NotFound, $"There is no charging session '{Id}' on this phone.");
+
+            if (session.LiveLink is not LiveLinkFollow follow)
+                return ChargingDispute.Refused(ChargingRefusal.Conflict, $"The charging session '{Id}' was not started at the web payment page of the operator of its station: this phone disputes nothing of it there.");
+
+            if (DisputeLink is not null && !TryLinkURL(DisputeLink, out _))
+                return ChargingDispute.Refused(ChargingRefusal.Invalid, $"'{DisputeLink}' is no dispute link: it is the https URL the web payment page gave to dispute the session with.");
+
+            if (follow.DisputeBecause is null)
+                return ChargingDispute.Refused(ChargingRefusal.Conflict,
+                                               follow.EndedAt is null
+                                                   ? $"The session at {session.EVSEId} charges still, and none of its signed values is a wrong one: this phone disputes it where one is, or where none signs its end."
+                                                   : follow.End is { Holds: null } undecided
+                                                         ? $"The signed end value of the session at {session.EVSEId} could not be checked: {undecided.Error} This phone disputes nothing it could not decide."
+                                                         : $"The signed values of the session at {session.EVSEId} hold: this phone has nothing to dispute of it.");
+
+            if (follow.Dispute is { Accepted: true } disputed)
+                return ChargingDispute.Refused(ChargingRefusal.Conflict, $"The session at {session.EVSEId} was disputed at {disputed.RequestedAt:o} already, and the web payment page of its operator took it.");
+
+            var disputeLink = DisputeLink?.Trim() ?? follow.DisputeLink;
+
+            if (disputeLink is null)
+                return ChargingDispute.Refused(ChargingRefusal.Conflict, $"The web payment page of its operator gave no dispute link for the session at {session.EVSEId}: dispute it there, or hand its dispute link over.");
+
+            var dispute    = await PostDisputeLinkAsync(follow, disputeLink, Who, CancellationToken);
+            var kept       = Follow(Id, kept => kept with { DisputeLink = disputeLink, Dispute = dispute });
+            var disputeAt  = (kept?.LiveLink ?? follow with { DisputeLink = disputeLink }).DisputeLinkHost;
+
+            if (!dispute.Accepted)
+            {
+                Log.Warning($"'{Who}' disputed the session {Id} at {session.LocationName}, {session.EVSEId}, through the dispute link of the web payment page of its operator at {disputeAt}, and it took nothing: {dispute.Answer}",
+                            "charging", "web");
+                return ChargingDispute.Refused(ChargingRefusal.Operator, $"The web payment page of its operator took no dispute: {dispute.Answer}");
+            }
+
+            if (kept is null)
+                return ChargingDispute.Refused(ChargingRefusal.NotSaved, $"The web payment page of its operator took the dispute of the session at {session.EVSEId}, and this phone could not keep it.");
+
+            Log.Notice($"'{Who}' disputed the session {Id} at {session.LocationName}, {session.EVSEId}, through the dispute link of the web payment page of its operator at {disputeAt}, which answered {dispute.Answer}. {dispute.Reason}",
+                       "charging", "web");
+
+            return new ChargingDispute(kept, null, ChargingRefusal.None);
+
+        }
+
+        #endregion
+
+        #region (private) DisputePendingAsync(Session, SayNoLink, CancellationToken)
+
+        /// <summary>
+        /// Dispute a session this phone found a reason to dispute - one of its
+        /// signed values is a wrong one, or none signed its end - through the
+        /// dispute link of the web payment page, where it gave one and nothing
+        /// was sent yet. Where it gave none, the driver is told to dispute it
+        /// there - once, as it became known.
+        /// </summary>
+        private async Task DisputePendingAsync(ChargingSession    Session,
+                                               Boolean            SayNoLink,
+                                               CancellationToken  CancellationToken)
+        {
+
+            if (Session.LiveLink is not LiveLinkFollow { DisputeBecause: String because } follow || follow.Dispute is not null)
+                return;
+
+            var where = $"the session {Session.Id} at {Session.LocationName}, {Session.EVSEId}";
+
+            if (follow.DisputeLink is not String disputeLink)
+            {
+
+                if (SayNoLink)
+                    Log.Warning($"This phone disputes {where}, and the web payment page of its operator gave no dispute link: the driver disputes it there. {because}",
+                                "charging", "web");
+
+                return;
+
+            }
+
+            var dispute = await PostDisputeLinkAsync(follow, disputeLink, "this phone", CancellationToken);
+
+            Follow(Session.Id, kept => kept with { Dispute = dispute });
+
+            if (dispute.Accepted)
+                Log.Notice($"This phone disputed {where} through the dispute link of the web payment page of its operator at {follow.DisputeLinkHost}, which answered {dispute.Answer}. {because}",
+                           "charging", "web");
+
+            else
+                Log.Warning($"This phone could not dispute {where} through the dispute link of the web payment page of its operator at {follow.DisputeLinkHost}: {dispute.Answer} The driver disputes it at the page. {because}",
+                            "charging", "web");
+
+        }
+
+        #endregion
+
+        #region (private) PostDisputeLinkAsync(Follow, DisputeLink, Who, CancellationToken)
+
+        /// <summary>
+        /// Send the web payment page why this phone disputes a session, over
+        /// the dispute link it gave: a POST of a JSON object with why
+        /// ("reason") and the signed values it disputes, as they came
+        /// ("signedValues") - the one of its start, and the wrong one or the
+        /// last -, which it takes with a 2xx.
+        /// </summary>
+        private async Task<LiveLinkDispute> PostDisputeLinkAsync(LiveLinkFollow     Follow,
+                                                                 String             DisputeLink,
+                                                                 String             Who,
+                                                                 CancellationToken  CancellationToken)
+        {
+
+            var now     = TimeProvider.GetUtcNow();
+            var reason  = Follow.DisputeBecause ?? "";
+
+            var (accepted, answer) = await PostLinkAsync(DisputeLink,
+                                                         "dispute link",
+                                                         new JObject(new JProperty("reason",        reason),
+                                                                     new JProperty("signedValues",  new JArray(Follow.Disputed))),
+                                                         CancellationToken);
+
+            return new LiveLinkDispute(now, Who, reason, accepted, answer);
+
+        }
+
+        #endregion
+
         #region (private) PostStopLinkAsync(StopLink, Who, Reason, CancellationToken)
 
         /// <summary>
@@ -369,15 +523,35 @@ namespace cloud.charging.open.Smartphone
                                                            CancellationToken  CancellationToken)
         {
 
-            var now = TimeProvider.GetUtcNow();
-
-            if (!TryLinkURL(StopLink, out var uri))
-                return new LiveLinkStop(now, Who, false, "The stop link is no https URL.");
-
-            var body = new JObject();
+            var now   = TimeProvider.GetUtcNow();
+            var body  = new JObject();
 
             if (Reason is not null)
                 body.Add(new JProperty("reason", Reason));
+
+            var (accepted, answer) = await PostLinkAsync(StopLink, "stop link", body, CancellationToken);
+
+            return new LiveLinkStop(now, Who, accepted, answer);
+
+        }
+
+        #endregion
+
+        #region (private) PostLinkAsync(Link, What, Body, CancellationToken)
+
+        /// <summary>
+        /// A POST of a JSON object to a link the web payment page gave: whether
+        /// it took it - it answered with a 2xx -, and what it answered, or why
+        /// it could not be asked.
+        /// </summary>
+        private async Task<(Boolean Accepted, String Answer)> PostLinkAsync(String             Link,
+                                                                            String             What,
+                                                                            JObject            Body,
+                                                                            CancellationToken  CancellationToken)
+        {
+
+            if (!TryLinkURL(Link, out var uri))
+                return (false, $"The {What} is no https URL.");
 
             try
             {
@@ -385,7 +559,7 @@ namespace cloud.charging.open.Smartphone
                 await using var http = new HTTPClient(URL.Parse($"{uri.Scheme}://{uri.Authority}"), DNSClient: DNSClient);
 
                 var response = await http.POST(HTTPPath.Parse(uri.AbsolutePath),
-                                               Encoding.UTF8.GetBytes(body.ToString(Formatting.None)),
+                                               Encoding.UTF8.GetBytes(Body.ToString(Formatting.None)),
                                                HTTPContentType.Application.JSON_UTF8,
                                                QueryString:        uri.Query.Length > 1 ? QueryString.Parse(uri.Query[1..]) : null,
                                                Accept:             AcceptTypes.FromHTTPContentTypes(HTTPContentType.Application.JSON_UTF8),
@@ -395,14 +569,12 @@ namespace cloud.charging.open.Smartphone
                 var code = (Int32) response.HTTPStatusCode.Code;
 
                 if (code == 0)
-                    return new LiveLinkStop(now, Who, false, $"{uri.Authority} could not be reached: {Said(response.HTTPBodyAsUTF8String)}");
+                    return (false, $"{uri.Authority} could not be reached: {Said(response.HTTPBodyAsUTF8String)}");
 
                 var said = Said(response.HTTPBodyAsUTF8String);
 
-                return new LiveLinkStop(now,
-                                        Who,
-                                        response.HTTPStatusCode.IsSuccessful,
-                                        $"{code} {response.HTTPStatusCode.Name}{(said.Length > 0 ? $": {said}" : "")}");
+                return (response.HTTPStatusCode.IsSuccessful,
+                        $"{code} {response.HTTPStatusCode.Name}{(said.Length > 0 ? $": {said}" : "")}");
 
             }
             catch (OperationCanceledException) when (CancellationToken.IsCancellationRequested)
@@ -411,7 +583,7 @@ namespace cloud.charging.open.Smartphone
             }
             catch (Exception e)
             {
-                return new LiveLinkStop(now, Who, false, $"{uri.Authority} could not be reached: {e.Message}");
+                return (false, $"{uri.Authority} could not be reached: {e.Message}");
             }
 
         }
@@ -482,8 +654,10 @@ namespace cloud.charging.open.Smartphone
         /// its station through the stop link of the web payment page, where it
         /// gave one - and ended once the meter signs the end of the transaction
         /// or the station ends the stream: how, against the limit the driver
-        /// chose, said in the log. Where none of its endpoints answers, asked
-        /// again after a pause growing from <see cref="LiveLinkRetryFirst"/> to
+        /// chose, said in the log. A wrong value, a wrong end value or none
+        /// disputes the session through the dispute link of the page, where it
+        /// gave one. Where none of its endpoints answers, asked again after a
+        /// pause growing from <see cref="LiveLinkRetryFirst"/> to
         /// <see cref="LiveLinkRetryMax"/>.
         /// </summary>
         private async Task FollowingAsync(String             Id,
@@ -504,10 +678,19 @@ namespace cloud.charging.open.Smartphone
                         return;
 
                     // Stopped here for a wrong signed value - before a restart,
-                    // maybe - and its station not yet.
+                    // maybe - and its station not yet, or its page not yet told.
                     if (follow.Refused)
                     {
-                        await StopRefusedAsync(session, CancellationToken);
+                        await StopRefusedAsync   (session, CancellationToken);
+                        await DisputePendingAsync(Sessions.Get(Id) ?? session, false, CancellationToken);
+                        return;
+                    }
+
+                    // Ended - before a restart, maybe - and disputed, its page
+                    // not yet told.
+                    if (follow.EndedAt is not null)
+                    {
+                        await DisputePendingAsync(session, false, CancellationToken);
                         return;
                     }
 
@@ -533,21 +716,23 @@ namespace cloud.charging.open.Smartphone
                             connected  = true;
                             retry      = LiveLinkRetryFirst;
 
-                            var followed = CheckValues(Follow(Id, kept => kept.WithUpdate(TimeProvider.GetUtcNow(),
-                                                                                          update.Transport.AsText(),
-                                                                                          update.Endpoint,
-                                                                                          update.Result.GetType().Name,
-                                                                                          SignedTextsOf(update.Result))));
+                            var receivedAt  = TimeProvider.GetUtcNow();
+                            var followed    = CheckValues(Id, kept => kept.WithUpdate(receivedAt,
+                                                                                      update.Transport.AsText(),
+                                                                                      update.Endpoint,
+                                                                                      update.Result.GetType().Name,
+                                                                                      SignedTextsOf(update.Result)));
 
                             if (followed?.LiveLink?.Refused == true)
                             {
-                                await StopRefusedAsync(followed, CancellationToken);
+                                await StopRefusedAsync   (followed, CancellationToken);
+                                await DisputePendingAsync(Sessions.Get(Id) ?? followed, true, CancellationToken);
                                 return;
                             }
 
                             if (followed?.LiveLink?.EndedAt is not null)
                             {
-                                LogEnded(followed);
+                                await EndedAsync(followed, CancellationToken);
                                 return;
                             }
 
@@ -576,7 +761,7 @@ namespace cloud.charging.open.Smartphone
                                                            : kept);
 
                         if (ended is not null)
-                            LogEnded(ended);
+                            await EndedAsync(ended, CancellationToken);
 
                         return;
 
@@ -610,7 +795,31 @@ namespace cloud.charging.open.Smartphone
 
         #endregion
 
-        #region (private) LogEnded(Session)
+        #region (private) EndedAsync(Session, CancellationToken) / LogEnded(Session)
+
+        /// <summary>
+        /// A session followed over its live link ended: its end value checked
+        /// again with a proof of now, where no proof kept covered it; how it
+        /// ended said in the log; and disputed through the dispute link of the
+        /// web payment page, where its end value is a wrong one or none came.
+        /// </summary>
+        private async Task EndedAsync(ChargingSession    Session,
+                                      CancellationToken  CancellationToken)
+        {
+
+            var session = Session;
+
+            if (session.LiveLink?.End is { Holds: null } && session.Evidence is not null)
+            {
+                await KeepLatestProofAsync(session, "at the end", CancellationToken);
+                session = CheckValues(session.Id) ?? session;
+            }
+
+            LogEnded(session);
+
+            await DisputePendingAsync(session, true, CancellationToken);
+
+        }
 
         /// <summary>
         /// Say in the log that a session followed over its live link ended,
@@ -629,45 +838,64 @@ namespace cloud.charging.open.Smartphone
 
         #endregion
 
-        #region (private) CheckValues(Session)
+        #region (private) CheckValues(Id, Change = null)
 
         /// <summary>
         /// The signed values that came over the live link of the given session,
         /// each checked once it came (<see cref="SessionCheck.ValuesOf"/>) and
         /// kept with it - checked again with every update while it could not
-        /// be decided. A wrong one stops the session: it is said in the log,
-        /// and its live link is followed no more. Its station is stopped
-        /// through the stop link of the web payment page, where it gave one
-        /// (<see cref="StopRefusedAsync"/>) - else the driver stops it there.
+        /// be decided. With what came now (Change): kept with how its signed
+        /// values held at once, so that the session is never seen ended with an
+        /// end value not checked yet. A wrong one stops the session: it is said
+        /// in the log, and its live link is followed no more. Its station is
+        /// stopped through the stop link of the web payment page, where it gave
+        /// one (<see cref="StopRefusedAsync"/>) - else the driver stops it
+        /// there. A wrong end value stops nothing: like a wrong value before
+        /// it, it disputes the session through the dispute link of the page,
+        /// where it gave one (<see cref="DisputePendingAsync"/>).
         /// </summary>
-        private ChargingSession? CheckValues(ChargingSession? Session)
+        private ChargingSession? CheckValues(String                                 Id,
+                                             Func<LiveLinkFollow, LiveLinkFollow>?  Change  = null)
         {
 
-            if (Session?.LiveLink is not LiveLinkFollow follow)
-                return Session;
+            var session = Sessions.Get(Id);
+
+            if (session?.LiveLink is not LiveLinkFollow kept)
+                return session;
+
+            var change   = Change ?? (unchanged => unchanged);
+            var changed  = session with { LiveLink = change(kept) };
+            var follow   = changed.LiveLink!;
 
             // Not decided again, for the same reason: not kept again.
-            var checks = SessionCheck.ValuesOf(RoamingNetwork, Session, TimeProvider.GetUtcNow()).
+            var checks = SessionCheck.ValuesOf(RoamingNetwork, changed, TimeProvider.GetUtcNow()).
                                       Where(check => check.Check.Holds is not null || check.Document.Check?.Error != check.Check.Error || check.Document.Check is null).
                                       ToArray();
 
             if (checks.Length == 0)
-                return Session;
+                return Change is null ? session : Follow(Id, change);
 
-            var checkedSession = Follow(Session.Id, kept => kept.WithChecks(checks.Select(check => (check.Document.Text, check.Check))));
+            var checkedSession = Follow(Id, now => change(now).WithChecks(checks.Select(check => (check.Document.Text, check.Check))));
             var start          = follow.StartDocument?.Document;
-            var where          = $"of the session {Session.Id} at {Session.LocationName}, {Session.EVSEId}";
+            var where          = $"of the session {session.Id} at {session.LocationName}, {session.EVSEId}";
+
+            // Where the page gave no dispute link, that is said once it is
+            // known whether its station was stopped (DisputePendingAsync).
+            var disputes = follow.DisputeLink is not null
+                               ? "It disputes the session through the dispute link of the web payment page of its operator."
+                               : "";
 
             foreach (var (document, check) in checks)
             {
 
                 var isStart  = ReferenceEquals(document, start);
-                var what     = $"The signed {(isStart ? "start value" : "meter value")} {where}, {ReadingsInWords(document.Readings)},";
+                var isEnd    = document.Ends;
+                var what     = $"The signed {(isEnd ? "end value" : isStart ? "start value" : "meter value")} {where}, {ReadingsInWords(document.Readings)},";
 
                 switch (check.Holds)
                 {
 
-                    case true when isStart:
+                    case true when isStart || isEnd:
                         Log.Notice($"{what} holds: signed by its meter {check.MeterSerialNumber} with the key {check.KeyId} the proof of the station gave.", "charging", "meter", "poi");
                         break;
 
@@ -675,11 +903,16 @@ namespace cloud.charging.open.Smartphone
                         Log.Info  ($"{what} holds.", "charging", "meter", "poi");
                         break;
 
+                    case false when isEnd:
+                        Log.Warning($"{what} is a wrong one: {check.Error} {disputes}".TrimEnd(), "charging", "meter", "poi");
+                        break;
+
                     case false:
-                        Log.Warning($"{what} is a wrong one: {check.Error} This phone stopped the session and follows its live link no more. " +
-                                    (follow.StopLink is not null
-                                         ? "It stops the station through the stop link of the web payment page of its operator."
-                                         : "The web payment page of its operator gave no stop link: the driver stops the station there."),
+                        Log.Warning(($"{what} is a wrong one: {check.Error} This phone stopped the session and follows its live link no more. " +
+                                     (follow.StopLink is not null
+                                          ? "It stops the station through the stop link of the web payment page of its operator. "
+                                          : "The web payment page of its operator gave no stop link: the driver stops the station there. ") +
+                                     disputes).TrimEnd(),
                                     "charging", "meter", "poi");
                         break;
 
@@ -754,8 +987,9 @@ namespace cloud.charging.open.Smartphone
         /// <summary>
         /// Follow the live links of the sessions that are starting or charging,
         /// from now on for as long as the phone runs - those kept from before a
-        /// restart as well, and those stopped for a wrong signed value whose
-        /// station was not stopped yet through the stop link of the page.
+        /// restart as well, those stopped for a wrong signed value whose
+        /// station was not stopped yet through the stop link of the page, and
+        /// those disputed whose page was not told yet through its dispute link.
         /// </summary>
         private void StartFollowingLiveLinks()
         {
@@ -766,7 +1000,9 @@ namespace cloud.charging.open.Smartphone
             var now = TimeProvider.GetUtcNow();
 
             foreach (var session in Sessions.All().Where(session => session.LiveLink is LiveLinkFollow follow &&
-                                                                    (session.IsActiveAt(now) || follow is { Refused: true, StopLink: not null, Stop: null })))
+                                                                    (session.IsActiveAt(now)                                     ||
+                                                                     follow is { Refused: true, StopLink: not null, Stop: null } ||
+                                                                     follow.DisputePending)))
                 StartFollowing(session);
 
         }

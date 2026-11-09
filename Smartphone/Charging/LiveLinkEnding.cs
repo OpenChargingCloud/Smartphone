@@ -81,15 +81,17 @@ namespace cloud.charging.open.Smartphone.Charging
     /// ended at its limit ("limit"), for another reason ("other") - or its
     /// signed values do not say whether it reached its limit ("unknown"):
     /// only a state of charge, which no meter measures, would have ended it.
+    /// Or its signed end value is a wrong one ("wrong"), and says nothing.
     /// </summary>
     /// <remarks>
     /// The station keeps to the limit, and counts from its own start of the
     /// transaction and with its own rounding: a limit counts as reached where
     /// what the signed values say comes within a hundredth of it
     /// (<see cref="Tolerance"/>). What they say rests on the end value as
-    /// well, which is not checked yet.
+    /// well: a wrong one is compared with nothing, and a wrong value counts
+    /// for nothing.
     /// </remarks>
-    /// <param name="Reason">"stopped", "limit", "other" or "unknown".</param>
+    /// <param name="Reason">"stopped", "limit", "other", "unknown" or "wrong".</param>
     /// <param name="Because">Why, in a sentence or two.</param>
     /// <param name="Transaction">How the meter says the transaction ended ("TX"), or null where it signed no end.</param>
     /// <param name="Limits">Each part of its limit against what its signed values say.</param>
@@ -127,7 +129,8 @@ namespace cloud.charging.open.Smartphone.Charging
         /// against what its signed values say: from its start value - or its
         /// first reading - to its end value - or its latest reading -, its cost
         /// what the price of the proof of its station makes of that energy.
-        /// None where it was started with no limit.
+        /// None where it was started with no limit. A wrong value counts for
+        /// nothing: of a wrong end value, up to the latest reading that counts.
         /// </summary>
         public static IReadOnlyList<LimitValue> LimitsOf(ChargingSession Session)
         {
@@ -135,8 +138,9 @@ namespace cloud.charging.open.Smartphone.Charging
             if (Session.LiveLink is not LiveLinkFollow follow || follow.Limit is not TransactionLimit limit)
                 return [];
 
-            var first   = follow.StartDocument?.Reading ?? follow.Readings.FirstOrDefault();
-            var last    = follow.EndReading            ?? follow.Readings.LastOrDefault();
+            var counted = follow.Counted;
+            var first   = (follow.Start?.Holds != false ? follow.StartDocument?.Reading : null) ?? counted.FirstOrDefault();
+            var last    = (follow.WrongEnd is null      ? follow.EndReading            : null) ?? counted.LastOrDefault();
 
             Decimal? energy  = first?.EnergyKWh is Decimal from && last?.EnergyKWh is Decimal to
                                    ? Math.Max(0m, to - from)
@@ -202,6 +206,17 @@ namespace cloud.charging.open.Smartphone.Charging
 
             String  reason;
             String  because;
+
+            // How it ended, a wrong end value does not say.
+            if (follow.WrongEnd is LiveLinkDocument wrongEnd)
+                return new LiveLinkEnding("wrong",
+                                          $"Its signed end meter value is a wrong one: {wrongEnd.Check!.Error} " +
+                                          "How it ended, and against its limit, this phone takes nothing of it." +
+                                          (follow.Stop is { Accepted: true } stoppedFirst
+                                               ? $" This phone had stopped it through the stop link of the web payment page at {stoppedFirst.RequestedAt:HH:mm:ss}."
+                                               : ""),
+                                          null,
+                                          limits);
 
             if (follow.Stop is { Accepted: true } stop)
             {

@@ -498,6 +498,93 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
+        #region AWrongEndOrNoneIsDisputed()
+
+        /// <summary>
+        /// A wrong end value stops nothing and is disputed, with the signed
+        /// values of the start and the end; it counts for nothing, and says
+        /// nothing of how the session ended. So is a whole transaction that
+        /// came at its end alone, and is a wrong one. A stream the station
+        /// ended with no end value signed is disputed as well, with the last
+        /// value that came - and a live link keeps its dispute link and the
+        /// dispute it sent, showing the host of the link only.
+        /// </summary>
+        [Test]
+        public void AWrongEndOrNoneIsDisputed()
+        {
+
+            var at      = new DateTimeOffset(2026, 10, 10, 8, 10, 5, TimeSpan.Zero);
+            var meter   = TestRoamingNetwork.NewMeterKey();
+            var begin   = TestRoamingNetwork.OCMF(meter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (at.AddMinutes(-10), "B", 1000m));
+            var after   = TestRoamingNetwork.OCMF(meter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (at.AddMinutes(-5),  "C", 1006m));
+            var end     = TestRoamingNetwork.OCMF(meter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (at,                 "E", 1012m));
+            var whole   = TestRoamingNetwork.OCMF(meter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (at.AddMinutes(-10), "B", 1000m), (at, "E", 1012m));
+            var link    = new JObject(new JProperty("@context", "https://open.charging.cloud/contexts/chargeTransparency/live/link/1.0"));
+            var holds   = new LiveLinkValueCheck(at, true,  null);
+            var wrong   = new LiveLinkValueCheck(at, false, "The meter counts backwards.");
+
+            ChargingSession SessionOf(LiveLinkFollow Follow)
+                => new ("S1", "pool-1", "Jena", "Holzmarkt 1", "Jena", "GraphDefined", "dc-1", TestRoamingNetwork.DCEVSE, "CCS", "DC",
+                        150m, 0.65m, "EUR", ChargingSession.DefaultTargetEnergyKWh, at.AddMinutes(-11), "driver1", LiveLink: Follow);
+
+            var wrongEnd  = new LiveLinkFollow(link, null, at.AddMinutes(-11), Limit: new TransactionLimit(MaxEnergy: 12000m), DisputeLink: "https://pay.example/sessions/S1/dispute").
+                                WithUpdate(at.AddMinutes(-10), "https", "https://pay.example/live", "OCMF", [ begin ]).
+                                WithUpdate(at.AddMinutes(-5),  "https", "https://pay.example/live", "OCMF", [ after ]).
+                                WithUpdate(at,                 "https", "https://pay.example/live", "OCMF", [ end ]).
+                                WithChecks([ (begin, holds), (after, holds), (end, wrong) ]);
+
+            var onlyWhole = new LiveLinkFollow(link, null, at.AddMinutes(-11)).
+                                WithUpdate(at, "https", "https://pay.example/live", "OCMF", [ whole ]).
+                                WithChecks([ (whole, wrong) ]);
+
+            var noEnd     = new LiveLinkFollow(link, null, at.AddMinutes(-11)).
+                                WithUpdate(at.AddMinutes(-10), "https", "https://pay.example/live", "OCMF", [ begin ]).
+                                WithUpdate(at.AddMinutes(-5),  "https", "https://pay.example/live", "OCMF", [ after ]).
+                                WithChecks([ (begin, holds), (after, holds) ])
+                                with { EndedAt = at, EndedBecause = "The station ended the stream of its live link." };
+
+            var dispute   = new LiveLinkDispute(at.AddMinutes(1), "this phone", wrongEnd.DisputeBecause!, true, "200 OK: The dispute is taken.");
+            var read      = LiveLinkFollow.TryParse((wrongEnd with { Dispute = dispute }).ToStorageJSON())!;
+            var ending    = LiveLinkEnding.Of(SessionOf(wrongEnd))!;
+
+            Assert.Multiple(() => {
+
+                Assert.That(wrongEnd.ToCheck,                    Is.Empty, "an end value is not checked");
+                Assert.That(wrongEnd.Refused,                    Is.False, "a wrong end value stops the session");
+                Assert.That(wrongEnd.WrongEnd?.Text,             Is.EqualTo(end));
+                Assert.That(wrongEnd.End?.Holds,                 Is.False);
+                Assert.That(wrongEnd.DisputeBecause,             Is.EqualTo("Its signed end meter value is a wrong one: The meter counts backwards."));
+                Assert.That(wrongEnd.Disputed,                   Is.EqualTo(new[] { begin, end }));
+                Assert.That(wrongEnd.EnergyKWh,                  Is.EqualTo(6m), "the wrong end value counts");
+                Assert.That(wrongEnd.DisputePending,             Is.True);
+                Assert.That(ending.Reason,                       Is.EqualTo("wrong"));
+                Assert.That(ending.Transaction,                  Is.Null);
+                Assert.That(ending.Limits.Single().Value,        Is.EqualTo(6m), "a limit compared with a wrong end value");
+                Assert.That(SessionOf(wrongEnd).StatusAt(at),    Is.EqualTo(ChargingSessionStatus.Finished));
+
+                Assert.That(onlyWhole.StartDocument?.Document.Text, Is.EqualTo(whole));
+                Assert.That(onlyWhole.Refused,                   Is.False, "a whole transaction at its end stops it");
+                Assert.That(onlyWhole.DisputeBecause,            Does.StartWith("Its signed end meter value is a wrong one"));
+                Assert.That(onlyWhole.Disputed,                  Is.EqualTo(new[] { whole }));
+                Assert.That(onlyWhole.DisputePending,            Is.False, "disputed with no dispute link");
+
+                Assert.That(noEnd.End,                           Is.Null);
+                Assert.That(noEnd.DisputeBecause,                Does.Contain("signed no end of the transaction"));
+                Assert.That(noEnd.Disputed,                      Is.EqualTo(new[] { begin, after }));
+                Assert.That(LiveLinkEnding.Of(SessionOf(noEnd))!.Because, Does.Contain("signed no end"));
+
+                Assert.That(read.DisputeLink,                    Is.EqualTo("https://pay.example/sessions/S1/dispute"));
+                Assert.That(read.Dispute,                        Is.EqualTo(dispute));
+                Assert.That(read.DisputePending,                 Is.False, "disputed again");
+                Assert.That(read.ToJSON()["disputeLink"]?.Value<String>(), Is.EqualTo("pay.example"), "the dispute link itself is shown");
+                Assert.That(read.ToJSON()["end"]?["holds"]?.Value<Boolean?>(), Is.False);
+
+            });
+
+        }
+
+        #endregion
+
     }
 
 }

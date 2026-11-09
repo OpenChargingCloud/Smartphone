@@ -148,7 +148,8 @@ export function liveLinkSession(more: Partial<ChargingSession> = {}): ChargingSe
                                    meterSerialNumber: 'DC-2026-001', meterId: 'meter-dc-1',
                                    keyId: '95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6', result: 'ValidSignature' },
                           values: { holding: 1, wrong: 0, undecided: 0, notChecked: 0 },
-                          wrong: null, stopLink: null, limit: null, stop: null, limits: [], ending: null }
+                          wrong: null, refused: false, end: null, stopLink: null, limit: null, stop: null, limits: [], ending: null,
+                          disputeBecause: null, disputeLink: null, dispute: null }
     };
 
     delete followed.fullAt;
@@ -199,9 +200,13 @@ export function endedAtLimitSession(): ChargingSession {
         cost:       { amount: 13, pricePerKWh: 0.65, currency: 'EUR' },
         liveLink:   { ...link, documents: 3, endedAt: '2026-10-10T08:16:00Z',
                       endedBecause: 'The meter signed the end of the transaction ("E") at 2026-10-10T08:16:00.0000000+00:00.',
-                      readings: [ ...link.readings, { measuredAt: '2026-10-10T08:16:00Z', energyKWh: 1020, transaction: 'E', status: 'G', holds: null } ],
+                      readings: [ ...link.readings, { measuredAt: '2026-10-10T08:16:00Z', energyKWh: 1020, transaction: 'E', status: 'G', holds: true } ],
                       energyKWh: 20,
-                      values: { ...link.values, notChecked: 1 },
+                      values: { ...link.values, holding: 2 },
+                      end: { checkedAt: '2026-10-10T08:16:05Z', holds: true, error: null,
+                             meterSerialNumber: 'DC-2026-001', meterId: 'meter-dc-1',
+                             keyId: '95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6', result: 'ValidSignature',
+                             readings: [ { measuredAt: '2026-10-10T08:16:00Z', energyKWh: 1020, transaction: 'E', status: 'G' } ] },
                       limits: [ { kind: 'energy', limit: 20, unit: 'kWh', value: 20, reached: true } ],
                       ending: { reason: 'limit', transaction: 'E',
                                 because: 'It ended at its limit of 20 kWh: 20 kWh, as its signed values say - its meter signed the end of the transaction ("E").' } }
@@ -227,7 +232,8 @@ export function wrongStartSession(): ChargingSession {
         energyKWh:       0,
         cost:            { amount: 0, pricePerKWh: 0.65, currency: 'EUR' },
         stoppedBecause:  'Its signed start meter value is a wrong one: It is not signed by the key 95ceb48c of the meter DC-2026-001: InvalidSignature.',
-        liveLink:        { ...link, updates: 1, documents: 1, readings: [ { ...link.readings[0]!, holds: false } ], energyKWh: 0,
+        liveLink:        { ...link, updates: 1, documents: 1, readings: [ { ...link.readings[0]!, holds: false } ], energyKWh: 0, refused: true,
+                           disputeBecause: 'Its signed start meter value is a wrong one: It is not signed by the key 95ceb48c of the meter DC-2026-001: InvalidSignature.',
                            start: { ...link.start!, holds: false, result: 'InvalidSignature',
                                     error: 'It is not signed by the key 95ceb48c of the meter DC-2026-001: InvalidSignature.' },
                            values: { holding: 0, wrong: 0, undecided: 0, notChecked: 0 } }
@@ -252,13 +258,47 @@ export function wrongValueSession(): ChargingSession {
         status:          'stopped',
         endedAt:         '2026-10-10T08:10:05Z',
         stoppedBecause:  `A signed meter value after its start is a wrong one: ${error}`,
-        liveLink:        { ...link,
+        liveLink:        { ...link, refused: true, disputeBecause: `A signed meter value after its start is a wrong one: ${error}`,
                            readings: [ link.readings[0]!, { ...link.readings[1]!, energyKWh: 990, holds: false } ],
                            values:   { holding: 0, wrong: 1, undecided: 0, notChecked: 0 },
                            wrong:    { checkedAt: '2026-10-10T08:10:05Z', holds: false, error,
                                        meterSerialNumber: 'DC-2026-001', meterId: 'meter-dc-1',
                                        keyId: '95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6', result: 'ValidSignature',
                                        readings: [ { measuredAt: '2026-10-10T08:10:00Z', energyKWh: 990, transaction: 'C', status: 'G' } ] } }
+    };
+
+}
+
+
+/**
+ * The session of a live link whose signed end value is a wrong one - not
+ * signed by the key the proof gave for the meter -: finished, and disputed
+ * through the dispute link of the web payment page, which did not take the
+ * dispute, as a smartphone sends it.
+ */
+export function wrongEndSession(): ChargingSession {
+
+    const followed = liveLinkSession();
+    const link     = followed.liveLink!;
+    const error    = 'It is not signed by the key 95ceb48c of the meter DC-2026-001: InvalidSignature.';
+
+    return {
+        ...followed,
+        status:     'finished',
+        endedAt:    '2026-10-10T08:16:00Z',
+        liveLink:   { ...link, documents: 3, endedAt: '2026-10-10T08:16:00Z',
+                      endedBecause: 'The meter signed the end of the transaction ("E") at 2026-10-10T08:16:00.0000000+00:00.',
+                      readings: [ ...link.readings, { measuredAt: '2026-10-10T08:16:00Z', energyKWh: 1020, transaction: 'E', status: 'G', holds: false } ],
+                      values: { ...link.values, wrong: 1 },
+                      end: { checkedAt: '2026-10-10T08:16:05Z', holds: false, error,
+                             meterSerialNumber: 'DC-2026-001', meterId: null, keyId: null, result: 'InvalidSignature',
+                             readings: [ { measuredAt: '2026-10-10T08:16:00Z', energyKWh: 1020, transaction: 'E', status: 'G' } ] },
+                      ending: { reason: 'wrong', transaction: null,
+                                because: `Its signed end meter value is a wrong one: ${error} How it ended, and against its limit, this phone takes nothing of it.` },
+                      disputeBecause: `Its signed end meter value is a wrong one: ${error}`,
+                      disputeLink:    'pay.gef.example',
+                      dispute:        { requestedAt: '2026-10-10T08:16:05Z', requestedBy: 'this phone', reason: `Its signed end meter value is a wrong one: ${error}`,
+                                        accepted: false, answer: '409 Conflict: Nothing is disputed here.' } }
     };
 
 }

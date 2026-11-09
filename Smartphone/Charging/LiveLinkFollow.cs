@@ -123,6 +123,52 @@ namespace cloud.charging.open.Smartphone.Charging
 
 
     /// <summary>
+    /// The dispute this phone sent the web payment page of the operator, over
+    /// the dispute link the page gave: when, who asked - this phone itself,
+    /// where a signed value is a wrong one or none signed the end, or the
+    /// driver, asking again -, why, whether the page took it, and what it
+    /// answered.
+    /// </summary>
+    /// <param name="RequestedAt">When it was sent.</param>
+    /// <param name="RequestedBy">Who asked.</param>
+    /// <param name="Reason">Why the session is disputed, as it was sent.</param>
+    /// <param name="Accepted">Whether the page took it: it answered with a 2xx.</param>
+    /// <param name="Answer">What the page answered, or why it could not be asked.</param>
+    public sealed record LiveLinkDispute(DateTimeOffset  RequestedAt,
+                                         String          RequestedBy,
+                                         String          Reason,
+                                         Boolean         Accepted,
+                                         String          Answer)
+    {
+
+        public JObject ToJSON()
+
+            => new (new JProperty("requestedAt",  RequestedAt.ToString("o")),
+                    new JProperty("requestedBy",  RequestedBy),
+                    new JProperty("reason",       Reason),
+                    new JProperty("accepted",     Accepted),
+                    new JProperty("answer",       Answer));
+
+        /// <summary>
+        /// A dispute as the store kept it, or null where it kept none.
+        /// </summary>
+        public static LiveLinkDispute? TryParse(JToken? JSON)
+
+            => JSON is JObject json                                                                                     &&
+               json.Value<String>("requestedAt") is String requestedAt                                                    &&
+               DateTimeOffset.TryParse(requestedAt, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)        &&
+               json["accepted"]?.Type == JTokenType.Boolean
+                   ? new LiveLinkDispute(at,
+                                         json.Value<String>("requestedBy") ?? "",
+                                         json.Value<String>("reason")      ?? "",
+                                         json.Value<Boolean>("accepted"),
+                                         json.Value<String>("answer")      ?? "")
+                   : null;
+
+    }
+
+
+    /// <summary>
     /// One signed document a live link brought, as it came: an OCMF document
     /// "OCMF|{payload}|{signature}", when it came, and over which transport
     /// from where - and how it held, once it was checked.
@@ -238,9 +284,13 @@ namespace cloud.charging.open.Smartphone.Charging
     /// The keys a live link names are no authority: every signed document it
     /// brings is checked as it comes, with the key the proofs of the station
     /// give for its meter, and against the values that held before it - its
-    /// start value first (<see cref="Start"/>). A wrong one stops the session
-    /// here (<see cref="Wrong"/>), and the station, where the page gave a stop
-    /// link. The end value is not checked yet.
+    /// start value first (<see cref="Start"/>), its end value last
+    /// (<see cref="End"/>). A wrong one before the end stops the session here
+    /// (<see cref="Wrong"/>), and the station, where the page gave a stop
+    /// link. A wrong end value (<see cref="WrongEnd"/>) - or none, where the
+    /// station ended the stream - stops nothing that still charges: the
+    /// session is disputed (<see cref="DisputeBecause"/>), as one stopped for
+    /// a wrong value is.
     /// </para>
     /// <para>
     /// The page may give a stop link as well (<see cref="StopLink"/>): a URL
@@ -248,7 +298,10 @@ namespace cloud.charging.open.Smartphone.Charging
     /// (<see cref="Stop"/>) - followed on until the meter signs its end. And
     /// the limit the driver chose there (<see cref="Limit"/>), as OCPP 2.1
     /// says it to the station: what its signed values say at the end is
-    /// compared with it (<see cref="LiveLinkEnding"/>).
+    /// compared with it (<see cref="LiveLinkEnding"/>). And a dispute link
+    /// (<see cref="DisputeLink"/>), a URL of this session alone as well,
+    /// which this phone sends why it disputes the session to, with the signed
+    /// values it disputes (<see cref="Dispute"/>).
     /// </para>
     /// </remarks>
     /// <param name="Link">The live link, its JSON document as it was handed over or fetched.</param>
@@ -266,6 +319,8 @@ namespace cloud.charging.open.Smartphone.Charging
     /// <param name="StopLink">The stop link the web payment page gave for the session, where it gave one.</param>
     /// <param name="Limit">The limit the driver chose at the page, as OCPP 2.1 says it, where it was handed over.</param>
     /// <param name="Stop">The stop this phone asked the page for last, where it asked for one.</param>
+    /// <param name="DisputeLink">The dispute link the web payment page gave for the session, where it gave one.</param>
+    /// <param name="Dispute">The dispute this phone sent the page last, where it sent one.</param>
     public sealed record LiveLinkFollow(JObject                           Link,
                                         String?                           From,
                                         DateTimeOffset                    HandedOverAt,
@@ -280,7 +335,9 @@ namespace cloud.charging.open.Smartphone.Charging
                                         IReadOnlyList<LiveLinkDocument>?  Documents      = null,
                                         String?                           StopLink       = null,
                                         TransactionLimit?                 Limit          = null,
-                                        LiveLinkStop?                     Stop           = null)
+                                        LiveLinkStop?                     Stop           = null,
+                                        String?                           DisputeLink    = null,
+                                        LiveLinkDispute?                  Dispute        = null)
     {
 
         #region Data
@@ -300,6 +357,7 @@ namespace cloud.charging.open.Smartphone.Charging
         private sealed record ReadingsOfDocuments(IReadOnlyList<LiveLinkDocument>?                       Documents,
                                                   IReadOnlyList<(MeterReading Reading, Boolean? Holds)>  Checked,
                                                   IReadOnlyList<MeterReading>                            Readings,
+                                                  IReadOnlyList<MeterReading>                            Counted,
                                                   (LiveLinkDocument Document, MeterReading Reading)?     Start);
 
         private ReadingsOfDocuments? readings;
@@ -329,6 +387,14 @@ namespace cloud.charging.open.Smartphone.Charging
         /// </summary>
         public IReadOnlyList<MeterReading> Readings
             => Read().Readings;
+
+        /// <summary>
+        /// The readings that count, in the order the meter measured them: all
+        /// but those of a wrong signed value - those that held, and those not
+        /// checked or not decided yet.
+        /// </summary>
+        public IReadOnlyList<MeterReading> Counted
+            => Read().Counted;
 
         /// <summary>
         /// The signed document of its start, of those it brought: the first
@@ -367,15 +433,16 @@ namespace cloud.charging.open.Smartphone.Charging
             => Stop?.Accepted == true;
 
         /// <summary>
-        /// The first signed document it brought that is a wrong meter value:
-        /// this phone stopped the session - or null.
+        /// The first signed document it brought that is a wrong meter value
+        /// before the end - none of its readings ends the transaction: this
+        /// phone stopped the session - or null.
         /// </summary>
         public LiveLinkDocument? Wrong
-            => Signed.FirstOrDefault(document => document.Check?.Holds == false);
+            => Signed.FirstOrDefault(document => document.Check?.Holds == false && !document.Ends);
 
         /// <summary>
-        /// Whether one of its signed values is a wrong one: this phone stopped
-        /// the session.
+        /// Whether one of its signed values before the end is a wrong one:
+        /// this phone stopped the session.
         /// </summary>
         public Boolean Refused
             => Wrong is not null;
@@ -391,27 +458,81 @@ namespace cloud.charging.open.Smartphone.Charging
                    : null;
 
         /// <summary>
-        /// The signed documents to check now: those not checked, or not
-        /// decided, but those that end the transaction - the end value, not
-        /// checked here - unless one holds the start.
+        /// The first signed document it brought that ends the transaction and
+        /// is a wrong one - of the end alone, or the whole transaction from its
+        /// begin to its end -, or null.
         /// </summary>
-        public IReadOnlyList<LiveLinkDocument> ToCheck
-        {
-            get
-            {
-
-                var start = StartDocument?.Document;
-
-                return [.. Signed.Where(document => document.Check?.Holds is null &&
-                                                    document.Readings.Count > 0     &&
-                                                    (!document.Ends || ReferenceEquals(document, start)))];
-
-            }
-        }
+        public LiveLinkDocument? WrongEnd
+            => Signed.FirstOrDefault(document => document.Check?.Holds == false && document.Ends);
 
         /// <summary>
-        /// What was charged as its readings say: the energy register of the
-        /// latest reading less that of the first - or null while there are not
+        /// The signed document of its end: the wrong one, where one is, else
+        /// the first that came with a reading that ends the transaction - or
+        /// null while none came.
+        /// </summary>
+        public LiveLinkDocument? EndDocument
+            => WrongEnd ?? Signed.FirstOrDefault(document => document.Ends);
+
+        /// <summary>
+        /// How its signed end value held, once it was checked.
+        /// </summary>
+        public LiveLinkValueCheck? End
+            => EndDocument?.Check;
+
+        /// <summary>
+        /// Why this phone disputes the session, where it does: one of its
+        /// signed values before the end is a wrong one - it stopped it -, its
+        /// signed end value is a wrong one, or the station ended the stream of
+        /// its live link and its meter signed no end. Null where its signed
+        /// values hold, or are not decided.
+        /// </summary>
+        public String? DisputeBecause
+            => RefusedBecause ??
+               (WrongEnd is LiveLinkDocument wrongEnd
+                    ? $"Its signed end meter value is a wrong one: {wrongEnd.Check!.Error}"
+                    : EndedAt is not null && EndReading is null
+                          ? "The station ended the stream of its live link, and its meter signed no end of the transaction: no signed end value says what was charged."
+                          : null);
+
+        /// <summary>
+        /// The signed documents a dispute is sent with, as they came: the one
+        /// of its start, and the one it disputes - the wrong one, or the last
+        /// that came where none signed the end.
+        /// </summary>
+        public IReadOnlyList<String> Disputed
+            => [.. new[] {
+                       StartDocument?.Document,
+                       Wrong ?? WrongEnd ?? (EndedAt is not null && EndReading is null ? Signed.LastOrDefault() : null)
+                   }.OfType<LiveLinkDocument>().
+                     Select  (document => document.Text).
+                     Distinct()];
+
+        /// <summary>
+        /// Where its dispute link goes, for the pages and the log: its host.
+        /// </summary>
+        public String? DisputeLinkHost
+            => DisputeLink is not null && Uri.TryCreate(DisputeLink, UriKind.Absolute, out var uri)
+                   ? uri.Authority
+                   : null;
+
+        /// <summary>
+        /// Whether the session is disputed still, and the page gave a dispute
+        /// link this phone sent nothing to yet.
+        /// </summary>
+        public Boolean DisputePending
+            => DisputeBecause is not null && DisputeLink is not null && Dispute is null;
+
+        /// <summary>
+        /// The signed documents to check now: those not checked, or not
+        /// decided - its end value as well.
+        /// </summary>
+        public IReadOnlyList<LiveLinkDocument> ToCheck
+            => [.. Signed.Where(document => document.Check?.Holds is null &&
+                                            document.Readings.Count > 0)];
+
+        /// <summary>
+        /// What was charged as its readings that count say: the energy register
+        /// of the latest less that of the first - or null while there are not
         /// two readings with an energy register.
         /// </summary>
         public Decimal? EnergyKWh
@@ -419,7 +540,7 @@ namespace cloud.charging.open.Smartphone.Charging
             get
             {
 
-                var withEnergy = Readings.Where(reading => reading.EnergyKWh is not null).ToArray();
+                var withEnergy = Counted.Where(reading => reading.EnergyKWh is not null).ToArray();
 
                 return withEnergy.Length >= 2
                            ? Math.Max(0m, withEnergy[^1].EnergyKWh!.Value - withEnergy[0].EnergyKWh!.Value)
@@ -462,6 +583,7 @@ namespace cloud.charging.open.Smartphone.Charging
             var fresh = new ReadingsOfDocuments(Documents,
                                                 ordered,
                                                 [.. ordered.Select(reading => reading.Reading)],
+                                                [.. ordered.Where (reading => reading.Holds != false).Select(reading => reading.Reading)],
                                                 start);
 
             readings = fresh;
@@ -575,9 +697,11 @@ namespace cloud.charging.open.Smartphone.Charging
         /// The live link as the pages show it: where it came from, what came
         /// over it, the readings its signed documents say and whether each
         /// held, how its signed start value held - null while none came -, how
-        /// many of the values after it held, and the wrong one, where one is.
-        /// Where its stop link goes - its host, not the link -, the limit the
-        /// driver chose, and the stop this phone asked for.
+        /// many of the values after it held, the wrong one before the end,
+        /// where one is, and how its signed end value held. Where its stop link
+        /// goes - its host, not the link -, the limit the driver chose, and the
+        /// stop this phone asked for. Why this phone disputes the session,
+        /// where its dispute link goes, and the dispute it sent.
         /// </summary>
         public JObject ToJSON()
         {
@@ -585,6 +709,7 @@ namespace cloud.charging.open.Smartphone.Charging
             var start  = StartDocument;
             var after  = Signed.Where(document => !ReferenceEquals(document, start?.Document)).ToArray();
             var wrong  = Wrong is LiveLinkDocument refused && !ReferenceEquals(refused, start?.Document) ? refused : null;
+            var end    = EndDocument;
 
             JObject CheckJSON(LiveLinkValueCheck Check, String Name, JToken Readings)
             {
@@ -627,9 +752,16 @@ namespace cloud.charging.open.Smartphone.Charging
                         new JProperty("wrong",          wrong?.Check is LiveLinkValueCheck wrongCheck
                                                             ? CheckJSON(wrongCheck, "readings", new JArray(wrong.Readings.Select(reading => reading.ToJSON())))
                                                             : null),
+                        new JProperty("refused",        Refused),
+                        new JProperty("end",            end?.Check is LiveLinkValueCheck endCheck
+                                                            ? CheckJSON(endCheck, "readings", new JArray(end.Readings.Select(reading => reading.ToJSON())))
+                                                            : null),
                         new JProperty("stopLink",       StopLinkHost),
                         new JProperty("limit",          Limit?.ToJSON()),
-                        new JProperty("stop",           Stop?. ToJSON()));
+                        new JProperty("stop",           Stop?. ToJSON()),
+                        new JProperty("disputeBecause", DisputeBecause),
+                        new JProperty("disputeLink",    DisputeLinkHost),
+                        new JProperty("dispute",        Dispute?.ToJSON()));
 
         }
 
@@ -664,6 +796,8 @@ namespace cloud.charging.open.Smartphone.Charging
             if (StopLink      is not null)  json.Add(new JProperty("stopLink",       StopLink));
             if (Limit         is not null)  json.Add(new JProperty("limit",          Limit.ToJSON()));
             if (Stop          is not null)  json.Add(new JProperty("stop",           Stop. ToJSON()));
+            if (DisputeLink   is not null)  json.Add(new JProperty("disputeLink",    DisputeLink));
+            if (Dispute       is not null)  json.Add(new JProperty("dispute",        Dispute.ToJSON()));
 
             return json;
 
@@ -711,7 +845,9 @@ namespace cloud.charging.open.Smartphone.Charging
                                       documents,
                                       json.Value<String>("stopLink"),
                                       limit,
-                                      LiveLinkStop.TryParse(json["stop"]));
+                                      LiveLinkStop.   TryParse(json["stop"]),
+                                      json.Value<String>("disputeLink"),
+                                      LiveLinkDispute.TryParse(json["dispute"]));
 
         }
 

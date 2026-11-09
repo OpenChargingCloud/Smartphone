@@ -298,10 +298,11 @@ namespace cloud.charging.open.Smartphone
         /// its live link: 400 where it is none, 409 where it is of another EVSE
         /// or the proof of the station does not hold, 502 where its URL could
         /// not be fetched. With the "stopLink" the page gave as well, where it
-        /// gave one - the https URL a POST stops the session at - and the
+        /// gave one - the https URL a POST stops the session at -, its
+        /// "disputeLink" - the https URL a POST disputes it at - and the
         /// "limit" the driver chose there, as OCPP 2.1 says it to the station:
         /// { "maxEnergy" in Wh, "maxCost", "maxTime" in seconds, "maxSoC" in
-        /// percent }; 400 where either is none.
+        /// percent }; 400 where one is none.
         /// </summary>
         private async Task<HTTPResponse> PostChargingSession(HTTPRequest Request)
         {
@@ -326,13 +327,16 @@ namespace cloud.charging.open.Smartphone
                     return ErrorJSON(Request, HTTPStatusCode.BadRequest,
                                      "'liveLink' is the URL of the live link the web payment page of the operator gave, or its document.");
 
-                if (!TryStopLink(json, out var stopLink, out var stopLinkError))
+                if (!TryLink(json, "stopLink", StopLinkIs, out var stopLink, out var stopLinkError))
                     return ErrorJSON(Request, HTTPStatusCode.BadRequest, stopLinkError);
+
+                if (!TryLink(json, "disputeLink", DisputeLinkIs, out var disputeLink, out var disputeLinkError))
+                    return ErrorJSON(Request, HTTPStatusCode.BadRequest, disputeLinkError);
 
                 if (!TransactionLimit.TryParse(json["limit"], out var limit, out var limitError))
                     return ErrorJSON(Request, HTTPStatusCode.BadRequest, limitError);
 
-                var followed = await Smartphone.FollowLiveLinkAsync(locationId, evseUid, liveLink, user.Id.ToString(), stopLink, limit);
+                var followed = await Smartphone.FollowLiveLinkAsync(locationId, evseUid, liveLink, user.Id.ToString(), stopLink, limit, disputeLink);
 
                 if (followed.Session is null)
                     return Refused(Request, followed.Refusal, followed.Error ?? "No live link is followed.");
@@ -373,7 +377,7 @@ namespace cloud.charging.open.Smartphone
                 if (!TryParseJSONObject(Request, out var json, out var errorResponse))
                     return errorResponse;
 
-                if (!TryStopLink(json, out stopLink, out var stopLinkError))
+                if (!TryLink(json, "stopLink", StopLinkIs, out stopLink, out var stopLinkError))
                     return ErrorJSON(Request, HTTPStatusCode.BadRequest, stopLinkError);
 
             }
@@ -389,33 +393,81 @@ namespace cloud.charging.open.Smartphone
 
         #endregion
 
-
-        #region (private static) TryStopLink(JSON, out StopLink, out Error)
+        #region (private) PostDisputeChargingSession(Request)
 
         /// <summary>
-        /// The "stopLink" of a request, where it names one: a text - whether
-        /// it is a stop link, the phone says.
+        /// POST /api/v1/charging/sessions/{id}/dispute: dispute a session the
+        /// web payment page of the operator of its station started, through
+        /// the dispute link the page gave - the one handed over with its live
+        /// link, or { "disputeLink" } now -, for why this phone disputes it:
+        /// one of its signed values is a wrong one, or none signed its end.
+        /// This phone sends that itself once it knows: asked here, it sends it
+        /// again. 409 where nothing of it is disputed, it was disputed already,
+        /// or the page gave no dispute link; 502 where the page took nothing.
         /// </summary>
-        private static Boolean TryStopLink(JObject                           JSON,
-                                           out String?                       StopLink,
-                                           [NotNullWhen(false)] out String?  Error)
+        private async Task<HTTPResponse> PostDisputeChargingSession(HTTPRequest Request)
         {
 
-            StopLink  = null;
-            Error     = null;
+            if (!TryAuthorize(Request, Permission.Run(SmartphoneAccess.Charging), true, out var user, out var refused))
+                return refused;
 
-            switch (JSON["stopLink"])
+            String? disputeLink = null;
+
+            if (!String.IsNullOrWhiteSpace(Request.HTTPBodyAsUTF8String))
+            {
+
+                if (!TryParseJSONObject(Request, out var json, out var errorResponse))
+                    return errorResponse;
+
+                if (!TryLink(json, "disputeLink", DisputeLinkIs, out disputeLink, out var disputeLinkError))
+                    return ErrorJSON(Request, HTTPStatusCode.BadRequest, disputeLinkError);
+
+            }
+
+            var dispute = await Smartphone.DisputeChargingAsync(IdOf(Request), user.Id.ToString(), disputeLink);
+
+            if (dispute.Session is null)
+                return Refused(Request, dispute.Refusal, dispute.Error ?? "Nothing was disputed.");
+
+            return JSONResponse(Request, HTTPStatusCode.OK, Smartphone.SessionJSON(dispute.Session, Smartphone.TimeProvider.GetUtcNow()));
+
+        }
+
+        #endregion
+
+
+        #region (private static) TryLink(JSON, Name, What, out Link, out Error)
+
+        private const String StopLinkIs     = "the https URL the web payment page of the operator gave to stop the session with";
+        private const String DisputeLinkIs  = "the https URL the web payment page of the operator gave to dispute the session with";
+
+        /// <summary>
+        /// A link of a request the web payment page gave, where it names one -
+        /// its "stopLink" or its "disputeLink": a text. Whether it is one, the
+        /// phone says.
+        /// </summary>
+        private static Boolean TryLink(JObject                           JSON,
+                                       String                            Name,
+                                       String                            What,
+                                       out String?                       Link,
+                                       [NotNullWhen(false)] out String?  Error)
+        {
+
+            Link   = null;
+            Error  = null;
+
+            switch (JSON[Name])
             {
 
                 case null or { Type: JTokenType.Null }:
                     return true;
 
                 case JValue { Type: JTokenType.String } text when text.Value<String>() is String link:
-                    StopLink = String.IsNullOrWhiteSpace(link) ? null : link.Trim();
+                    Link = String.IsNullOrWhiteSpace(link) ? null : link.Trim();
                     return true;
 
                 default:
-                    Error = "'stopLink' is the https URL the web payment page of the operator gave to stop the session with.";
+                    Error = $"'{Name}' is {What}.";
                     return false;
 
             }

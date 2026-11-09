@@ -133,6 +133,7 @@ namespace cloud.charging.open.Smartphone
             AddHandler(HTTPPath.Root + "v1/charging/sessions",                PostChargingSession,       HTTPMethod.POST);
             AddHandler(HTTPPath.Root + "v1/charging/sessions/{id}",           GetChargingSession,        HTTPMethod.GET);
             AddHandler(HTTPPath.Root + "v1/charging/sessions/{id}/stop",      PostStopChargingSession,   HTTPMethod.POST);
+            AddHandler(HTTPPath.Root + "v1/charging/sessions/{id}/dispute",   PostDisputeChargingSession, HTTPMethod.POST);
 
             AddHandler(HTTPPath.Root + "v1/provider",                         GetProvider,               HTTPMethod.GET);
             AddHandler(HTTPPath.Root + "v1/provider/signup",                  PostProviderSignUp,        HTTPMethod.POST);

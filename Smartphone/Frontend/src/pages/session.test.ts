@@ -8,7 +8,7 @@
  */
 
 import { asked, leave, open, refused, until, type Asked } from '../../test/smartphone.ts';
-import { endedAtLimitSession, liveLinkSession, reportedSession, session, sessionCheck, stopLinkSession, wrongStartSession, wrongValueSession } from '../../test/charging.ts';
+import { endedAtLimitSession, liveLinkSession, reportedSession, session, sessionCheck, stopLinkSession, wrongEndSession, wrongStartSession, wrongValueSession } from '../../test/charging.ts';
 import type { MeterValueCheck } from '../api/client.ts';
 
 import { strict as assert }    from 'node:assert';
@@ -28,6 +28,11 @@ function smartphone({ method, path }: Asked): unknown {
 
     if (method === 'POST' && path === `/charging/sessions/${current.id}/stop`) {
         current = { ...current, status: 'stopped', endedAt: '2026-10-10T08:10:00Z', powerKW: 0, stoppedBy: 'root' };
+        return current;
+    }
+
+    if (method === 'POST' && path === `/charging/sessions/${current.id}/dispute` && current.liveLink !== undefined) {
+        current = { ...current, liveLink: { ...current.liveLink, dispute: { ...current.liveLink.dispute!, requestedBy: 'root', accepted: true, answer: '202 Accepted: The dispute is taken.' } } };
         return current;
     }
 
@@ -183,6 +188,49 @@ describe('a charging session', () => {
         assert.doesNotMatch(box.textContent!, /stop it there/);
         assert.match(root.querySelector('.session-live-link')!.textContent!, /Stop asked[^]*by this phone:\s*taken - 200 OK/);
         assert.equal(root.querySelector('.btn.danger'), null, 'a Stop for a session the phone stopped');
+
+    });
+
+    it('says a signed end value is a wrong one, and disputes the session again where its web payment page did not take the dispute', async () => {
+
+        current = wrongEndSession();
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.live-dispute') !== null);
+
+        const end      = root.querySelector<HTMLElement>('.live-end')!;
+        const dispute  = root.querySelector<HTMLElement>('.live-dispute')!;
+
+        assert.ok(end.classList.contains('refused'), end.className);
+        assert.match(end.textContent!, /a wrong end value[^]*End value[^]*\(E\)[^]*not signed by the key/);
+        assert.match(root.querySelector('.live-ending')!.textContent!, /a wrong end value\s*Its signed end meter value is a wrong one/);
+        assert.match(dispute.textContent!, /did not take the dispute this phone sent: 409 Conflict: Nothing is disputed here\. Dispute it there\./);
+        assert.match(root.querySelector('.session-live-link')!.textContent!, /Dispute link\s*at pay\.gef\.example/);
+        assert.match(root.querySelector('.session-live-link')!.textContent!, /Dispute sent[^]*by this phone:\s*not taken - 409/);
+        assert.match(root.querySelector('.session-reported')!.textContent!, /It is over: Its signed end meter value is a wrong one[^]*Dispute it there\./);
+        assert.equal(root.querySelector('.btn.danger'), null, 'a Stop for a session that ended');
+
+        root.querySelector<HTMLButtonElement>('.live-dispute .btn.dispute')!.click();
+
+        await until(() => asked.some(one => one.method === 'POST' && one.path === `/charging/sessions/${current.id}/dispute`),
+                    'Dispute again did not ask the smartphone');
+        await until(() => root.querySelector('.live-dispute.taken') !== null, 'the dispute taken is not shown');
+
+        assert.match(root.querySelector('.live-dispute')!.textContent!, /This phone disputed it through the dispute link of the web payment page/);
+        assert.equal(root.querySelector('.live-dispute .btn.dispute'), null, 'Dispute again for a dispute the page took');
+
+    });
+
+    it('says the end value of a session that ended at its limit is the meter\'s, and disputes nothing', async () => {
+
+        current = endedAtLimitSession();
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.live-end') !== null);
+
+        assert.ok(root.querySelector('.live-end.verified'));
+        assert.equal(root.querySelector('.live-dispute'), null, 'a session whose values hold is disputed');
+        assert.match(root.querySelector('.session-live-link')!.textContent!, /Dispute link\s*none given: it is disputed at the page/);
 
     });
 
