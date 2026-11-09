@@ -8,7 +8,7 @@
  */
 
 import { asked, leave, open, refused, until, type Asked } from '../../test/smartphone.ts';
-import { liveLinkSession, reportedSession, session, sessionCheck } from '../../test/charging.ts';
+import { liveLinkSession, reportedSession, session, sessionCheck, wrongStartSession } from '../../test/charging.ts';
 import type { MeterValueCheck } from '../api/client.ts';
 
 import { strict as assert }    from 'node:assert';
@@ -79,9 +79,56 @@ describe('a charging session', () => {
         assert.match(link.textContent!, /Signed documents\s*2/);
         assert.match(link.textContent!, /https:\/\/pay\.gef\.example\/sessions\/S1\/live/);
         assert.equal(link.querySelectorAll('ul.live-readings li').length, 2);
-        assert.match(link.textContent!, /not yet checked against the proof of the station/);
+        assert.ok(link.querySelector('.live-start.verified'), 'its start value is not said to be the meter\'s');
+        assert.match(link.querySelector('.live-start')!.textContent!, /the meter's\s*Start value/);
+        assert.match(link.querySelector('.live-start')!.textContent!, /meter DC-2026-001, key 95ceb48c/);
         assert.match(root.textContent!, /Started at the web payment page of its operator, and stopped there/);
+        assert.match(root.textContent!, /The values after it are what its signed documents say, not checked yet/);
         assert.equal(root.querySelector('.btn.danger'), null, 'a Stop for a session stopped at the web payment page');
+
+    });
+
+    it('says the phone stopped a session whose signed start value is a wrong one, and where to stop the station', async () => {
+
+        current = wrongStartSession();
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.live-start') !== null);
+
+        const start = root.querySelector<HTMLElement>('.live-start')!;
+
+        assert.ok(start.classList.contains('refused'), start.className);
+        assert.match(start.textContent!, /a wrong start value/);
+        assert.match(start.textContent!, /InvalidSignature/);
+        assert.match(start.querySelector('.error-box')!.textContent!, /This phone stopped the session/);
+        assert.match(start.querySelector('.error-box')!.textContent!, /stop it there/);
+        assert.match(root.querySelector('.session-status')!.textContent!, /stopped/);
+        assert.equal(root.querySelector('.btn.danger'), null, 'a Stop for a session the phone stopped');
+
+    });
+
+    it('says no signed start value came over a live link yet, and one that could not be checked', async () => {
+
+        const link = liveLinkSession().liveLink!;
+
+        current = liveLinkSession({ liveLink: { ...link, start: null } });
+
+        let root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                              smartphone, root => root.querySelector('.live-start') !== null);
+
+        assert.ok(root.querySelector('.live-start.pending'));
+        assert.match(root.querySelector('.live-start')!.textContent!, /No signed start value came over it yet/);
+
+        current = liveLinkSession({ liveLink: { ...link, start: { ...link.start!, holds: null, keyId: null, meterId: null, result: null,
+                                                                  error: 'No key of the meter DC-2026-001 of DE*GEF*E2*1 is attested for when it was measured.' } } });
+
+        root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                          smartphone, root => root.querySelector('.live-start') !== null);
+
+        assert.ok(root.querySelector('.live-start.unchecked'));
+        assert.match(root.querySelector('.live-start')!.textContent!, /not checked\s*Start value/);
+        assert.match(root.querySelector('.live-start')!.textContent!, /is attested for when it was measured/);
+        assert.equal(root.querySelector('.live-start .error-box'), null, 'a session stopped that was not');
 
     });
 

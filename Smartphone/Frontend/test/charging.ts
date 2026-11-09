@@ -122,7 +122,8 @@ export function reportedSession(more: Partial<ChargingSession> = {}): ChargingSe
 /**
  * A session at the DC EVSE of a roaming network that the web payment page of
  * its operator started, as a smartphone sends it: followed over its live link,
- * two signed documents come, its figures what they say - not checked yet.
+ * two signed documents come, its figures what they say, its signed start value
+ * the meter's as the proof of the station says.
  */
 export function liveLinkSession(more: Partial<ChargingSession> = {}): ChargingSession {
 
@@ -141,7 +142,11 @@ export function liveLinkSession(more: Partial<ChargingSession> = {}): ChargingSe
                           problem: null, endedAt: null, endedBecause: null, documents: 2,
                           readings: [ { measuredAt: '2026-10-10T08:00:00Z', energyKWh: 1000,   transaction: 'B', status: 'G' },
                                       { measuredAt: '2026-10-10T08:10:00Z', energyKWh: 1012.5, transaction: 'C', status: 'G' } ],
-                          energyKWh: 12.5, checked: false }
+                          energyKWh: 12.5,
+                          start: { checkedAt: '2026-10-10T08:00:05Z', holds: true, error: null,
+                                   reading: { measuredAt: '2026-10-10T08:00:00Z', energyKWh: 1000, transaction: 'B', status: 'G' },
+                                   meterSerialNumber: 'DC-2026-001', meterId: 'meter-dc-1',
+                                   keyId: '95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6', result: 'ValidSignature' } }
     };
 
     delete followed.fullAt;
@@ -150,6 +155,31 @@ export function liveLinkSession(more: Partial<ChargingSession> = {}): ChargingSe
     delete followed.progressPercent;
 
     return { ...followed, ...more };
+
+}
+
+
+/**
+ * The session of a live link whose signed start value is a wrong one - not
+ * signed by the key the proof gave for the meter -, which the smartphone
+ * stopped, as it sends it.
+ */
+export function wrongStartSession(): ChargingSession {
+
+    const followed = liveLinkSession();
+    const link     = followed.liveLink!;
+
+    return {
+        ...followed,
+        status:          'stopped',
+        endedAt:         '2026-10-10T08:00:05Z',
+        energyKWh:       0,
+        cost:            { amount: 0, pricePerKWh: 0.65, currency: 'EUR' },
+        stoppedBecause:  'Its signed start meter value is a wrong one: It is not signed by the key 95ceb48c of the meter DC-2026-001: InvalidSignature.',
+        liveLink:        { ...link, updates: 1, documents: 1, readings: [ link.readings[0]! ], energyKWh: 0,
+                           start: { ...link.start!, holds: false, result: 'InvalidSignature',
+                                    error: 'It is not signed by the key 95ceb48c of the meter DC-2026-001: InvalidSignature.' } }
+    };
 
 }
 

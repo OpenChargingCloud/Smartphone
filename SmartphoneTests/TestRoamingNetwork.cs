@@ -268,6 +268,23 @@ namespace cloud.charging.open.Smartphone.Tests
                                   String                                                           Serial,
                                   String                                                           Identification,
                                   params (DateTimeOffset At, String Transaction, Decimal EnergyKWh)[]  Readings)
+
+            => OCMFOfStatus(Meter, Serial, Identification, "G", Readings);
+
+        #endregion
+
+        #region (static) OCMFOfStatus(Meter, Serial, Identification, Status, Readings)
+
+        /// <summary>
+        /// A meter value in OCMF, as <see cref="OCMF"/> - its readings of the
+        /// given status ("ST"), as the meter says it: "G" where it is good,
+        /// "M" where it was manipulated, ...
+        /// </summary>
+        public static String OCMFOfStatus(ECPrivateKeyParameters                                           Meter,
+                                          String                                                           Serial,
+                                          String                                                           Identification,
+                                          String                                                           Status,
+                                          params (DateTimeOffset At, String Transaction, Decimal EnergyKWh)[]  Readings)
         {
 
             var payload = new JObject(
@@ -288,7 +305,7 @@ namespace cloud.charging.open.Smartphone.Tests
                                   new JProperty("RI",  "1-b:1.8.0"),
                                   new JProperty("RU",  "kWh"),
                                   new JProperty("RT",  "DC"),
-                                  new JProperty("ST",  "G")
+                                  new JProperty("ST",  Status)
                               ))))
                           ).ToString(Newtonsoft.Json.Formatting.None);
 

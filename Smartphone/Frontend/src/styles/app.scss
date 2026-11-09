@@ -329,8 +329,29 @@ ul.trust-keys {
 
 }
 
-// The readings a live link brought, as its signed documents say them.
+// The readings a live link brought, as its signed documents say them, and
+// its signed start value, checked.
 .session-live-link {
+
+    .live-start {
+
+        padding:     0.4rem 0;
+        border-top:  1px solid $color-border;
+        margin-top:  0.6rem;
+
+        > span + span {
+            margin-left:  0.5rem;
+        }
+
+        .commit {
+            word-break:  break-all;
+        }
+
+        .error-box {
+            margin-top:  0.4rem;
+        }
+
+    }
 
     ul.live-readings {
 

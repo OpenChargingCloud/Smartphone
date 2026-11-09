@@ -274,10 +274,11 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// Follow the live link of a session for as long as it is starting or
-        /// charging: everything that comes over it kept with it, and ended once
-        /// the meter signs the end of the transaction or the station ends the
-        /// stream. Where none of its endpoints answers, asked again after a
-        /// pause growing from <see cref="LiveLinkRetryFirst"/> to
+        /// charging: everything that comes over it kept with it, its signed
+        /// start value checked once it comes - a wrong one stops the session -
+        /// and ended once the meter signs the end of the transaction or the
+        /// station ends the stream. Where none of its endpoints answers, asked
+        /// again after a pause growing from <see cref="LiveLinkRetryFirst"/> to
         /// <see cref="LiveLinkRetryMax"/>.
         /// </summary>
         private async Task FollowingAsync(String             Id,
@@ -316,11 +317,14 @@ namespace cloud.charging.open.Smartphone
                             connected  = true;
                             retry      = LiveLinkRetryFirst;
 
-                            var followed = Follow(Id, kept => kept.WithUpdate(TimeProvider.GetUtcNow(),
-                                                                              update.Transport.AsText(),
-                                                                              update.Endpoint,
-                                                                              update.Result.GetType().Name,
-                                                                              SignedTextsOf(update.Result)));
+                            var followed = CheckStart(Follow(Id, kept => kept.WithUpdate(TimeProvider.GetUtcNow(),
+                                                                                         update.Transport.AsText(),
+                                                                                         update.Endpoint,
+                                                                                         update.Result.GetType().Name,
+                                                                                         SignedTextsOf(update.Result))));
+
+                            if (followed?.LiveLink?.StartRefused == true)
+                                return;
 
                             if (followed?.LiveLink?.EndedAt is not null)
                             {
@@ -380,6 +384,67 @@ namespace cloud.charging.open.Smartphone
                     if (liveLinkFollowers.TryRemove(Id, out var follower))
                         follower.Stop.Dispose();
             }
+
+        }
+
+        #endregion
+
+        #region (private) CheckStart(Session)
+
+        /// <summary>
+        /// The signed start value of the given session, checked once it came
+        /// over its live link (<see cref="SessionCheck.StartOf"/>) and kept with
+        /// it - checked again with every update while it could not be decided.
+        /// A wrong one stops the session: it is said in the log, and its live
+        /// link is followed no more.
+        /// </summary>
+        /// <remarks>
+        /// The web payment page of the operator gives this phone no link to
+        /// stop the station with: the driver stops it at the page.
+        /// </remarks>
+        private ChargingSession? CheckStart(ChargingSession? Session)
+        {
+
+            if (Session?.LiveLink is not LiveLinkFollow follow || follow.Start?.Holds is not null)
+                return Session;
+
+            if (SessionCheck.StartOf(RoamingNetwork, Session, TimeProvider.GetUtcNow()) is not LiveLinkStartCheck check)
+                return Session;
+
+            // Not decided again, for the same reason: not kept again.
+            if (check.Holds is null && follow.Start is LiveLinkStartCheck last && last.Error == check.Error && last.Text == check.Text)
+                return Session;
+
+            var checkedSession = Follow(Session.Id, kept => kept.WithStart(check));
+
+            var where = $"of the session {Session.Id} at {Session.LocationName}, {Session.EVSEId}";
+            var start = check.Reading is MeterReading reading
+                            ? (reading.EnergyKWh is Decimal energy
+                                   ? $"{energy.ToString(System.Globalization.CultureInfo.InvariantCulture)} kWh"
+                                   : "no energy register") + $" at {reading.MeasuredAt:o}"
+                            : "no reading";
+
+            switch (check.Holds)
+            {
+
+                case true:
+                    Log.Notice($"The signed start value {where}, {start}, holds: signed by its meter {check.MeterSerialNumber} with the key {check.KeyId} the proof of the station gave.",
+                               "charging", "meter", "poi");
+                    break;
+
+                case false:
+                    Log.Warning($"The signed start value {where}, {start}, is a wrong one: {check.Error} This phone stopped the session and follows its live link no more. " +
+                                "The web payment page of its operator gives no link to stop the station with: the driver stops it there.",
+                                "charging", "meter", "poi");
+                    break;
+
+                default:
+                    Log.Warning($"The signed start value {where}, {start}, could not be checked: {check.Error}", "charging", "meter", "poi");
+                    break;
+
+            }
+
+            return checkedSession;
 
         }
 

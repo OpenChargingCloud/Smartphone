@@ -414,6 +414,8 @@ export interface ChargingSession {
     /** What it costs: as the operator reported it, where it did ("reported"), else charged times the price. */
     cost:             { amount: number; pricePerKWh: number; currency: string; reported?: boolean };
     stoppedBy?:       string;
+    /** Why this phone stopped it: of a live link, its signed start value is a wrong one. */
+    stoppedBecause?:  string;
     /** What the e-mobility provider reported of it, once it did. */
     provider?:        ProviderReport;
     /** The charging ticket it was started with, where the phone has an e-mobility provider. */
@@ -425,7 +427,7 @@ export interface ChargingSession {
     liveLink?:        LiveLinkFollow;
 }
 
-/** The live link of a session the web payment page of its operator started: what came over it, as its signed documents say - not checked against the proof of the station. */
+/** The live link of a session the web payment page of its operator started: what came over it, as its signed documents say, and how its signed start value held against the proof of the station. */
 export interface LiveLinkFollow {
     handedOverAt:   string;
     /** The URL it was fetched from; null where its document itself was handed over. */
@@ -449,8 +451,24 @@ export interface LiveLinkFollow {
     documents:      number;
     readings:       MeterReading[];
     energyKWh:      number | null;
-    /** Whether its documents were checked against the proof of the station: not yet. */
-    checked:        boolean;
+    /** How its signed start value held, checked once it came; null while none came. */
+    start:          LiveLinkStartCheck | null;
+}
+
+/** The signed start value of a live link, checked with the key the proof of the station gives for its meter. */
+export interface LiveLinkStartCheck {
+    checkedAt:          string;
+    /** Whether it holds: false where it is a wrong one - the phone stopped the session -, null where it could not be checked. */
+    holds:              boolean | null;
+    /** Why it does not hold, or was not checked. */
+    error:              string | null;
+    /** The reading of the begin of the transaction. */
+    reading:            MeterReading | null;
+    meterSerialNumber:  string | null;
+    meterId:            string | null;
+    keyId:              string | null;
+    /** What ChargyCore said of its signature, where it was asked. */
+    result:             string | null;
 }
 
 /** One reading of a signed meter value: when the meter measured it, its register in kWh, "B" or "E" of the transaction. */
@@ -458,7 +476,10 @@ export interface MeterReading {
     measuredAt:   string;
     energyKWh:    number | null;
     transaction:  string | null;
+    /** "G" where the meter says it is good. */
     status:       string | null;
+    /** The errors the meter flags of it: "E" of its energy, "t" of its time. */
+    errorFlags?:  string;
 }
 
 /** One signed meter value of a charge detail record: whether the meter's key, as the station's proof gave it then, signed it. */

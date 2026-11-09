@@ -1,4 +1,4 @@
-import { api, type ChargingSession, type LiveLinkFollow, type MeterValueCheck, type SessionCheck } from '../api/client';
+import { api, type ChargingSession, type LiveLinkFollow, type LiveLinkStartCheck, type MeterValueCheck, type SessionCheck } from '../api/client';
 import { auth } from '../auth';
 import { dayAndTime, duration, isRunning, money, reportedInWords, sessionStatusClass, sessionStatusWord, withUnit } from '../charging/words';
 import { standardWord } from '../map/stations';
@@ -169,6 +169,8 @@ export const sessionPage: Page = {
                         ${link.endedBecause !== null ? kv('Ended', link.endedBecause) : nothing}
                     </div>
 
+                    ${startView(link.start)}
+
                     ${link.readings.length > 0 ? html`
                         <ul class="live-readings">
                             ${link.readings.map(reading => html`
@@ -182,12 +184,47 @@ export const sessionPage: Page = {
                     ` : nothing}
 
                     <p class="small muted">
-                        What its signed documents say, not yet checked against the proof of the station: a key a live
-                        link names is no authority, the one the proof gives for the meter is. The documents are kept,
-                        each as it came, to be checked with it.
+                        A key a live link names is no authority, the one the proof of the station gives for the meter
+                        is: the signed start value is checked with it once it comes, and a wrong one stops the session
+                        here. The values after it are what its signed documents say, not checked yet; the documents
+                        are kept, each as it came, to be checked with it.
                     </p>
 
                 </section>
+            `;
+
+        }
+
+
+        function startView(start: LiveLinkStartCheck | null): TemplateResult {
+
+            if (start === null)
+                return html`<p class="live-start pending">No signed start value came over it yet.</p>`;
+
+            const reading = start.reading;
+
+            return html`
+                <div class="live-start ${start.holds === true ? 'verified' : start.holds === false ? 'refused' : 'unchecked'}">
+                    ${start.holds === true
+                          ? html`<span class="chip ok"><i class="fa-solid fa-check"></i> the meter's</span>`
+                          : start.holds === false
+                                ? html`<span class="chip bad"><i class="fa-solid fa-xmark"></i> a wrong start value</span>`
+                                : html`<span class="chip"><i class="fa-solid fa-question"></i> not checked</span>`}
+                    <span>Start value</span>
+                    ${reading !== null ? html`
+                        <span>${dayAndTime(reading.measuredAt)}${reading.energyKWh !== null ? `: ${withUnit(reading.energyKWh, 'kWh', 3)}` : ''}</span>
+                    ` : nothing}
+                    <div class="small muted">
+                        ${start.meterSerialNumber !== null ? `meter ${start.meterSerialNumber}, ` : ''}${start.keyId !== null ? html`key <span class="commit">${start.keyId}</span>, ` : nothing}checked ${dayAndTime(start.checkedAt)}
+                    </div>
+                    ${start.error !== null ? html`<div class="small">${start.error}</div>` : nothing}
+                    ${start.holds === false ? html`
+                        <div class="error-box">
+                            This phone stopped the session: its signed start meter value is a wrong one. The web payment
+                            page of its operator gives this phone no link to stop the station with: stop it there.
+                        </div>
+                    ` : nothing}
+                </div>
             `;
 
         }

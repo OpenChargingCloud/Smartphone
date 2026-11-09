@@ -894,7 +894,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(session["liveLink"]!["from"]!.Value<String>(),          Is.EqualTo(liveLinkURL));
                 Assert.That(session["liveLink"]!["evseId"]!.Value<String>(),        Is.EqualTo(TestRoamingNetwork.DCEVSE));
                 Assert.That(session["liveLink"]!["transports"]!.Values<String>(),   Is.EqualTo(new[] { "https" }));
-                Assert.That(session["liveLink"]!["checked"]!.Value<Boolean>(),      Is.False);
+                Assert.That(session["liveLink"]!["start"]!.Type,                    Is.EqualTo(JTokenType.Null), "no start value came yet");
             }
 
             (status, var refused) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{id}/stop");
@@ -902,29 +902,40 @@ namespace cloud.charging.open.Smartphone.Tests
             Assert.That(status,                             Is.EqualTo(HttpStatusCode.Conflict), refused.ToString());
             Assert.That(refused["error"]!.Value<String>(),  Does.Contain("web payment page"));
 
-            var begin = DateTimeOffset.UtcNow.AddMinutes(-2);
+            var begin = DateTimeOffset.UtcNow;
 
             cpo.Send(TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (begin, "B", 1000.000m)));
 
-            var charging = await SessionWhen(driver, id, json => json["status"]?.Value<String>() == "charging");
+            var charging = await SessionWhen(driver, id, json => json["liveLink"]?["start"] is JObject);
+            var start    = charging["liveLink"]!["start"]!;
+            var keyId    = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Convert.FromBase64String(network.DCMeterKey)));
 
             using (Assert.EnterMultipleScope())
             {
+                Assert.That(charging["status"]!.Value<String>(),                           Is.EqualTo("charging"));
                 Assert.That(charging["energyKWh"]!.Value<Decimal>(),                       Is.EqualTo(0m));
                 Assert.That(charging["liveLink"]!["documents"]!.Value<Int32>(),            Is.EqualTo(1));
                 Assert.That(charging["liveLink"]!["readings"]!.Count(),                    Is.EqualTo(1));
                 Assert.That(charging["liveLink"]!["lastTransport"]!.Value<String>(),       Is.EqualTo("https"));
                 Assert.That(charging["liveLink"]!["lastEndpoint"]!.Value<String>(),        Is.EqualTo($"{cpo.URL}/sessions/S1/live"));
                 Assert.That(charging["liveLink"]!["lastKind"]!.Value<String>(),            Does.Contain("ChargeTransparencyRecord"));
+                Assert.That(start["holds"]!.Value<Boolean?>(),                             Is.True, start.ToString());
+                Assert.That(start["error"]!.Type,                                          Is.EqualTo(JTokenType.Null));
+                Assert.That(start["result"]!.Value<String>(),                              Is.EqualTo("ValidSignature"));
+                Assert.That(start["meterSerialNumber"]!.Value<String>(),                   Is.EqualTo(TestRoamingNetwork.DCMeterSerial));
+                Assert.That(start["meterId"]!.Value<String>(),                             Is.EqualTo("meter-dc-1"));
+                Assert.That(start["keyId"]!.Value<String>(),                               Is.EqualTo(keyId), "checked with another key than the one the proof gave");
+                Assert.That(start["reading"]!["energyKWh"]!.Value<Decimal>(),              Is.EqualTo(1000m));
+                Assert.That(start["reading"]!["transaction"]!.Value<String>(),             Is.EqualTo("B"));
             }
 
-            cpo.Send(TestRoamingNetwork.OCMF(network.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (begin.AddMinutes(1), "C", 1012.500m)));
+            cpo.Send(TestRoamingNetwork.OCMF(network.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (DateTimeOffset.UtcNow, "C", 1012.500m)));
 
             charging = await SessionWhen(driver, id, json => json["liveLink"]?["documents"]?.Value<Int32>() == 2);
 
             Assert.That(charging["energyKWh"]!.Value<Decimal>(), Is.EqualTo(12.5m), charging.ToString());
 
-            cpo.Send(TestRoamingNetwork.OCMF(network.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (begin.AddMinutes(2), "E", 1020.000m)));
+            cpo.Send(TestRoamingNetwork.OCMF(network.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (DateTimeOffset.UtcNow, "E", 1020.000m)));
 
             var finished = await SessionWhen(driver, id, json => json["status"]?.Value<String>() == "finished");
 
@@ -963,6 +974,165 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(read["energyKWh"]!.Value<Decimal>(),                    Is.EqualTo(20m));
                 Assert.That(read["liveLink"]!["documents"]!.Value<Int32>(),         Is.EqualTo(3));
                 Assert.That(read["liveLink"]!["from"]!.Value<String>(),             Is.EqualTo(liveLinkURL));
+                Assert.That(read["liveLink"]!["start"]!["holds"]!.Value<Boolean?>(), Is.True, "how its start value held was not kept");
+            }
+
+        }
+
+        #endregion
+
+        #region AWrongSignedStartValueStopsTheSession()
+
+        /// <summary>
+        /// A signed start value the meter's key, as the proof of the station
+        /// gives it, did not sign, one of another meter, and one the meter
+        /// itself says is not good are wrong start values: the phone stops the
+        /// session, says why, follows its live link no more - and the session
+        /// stays stopped across a restart.
+        /// </summary>
+        [Test]
+        public async Task AWrongSignedStartValueStopsTheSession()
+        {
+
+            await WithTheRoamingNetwork();
+
+            using var driver = await SignedInAs("driver1", "driver");
+
+            await Send(driver, HttpMethod.Get, "api/v1/map");
+            await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            cpo = await TestCPO.Start();
+
+            var begin = DateTimeOffset.UtcNow;
+
+            var cases = new (String Session, String Start, String Result, String Error)[] {
+                            ("S1", TestRoamingNetwork.OCMF        (TestRoamingNetwork.NewMeterKey(), TestRoamingNetwork.DCMeterSerial, "web-payment-1",      (begin, "B", 1000.000m)),  "InvalidSignature", "is not signed by the key"),
+                            ("S2", TestRoamingNetwork.OCMF        (network!.DCMeter,                 "AC-2026-001",                    "web-payment-2",      (begin, "B", 1000.000m)),  "",                 $"It is of the meter AC-2026-001, and the proof of {TestRoamingNetwork.DCStation} names the meter {TestRoamingNetwork.DCMeterSerial} for {TestRoamingNetwork.DCEVSE}"),
+                            ("S3", TestRoamingNetwork.OCMFOfStatus(network.DCMeter,                  TestRoamingNetwork.DCMeterSerial, "web-payment-3", "M", (begin, "B", 1000.000m)),  "ValidSignature",   "its status is \"M\" (manipulated)")
+                        };
+
+            var stopped = new List<String>();
+
+            foreach (var (name, startValue, result, error) in cases)
+            {
+
+                // What the station sends, before the phone asks for it.
+                cpo.Send(startValue);
+
+                var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                                   new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, liveLink = cpo.LiveLinkURL(name) });
+
+                Assert.That(status, Is.EqualTo(HttpStatusCode.Created), $"{name}: {session}");
+
+                var id     = session["id"]!.Value<String>()!;
+                var wrong  = await SessionWhen(driver, id, json => json["status"]?.Value<String>() == "stopped");
+                var start  = wrong["liveLink"]!["start"]!;
+
+                using (Assert.EnterMultipleScope())
+                {
+                    Assert.That(start["holds"]!.Value<Boolean?>(),             Is.False,                         $"{name}: {start}");
+                    Assert.That(start["error"]!.Value<String>(),               Does.Contain(error),              name);
+                    Assert.That(start["result"]!.Value<String>() ?? "",        Is.EqualTo(result),               name);
+                    Assert.That(wrong["stoppedBecause"]!.Value<String>(),      Does.Contain("signed start meter value is a wrong one"), name);
+                    Assert.That(wrong["endedAt"]?.Type,                        Is.AnyOf(JTokenType.String, JTokenType.Date), $"{name}: when it was stopped");
+                    Assert.That(wrong["energyKWh"]!.Value<Decimal>(),          Is.EqualTo(0m),                   name);
+                }
+
+                stopped.Add(id);
+
+            }
+
+            // Followed no more once it was stopped.
+            await Task.Delay(500);
+
+            var asked = cpo.LiveRequests;
+
+            await Task.Delay(1000);
+
+            Assert.That(cpo.LiveRequests, Is.EqualTo(asked), "a live link of a stopped session is still asked");
+
+            var configuration = File.ReadAllText(Path.Combine(directory, WWCPConfigFile.DefaultFileName));
+
+            await smartphone!.DisposeAsync();
+            smartphone = null;
+
+            await TestPorts.StartedOnFreshPorts(() => SmartphoneFrom(configuration));
+
+            using var again = await SignedInAs("driver2", "driver");
+
+            foreach (var id in stopped)
+            {
+
+                var (_, read) = await Send(again, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+                using (Assert.EnterMultipleScope())
+                {
+                    Assert.That(read["status"]!.Value<String>(),                          Is.EqualTo("stopped"), read.ToString());
+                    Assert.That(read["liveLink"]!["start"]!["holds"]!.Value<Boolean?>(),  Is.False);
+                }
+
+            }
+
+            await Task.Delay(1000);
+
+            Assert.That(cpo.LiveRequests, Is.EqualTo(asked), "a live link of a stopped session is asked again after a restart");
+
+        }
+
+        #endregion
+
+        #region AStartValueNoProofKeptCoversStopsNothing()
+
+        /// <summary>
+        /// A signed start value of a time no proof kept of the station covers
+        /// is not checked - this phone can not decide - and stops nothing: the
+        /// session charges on, its start checked again with every update, and
+        /// said once.
+        /// </summary>
+        [Test]
+        public async Task AStartValueNoProofKeptCoversStopsNothing()
+        {
+
+            await WithTheRoamingNetwork();
+
+            using var driver = await SignedInAs("driver1", "driver");
+
+            await Send(driver, HttpMethod.Get, "api/v1/map");
+            await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            cpo = await TestCPO.Start();
+
+            var begin = DateTimeOffset.UtcNow.AddHours(-2);
+
+            cpo.Send(TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (begin, "B", 1000.000m)));
+
+            var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                               new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, liveLink = cpo.LiveLinkURL("S1") });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            var id         = session["id"]!.Value<String>()!;
+            var undecided  = await SessionWhen(driver, id, json => json["liveLink"]?["start"] is JObject);
+            var start      = undecided["liveLink"]!["start"]!;
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(start["holds"]!.Type,                         Is.EqualTo(JTokenType.Null), start.ToString());
+                Assert.That(start["error"]!.Value<String>(),              Does.Contain($"No key of the meter {TestRoamingNetwork.DCMeterSerial}"));
+                Assert.That(start["result"]!.Type,                        Is.EqualTo(JTokenType.Null), "checked with no key");
+                Assert.That(undecided["status"]!.Value<String>(),         Is.EqualTo("charging"));
+            }
+
+            cpo.Send(TestRoamingNetwork.OCMF(network.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (DateTimeOffset.UtcNow.AddSeconds(-1), "C", 1004.000m)));
+
+            var charging = await SessionWhen(driver, id, json => json["liveLink"]?["documents"]?.Value<Int32>() == 2);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(charging["status"]!.Value<String>(),                     Is.EqualTo("charging"), charging.ToString());
+                Assert.That(charging["energyKWh"]!.Value<Decimal>(),                 Is.EqualTo(4m));
+                Assert.That(charging["liveLink"]!["start"]!["holds"]!.Type,          Is.EqualTo(JTokenType.Null));
+                Assert.That(charging["liveLink"]!["start"]!["checkedAt"]!.ToString(), Is.EqualTo(start["checkedAt"]!.ToString()), "the same reason kept again");
             }
 
         }

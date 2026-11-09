@@ -37,20 +37,31 @@ namespace cloud.charging.open.Smartphone.Charging
     /// <summary>
     /// One reading of a signed meter value: when it was measured, as the meter
     /// signed it, the energy register then, in kWh, which part of the
-    /// transaction it is - "B" its begin, "E" its end - and its status.
+    /// transaction it is - "B" its begin, "E" its end - its status, "G" where
+    /// the meter says it is good, and the errors the meter flags of it ("EF":
+    /// "E" of the energy, "t" of the time), where it flags any.
     /// </summary>
     public sealed record MeterReading(DateTimeOffset  MeasuredAt,
                                       Decimal?        EnergyKWh,
                                       String?         Transaction,
-                                      String?         Status)
+                                      String?         Status,
+                                      String?         ErrorFlags  = null)
     {
 
         public JObject ToJSON()
+        {
 
-            => new (new JProperty("measuredAt",   MeasuredAt.ToString("o")),
-                    new JProperty("energyKWh",    EnergyKWh),
-                    new JProperty("transaction",  Transaction),
-                    new JProperty("status",       Status));
+            var json = new JObject(new JProperty("measuredAt",   MeasuredAt.ToString("o")),
+                                   new JProperty("energyKWh",    EnergyKWh),
+                                   new JProperty("transaction",  Transaction),
+                                   new JProperty("status",       Status));
+
+            if (ErrorFlags is { Length: > 0 })
+                json.Add(new JProperty("errorFlags", ErrorFlags));
+
+            return json;
+
+        }
 
     }
 
@@ -283,19 +294,8 @@ namespace cloud.charging.open.Smartphone.Charging
             var cdrEnergy  = Number(cdr?["total_energy"]);
             var cdrCost    = GrossCostOf(cdr?["total_cost"]);
 
-            SessionCheck Unchecked(String Error)
-                => new (Now, Error, null, Session.PricePerKWh, null, null, cdrEnergy, cdrCost);
-
-            if (!RoamingNetworkProof.TryParse(evidence.Proofs[0], out var proof, out var proofError))
-                return Unchecked($"The proof kept of {evidence.StationId} is none: {proofError}");
-
-            // Of the decisions of now: a key no longer trusted checks nothing,
-            // whatever it was trusted for at the start.
-            if (Configuration.IsSet && !Configuration.QuorumTrusted)
-                return Unchecked($"Nothing of it is checked: the identity keys trusted here are of fewer holders than the trust anchor of '{Configuration.TrustAnchor!.Id}' requires. Configuration → Map trusts them.");
-
-            if (Configuration.HistoricalContext(proof, Now, out var authorityError) is not HistoricalTrustContext authority)
-                return Unchecked($"Nothing of it is checked: {authorityError}");
+            if (AuthorityOf(Configuration, evidence, Now, out var authorityError) is not IRoamingNetworkTrustAuthority authority)
+                return new SessionCheck(Now, authorityError, null, Session.PricePerKWh, null, null, cdrEnergy, cdrCost);
 
             var price              = Session.Start is not null
                                          ? PriceOf(authority, evidence, Session)
@@ -304,6 +304,117 @@ namespace cloud.charging.open.Smartphone.Charging
             var (values, problem)  = MeterValuesOf(authority, evidence, Session);
 
             return new SessionCheck(Now, null, price, Session.PricePerKWh, values, problem, cdrEnergy, cdrCost);
+
+        }
+
+        #endregion
+
+        #region (static) StartOf(Configuration, Session, Now)
+
+        /// <summary>
+        /// The signed start value of a session the web payment page of the
+        /// operator of its station started, as its live link brought it,
+        /// checked now - or null while no reading the meter signed as the
+        /// begin of the transaction ("B") came over it.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// It holds where the meter says it is good - its status "G", no
+        /// error flagged - and it is a reading of an energy register, of the
+        /// meter the proof of the station names for the EVSE, signed by the
+        /// key the proofs kept give for that meter at the time it was
+        /// measured, as ChargyCore checks the signature.
+        /// </para>
+        /// <para>
+        /// It does not hold - a wrong start value - where the meter says it is
+        /// not good, it is of another meter, or it is not signed by that key.
+        /// It is not checked where this phone can not decide: the identity
+        /// keys trusted here do not suffice, or no proof kept attests a key
+        /// of the meter for the time it was measured - one that names a time
+        /// to come as well.
+        /// </para>
+        /// <para>
+        /// That the start value is of this very session is not proven: its
+        /// live link names the charge point, and nothing binds the payment
+        /// at the page to what the meter signs.
+        /// </para>
+        /// </remarks>
+        public static LiveLinkStartCheck? StartOf(RoamingNetworkConfiguration  Configuration,
+                                                  ChargingSession              Session,
+                                                  DateTimeOffset               Now)
+        {
+
+            if (Session.LiveLink?.StartDocument is not (LiveLinkDocument document, MeterReading reading))
+                return null;
+
+            LiveLinkStartCheck Checked(Boolean? Holds, String? Error, MeterValueCheck? Value = null)
+                => new (Now, Holds, Error, document.Text, Value?.MeterSerialNumber, Value?.MeterId, Value?.KeyId, Value?.Result);
+
+            if (Session.Evidence is not SessionEvidence evidence)
+                return Checked(null, "The session keeps no proof of its station to check it with.");
+
+            if (AuthorityOf(Configuration, evidence, Now, out var authorityError) is not IRoamingNetworkTrustAuthority authority)
+                return Checked(null, authorityError);
+
+            var value = CheckDocument(authority, evidence.MeterEvidence, evidence.EVSEId, "Start", document.Text, Session, out var noKey);
+
+            if (!value.Verified)
+                return value.MeterSerialNumber is String named && evidence.MeterSerialNumber is String expected && named != expected
+                           ? Checked(false, $"It is of the meter {named}, and the proof of {evidence.StationId} names the meter {expected} for {evidence.EVSEId}.", value)
+                           : Checked(noKey ? null : false, value.Error, value);
+
+            // The meter's, and what the meter says of it itself.
+            if (reading.Status is String status && status != "G")
+                return Checked(false, $"The meter says its start value is not good: its status is \"{status}\"{StatusInWords(status)}.", value);
+
+            if (reading.ErrorFlags is { Length: > 0 } flags)
+                return Checked(false, $"The meter flags an error of its start value: \"{flags}\"{ErrorFlagsInWords(flags)}.", value);
+
+            if (reading.EnergyKWh is null)
+                return Checked(false, "Its start value is no energy register in kWh or Wh.", value);
+
+            return Checked(true, null, value);
+
+        }
+
+        #endregion
+
+        #region (private static) AuthorityOf(Configuration, Evidence, Now, out Error)
+
+        /// <summary>
+        /// What the evidence of a session is checked under now: the proof of
+        /// its start, under the trust anchor and the identity keys trusted in
+        /// the given configuration - or why nothing of it is checked.
+        /// </summary>
+        private static IRoamingNetworkTrustAuthority? AuthorityOf(RoamingNetworkConfiguration  Configuration,
+                                                                  SessionEvidence              Evidence,
+                                                                  DateTimeOffset               Now,
+                                                                  out String?                  Error)
+        {
+
+            Error = null;
+
+            if (!RoamingNetworkProof.TryParse(Evidence.Proofs[0], out var proof, out var proofError))
+            {
+                Error = $"The proof kept of {Evidence.StationId} is none: {proofError}";
+                return null;
+            }
+
+            // Of the decisions of now: a key no longer trusted checks nothing,
+            // whatever it was trusted for at the start.
+            if (Configuration.IsSet && !Configuration.QuorumTrusted)
+            {
+                Error = $"Nothing of it is checked: the identity keys trusted here are of fewer holders than the trust anchor of '{Configuration.TrustAnchor!.Id}' requires. Configuration → Map trusts them.";
+                return null;
+            }
+
+            if (Configuration.HistoricalContext(proof, Now, out var authorityError) is not HistoricalTrustContext authority)
+            {
+                Error = $"Nothing of it is checked: {authorityError}";
+                return null;
+            }
+
+            return authority;
 
         }
 
@@ -378,9 +489,8 @@ namespace cloud.charging.open.Smartphone.Charging
         #region (private static) Check(Authority, Evidence, EVSEId, Value, Session)
 
         /// <summary>
-        /// One signed meter value: its OCMF document read by ChargyCore, the key
-        /// of its meter at the times of its readings taken of the proofs kept,
-        /// and its signature checked by ChargyCore with that key.
+        /// One signed meter value of a charge detail record: its OCMF document,
+        /// as its signed data or its plain data say it, checked.
         /// </summary>
         private static MeterValueCheck Check(IRoamingNetworkTrustAuthority  Authority,
                                              HistoricalMeterEvidence        Evidence,
@@ -391,25 +501,51 @@ namespace cloud.charging.open.Smartphone.Charging
 
             var nature = Value.Value<String>("nature");
 
-            if (OCMFText(Value) is not String text)
-                return new MeterValueCheck(nature, false, "It is no OCMF document with a signature, neither as its signed data nor as its plain data.", null, null, null, null, null, false, []);
+            return OCMFText(Value) is String text
+                       ? CheckDocument(Authority, Evidence, EVSEId, nature, text, Session, out _)
+                       : new MeterValueCheck(nature, false, "It is no OCMF document with a signature, neither as its signed data nor as its plain data.", null, null, null, null, null, false, []);
+
+        }
+
+        #endregion
+
+        #region (private static) CheckDocument(Authority, Evidence, EVSEId, Nature, Text, Session, out NoKey)
+
+        /// <summary>
+        /// One signed meter value: its OCMF document read by ChargyCore, the key
+        /// of its meter at the times of its readings taken of the proofs kept,
+        /// and its signature checked by ChargyCore with that key. Where it is
+        /// not the meter's, whether that is because no key of its meter could
+        /// be had to check it with (NoKey) - no proof kept attests one for its
+        /// times, or more than one - rather than that it is none.
+        /// </summary>
+        private static MeterValueCheck CheckDocument(IRoamingNetworkTrustAuthority  Authority,
+                                                     HistoricalMeterEvidence        Evidence,
+                                                     String                         EVSEId,
+                                                     String?                        Nature,
+                                                     String                         Text,
+                                                     ChargingSession                Session,
+                                                     out Boolean                    NoKey)
+        {
+
+            NoKey = false;
 
             OCMFDocument document;
 
             try
             {
 
-                var scanned = new OCMFDocumentScanner().Scan([ text ]);
+                var scanned = new OCMFDocumentScanner().Scan([ Text ]);
 
                 if (scanned.Documents.Count != 1)
-                    return new MeterValueCheck(nature, false, scanned.ErrorMessage ?? $"It holds {scanned.Documents.Count} OCMF documents, not one.", null, null, null, null, null, false, []);
+                    return new MeterValueCheck(Nature, false, scanned.ErrorMessage ?? $"It holds {scanned.Documents.Count} OCMF documents, not one.", null, null, null, null, null, false, []);
 
                 document = scanned.Documents[0];
 
             }
             catch (Exception e)
             {
-                return new MeterValueCheck(nature, false, $"Its OCMF document could not be read: {e.Message}", null, null, null, null, null, false, []);
+                return new MeterValueCheck(Nature, false, $"Its OCMF document could not be read: {e.Message}", null, null, null, null, null, false, []);
             }
 
             var payload         = document.Payload;
@@ -419,7 +555,7 @@ namespace cloud.charging.open.Smartphone.Charging
                                   (identification == Session.Start?.Token || identification == Session.Ticket?.Id);
 
             MeterValueCheck Refused(String Error, IReadOnlyList<MeterReading> Readings)
-                => new (nature, false, Error, null, serial, null, null, identification, ofThisStart, Readings);
+                => new (Nature, false, Error, null, serial, null, null, identification, ofThisStart, Readings);
 
             if (!TryReadingsOf(payload["RD"], out var readings, out var readingsError))
                 return Refused(readingsError, []);
@@ -429,6 +565,8 @@ namespace cloud.charging.open.Smartphone.Charging
 
             if (serial is null)
                 return Refused("It names no meter: its \"MS\" is missing.", readings);
+
+            NoKey = true;
 
             if (!Evidence.TryVerify(Authority, EVSEId, serial, readings.Select(reading => reading.MeasuredAt), MeasurementKeyFormat.SPKIDER, out var verification, out var bindingError))
                 return Refused($"No key of the meter {serial} of {EVSEId} is attested for when it was measured: {bindingError}", readings);
@@ -442,6 +580,8 @@ namespace cloud.charging.open.Smartphone.Charging
 
             if (binding.Key.Key.X is not Byte[] x || binding.Key.Key.Y is not Byte[] y)
                 return Refused($"The key {binding.Key.Id} of the meter {serial} is no point of P-256.", readings);
+
+            NoKey = false;
 
             ChargyResult result;
 
@@ -457,7 +597,7 @@ namespace cloud.charging.open.Smartphone.Charging
 
             var verified = result == ChargyResult.ValidSignature;
 
-            return new MeterValueCheck(nature,
+            return new MeterValueCheck(Nature,
                                        verified,
                                        verified ? null : $"It is not signed by the key {binding.Key.Id} of the meter {serial}: {result}.",
                                        result.ToString(),
@@ -544,11 +684,49 @@ namespace cloud.charging.open.Smartphone.Charging
                                                   _      => null
                                               },
                                               reading["TX"]?.Value<String>(),
-                                              reading["ST"]?.Value<String>()));
+                                              reading["ST"]?.Value<String>(),
+                                              reading["EF"]?.Type == JTokenType.String ? reading["EF"]!.Value<String>() : null));
 
             }
 
             return true;
+
+        }
+
+        /// <summary>
+        /// What the status of an OCMF reading ("ST") means, as " (...)" - or
+        /// nothing, where OCMF knows no such status.
+        /// </summary>
+        private static String StatusInWords(String Status)
+
+            => Status switch {
+                   "N"  => " (not present)",
+                   "T"  => " (timeout)",
+                   "D"  => " (disconnected)",
+                   "R"  => " (not found)",
+                   "M"  => " (manipulated)",
+                   "X"  => " (exchanged)",
+                   "I"  => " (incompatible)",
+                   "O"  => " (out of range)",
+                   "S"  => " (substitute)",
+                   "E"  => " (system error)",
+                   "F"  => " (read error)",
+                   _    => ""
+               };
+
+        /// <summary>
+        /// What the error flags of an OCMF reading ("EF") say, as " (...)":
+        /// "E" of its energy, "t" of its time.
+        /// </summary>
+        private static String ErrorFlagsInWords(String Flags)
+        {
+
+            var of = new List<String>();
+
+            if (Flags.Contains('E'))  of.Add("of its energy");
+            if (Flags.Contains('t'))  of.Add("of its time");
+
+            return of.Count > 0 ? $" ({String.Join(" and ", of)})" : "";
 
         }
 

@@ -20,8 +20,9 @@ energy meters sign their measurements with, and the web payment page of its
 operator, where a driver pays ad hoc - and the live link of the session that
 page starts, handed over to the phone and followed with
 [ChargyCore.NET](https://github.com/OpenChargingCloud/ChargyCore.NET), its
-signed documents kept as they came. It is checked against those of
-the anchor's identity keys an administrator trusted, each on its own, after
+signed documents kept as they came, its signed start value checked with the
+key the proof gives for the meter - a wrong one stops the session. It is
+checked against those of the anchor's identity keys an administrator trusted, each on its own, after
 looking at the key statement of the network's operator; setting an anchor
 trusts none of them. With an account at an e-mobility
 provider - an account key made on the phone, certified from a PKCS#10 request
@@ -49,10 +50,10 @@ pins it beside the libraries it needs, builds it, and runs its tests.
 | `Smartphone/Map/` | where the map takes its stations from, the stations as OCPI locations, and the demo ones |
 | `Smartphone/Roaming/` | the trust anchor of a roaming network and the identity keys of it trusted, asking the network at its URLs, the status of its charge points followed over its WebSocket, the key statement of its operator, and the check of a station's proof and price statements against a trust context of the keys trusted, with the web payment page it gives |
 | `Smartphone/Provider/` | the account at an e-mobility provider, its client, charging tickets - their payload, the request signed by the ticket key and the account key, and the check of what comes back - start and stop requests, signed by the ticket key, and the check of the provider's countersignature, and what the provider reports of a start, checked to be of it |
-| `Smartphone/Charging/` | a charging session - simulated, as the provider reports it, or as the live link of one the web payment page of its operator started says it - with its ticket and its start and stop through the provider, the evidence it keeps of its station and the check of its meter values and its price against it, the live link and the signed documents it brought, and the file every session is kept in |
+| `Smartphone/Charging/` | a charging session - simulated, as the provider reports it, or as the live link of one the web payment page of its operator started says it - with its ticket and its start and stop through the provider, the evidence it keeps of its station and the check of its meter values and its price against it, the live link and the signed documents it brought, the check of its signed start value, and the file every session is kept in |
 | `Smartphone/HTTPAPI/` | the JSON API: every node's, and `v1/map`, `v1/map/locations/{id}/check`, `v1/configuration/map`, `v1/configuration/roamingNetwork` with its `keyStatement` and `trustedKeys/{id}`, `v1/charging/sessions` and `v1/provider` |
 | `Smartphone/Frontend/` | the web interface - the map is Leaflet's - bundled by webpack with what every node shares |
-| `SmartphoneTests/` | what kind of node it is, the map and the sessions, the API with its roles, a roaming network served on the loopback and checked against the identity keys of its trust anchor trusted - none before an administrator trusts one - with energy meters that sign OCMF, a web payment page of its operator and of a station, a charge point operator whose page gives the live link of the session it started and sends signed meter values over it, and the status of its charge points pushed over its WebSocket, an e-mobility provider on the loopback issuing tickets, countersigning starts and stops and telling what its operator reported of them, signed meter values among it - and misbehaving - and WWCP_Node's conformance suite asked of a smartphone |
+| `SmartphoneTests/` | what kind of node it is, the map and the sessions, the API with its roles, a roaming network served on the loopback and checked against the identity keys of its trust anchor trusted - none before an administrator trusts one - with energy meters that sign OCMF, a web payment page of its operator and of a station, a charge point operator whose page gives the live link of the session it started and sends signed meter values over it - a wrong start value among them -, and the status of its charge points pushed over its WebSocket, an e-mobility provider on the loopback issuing tickets, countersigning starts and stops and telling what its operator reported of them, signed meter values among it - and misbehaving - and WWCP_Node's conformance suite asked of a smartphone |
 | `docs/` | drafts: starting and stopping a session with a charging ticket, signed by its key and countersigned by the provider, what the app learns of it after the start, and how it checks the meter values and the price |
 
 

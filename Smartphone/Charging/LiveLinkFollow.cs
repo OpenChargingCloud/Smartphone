@@ -59,17 +59,103 @@ namespace cloud.charging.open.Smartphone.Charging
 
 
     /// <summary>
+    /// The signed start value of a session a live link brought, checked when
+    /// it came (<see cref="SessionCheck.StartOf"/>): whether it holds - true,
+    /// false where it is a wrong start value, null where this phone could not
+    /// decide then - and why not, the document it is of, as it came, and the
+    /// meter and its key it was checked with.
+    /// </summary>
+    /// <param name="CheckedAt">When it was checked.</param>
+    /// <param name="Holds">Whether it holds; null where it could not be checked.</param>
+    /// <param name="Error">Why it does not hold, or was not checked.</param>
+    /// <param name="Text">The signed document of the start, as it came.</param>
+    /// <param name="MeterSerialNumber">The meter, as the document names it.</param>
+    /// <param name="MeterId">The meter, as the proof names it, where its key was found.</param>
+    /// <param name="KeyId">The key it was checked with.</param>
+    /// <param name="Result">What ChargyCore said of its signature, where it was asked.</param>
+    public sealed record LiveLinkStartCheck(DateTimeOffset  CheckedAt,
+                                            Boolean?        Holds,
+                                            String?         Error,
+                                            String          Text,
+                                            String?         MeterSerialNumber  = null,
+                                            String?         MeterId            = null,
+                                            String?         KeyId              = null,
+                                            String?         Result             = null)
+    {
+
+        /// <summary>
+        /// The reading of the begin of the transaction its document holds.
+        /// </summary>
+        public MeterReading? Reading
+            => LiveLinkFollow.ReadingsOf(Text).FirstOrDefault(reading => reading.Transaction == "B");
+
+        /// <summary>
+        /// The check as the pages show it: all of it but its document.
+        /// </summary>
+        public JObject ToJSON()
+
+            => new (new JProperty("checkedAt",          CheckedAt.ToString("o")),
+                    new JProperty("holds",              Holds),
+                    new JProperty("error",              Error),
+                    new JProperty("reading",            Reading?.ToJSON()),
+                    new JProperty("meterSerialNumber",  MeterSerialNumber),
+                    new JProperty("meterId",            MeterId),
+                    new JProperty("keyId",              KeyId),
+                    new JProperty("result",             Result));
+
+        /// <summary>
+        /// What the store keeps of it: all of it, its document as it came.
+        /// </summary>
+        public JObject ToStorageJSON()
+        {
+
+            var json = ToJSON();
+
+            json.Remove("reading");
+            json.Add(new JProperty("text", Text));
+
+            return json;
+
+        }
+
+        /// <summary>
+        /// A check of a start value as the store kept it, or null where it kept none.
+        /// </summary>
+        public static LiveLinkStartCheck? TryParse(JToken? JSON)
+
+            => JSON is JObject json                                                                                       &&
+               json.Value<String>("checkedAt") is String checkedAt                                                          &&
+               DateTimeOffset.TryParse(checkedAt, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)          &&
+               json.Value<String>("text") is { Length: > 0 } text
+                   ? new LiveLinkStartCheck(at,
+                                            json["holds"]?.Type == JTokenType.Boolean ? json.Value<Boolean>("holds") : null,
+                                            json.Value<String>("error"),
+                                            text,
+                                            json.Value<String>("meterSerialNumber"),
+                                            json.Value<String>("meterId"),
+                                            json.Value<String>("keyId"),
+                                            json.Value<String>("result"))
+                   : null;
+
+    }
+
+
+    /// <summary>
     /// The live link of a charging session that the web payment page of the
     /// operator of its station started - not this phone - as the driver handed
     /// it over, and what following it brought so far: how often something came,
     /// when last, over which transport from where, what ChargyCore made of it,
-    /// and the signed documents among it, each kept as it came.
+    /// the signed documents among it, each kept as it came, and how its signed
+    /// start value held.
     /// </summary>
     /// <remarks>
-    /// Nothing of it is checked here against the proof of the station: the
-    /// readings are what the documents say, and the keys a live link names are
-    /// no authority. The documents are kept so that they can be checked with
-    /// the key the proofs of the station give for its meter.
+    /// <para>
+    /// The keys a live link names are no authority: its signed start value is
+    /// checked with the key the proofs of the station give for its meter, once
+    /// it comes (<see cref="Start"/>). A wrong one stops the session here. The
+    /// readings after it are what the documents say, not checked yet; the
+    /// documents are kept so that they can be.
+    /// </para>
     /// </remarks>
     /// <param name="Link">The live link, its JSON document as it was handed over or fetched.</param>
     /// <param name="From">The URL it was fetched from, or null where the document itself was handed over.</param>
@@ -83,6 +169,7 @@ namespace cloud.charging.open.Smartphone.Charging
     /// <param name="EndedAt">When it ended: the meter signed the end of the transaction, or the station ended the stream.</param>
     /// <param name="EndedBecause">Why it is taken as ended.</param>
     /// <param name="Documents">The signed documents it brought, each once, in the order they came.</param>
+    /// <param name="Start">How its signed start value held, once one came.</param>
     public sealed record LiveLinkFollow(JObject                           Link,
                                         String?                           From,
                                         DateTimeOffset                    HandedOverAt,
@@ -94,14 +181,15 @@ namespace cloud.charging.open.Smartphone.Charging
                                         String?                           Problem        = null,
                                         DateTimeOffset?                   EndedAt        = null,
                                         String?                           EndedBecause   = null,
-                                        IReadOnlyList<LiveLinkDocument>?  Documents      = null)
+                                        IReadOnlyList<LiveLinkDocument>?  Documents      = null,
+                                        LiveLinkStartCheck?               Start          = null)
     {
 
         #region Data
 
         /// <summary>
-        /// How many signed documents are kept at most: the first, which holds
-        /// the start, and the latest ones.
+        /// How many signed documents are kept at most: the first, the one that
+        /// holds the start, and the latest ones.
         /// </summary>
         public const Int32 MaxDocuments = 1000;
 
@@ -113,10 +201,14 @@ namespace cloud.charging.open.Smartphone.Charging
         private static readonly HashSet<String> endingTransactions = [ "E", "L", "R", "A", "P" ];
 
         /// <summary>
-        /// The readings of the documents they were read of: read once for every
-        /// list of documents - a copy made with other documents reads anew.
+        /// The readings of the documents they were read of, and the first
+        /// document with the begin of the transaction among them: read once
+        /// for every list of documents - a copy made with other documents
+        /// reads anew.
         /// </summary>
-        private sealed record ReadingsOfDocuments(IReadOnlyList<LiveLinkDocument>? Documents, IReadOnlyList<MeterReading> Readings);
+        private sealed record ReadingsOfDocuments(IReadOnlyList<LiveLinkDocument>?                    Documents,
+                                                  IReadOnlyList<MeterReading>                         Readings,
+                                                  (LiveLinkDocument Document, MeterReading Reading)?  Start);
 
         private ReadingsOfDocuments? readings;
 
@@ -141,26 +233,56 @@ namespace cloud.charging.open.Smartphone.Charging
 
         /// <summary>
         /// The readings of its signed documents, each once, in the order the
-        /// meter measured them - as the documents say, not checked.
+        /// meter measured them - as the documents say.
         /// </summary>
         public IReadOnlyList<MeterReading> Readings
+            => Read().Readings;
+
+        /// <summary>
+        /// The signed document of its start, of those it brought: the first
+        /// that came with a reading of the begin of the transaction ("B"),
+        /// and that reading - or null while none came.
+        /// </summary>
+        public (LiveLinkDocument Document, MeterReading Reading)? StartDocument
+            => Read().Start;
+
+        /// <summary>
+        /// Whether its signed start value is a wrong one: this phone stopped
+        /// the session.
+        /// </summary>
+        public Boolean StartRefused
+            => Start?.Holds == false;
+
+        private ReadingsOfDocuments Read()
         {
-            get
+
+            if (readings is ReadingsOfDocuments read && ReferenceEquals(read.Documents, Documents))
+                return read;
+
+            var all    = new List<MeterReading>();
+            (LiveLinkDocument, MeterReading)? start = null;
+
+            foreach (var document in Signed)
             {
 
-                if (readings is ReadingsOfDocuments read && ReferenceEquals(read.Documents, Documents))
-                    return read.Readings;
+                var of = ReadingsOf(document.Text);
 
-                var fresh = new ReadingsOfDocuments(Documents,
-                                                    [.. Signed.SelectMany(document => ReadingsOf(document.Text)).
-                                                               DistinctBy(reading  => (reading.MeasuredAt, reading.EnergyKWh, reading.Transaction)).
-                                                               OrderBy   (reading  => reading.MeasuredAt)]);
+                all.AddRange(of);
 
-                readings = fresh;
-
-                return fresh.Readings;
+                if (start is null && of.FirstOrDefault(reading => reading.Transaction == "B") is MeterReading begin)
+                    start = (document, begin);
 
             }
+
+            var fresh = new ReadingsOfDocuments(Documents,
+                                                [.. all.DistinctBy(reading => (reading.MeasuredAt, reading.EnergyKWh, reading.Transaction)).
+                                                        OrderBy   (reading => reading.MeasuredAt)],
+                                                start);
+
+            readings = fresh;
+
+            return fresh;
+
         }
 
         /// <summary>
@@ -199,15 +321,17 @@ namespace cloud.charging.open.Smartphone.Charging
                                          IEnumerable<String>  Texts)
         {
 
-            var documents = Signed.ToList();
+            var documents  = Signed.ToList();
+            var start      = StartDocument?.Document;
 
             foreach (var text in Texts)
                 if (!documents.Any(document => document.Text == text))
                     documents.Add(new LiveLinkDocument(At, Transport, Endpoint, text));
 
-            // The first holds the start: what goes is the oldest after it.
+            // The first and the one of the start stay: what goes is the oldest
+            // after the first that is not the one of the start.
             while (documents.Count > MaxDocuments)
-                documents.RemoveAt(1);
+                documents.RemoveAt(documents.Count > 2 && ReferenceEquals(documents[1], start) ? 2 : 1);
 
             var updated = this with {
                               Updates        = Updates + 1,
@@ -224,6 +348,20 @@ namespace cloud.charging.open.Smartphone.Charging
                        : updated;
 
         }
+
+        #endregion
+
+        #region WithStart(Check)
+
+        /// <summary>
+        /// How its signed start value held, as checked now - where it was not
+        /// decided before: a start value that held or did not stays as it was.
+        /// </summary>
+        public LiveLinkFollow WithStart(LiveLinkStartCheck Check)
+
+            => Start?.Holds is null
+                   ? this with { Start = Check }
+                   : this;
 
         #endregion
 
@@ -260,7 +398,8 @@ namespace cloud.charging.open.Smartphone.Charging
 
         /// <summary>
         /// The live link as the pages show it: where it came from, what came
-        /// over it, and the readings its signed documents say - not checked.
+        /// over it, the readings its signed documents say, and how its signed
+        /// start value held - null while none came.
         /// </summary>
         public JObject ToJSON()
 
@@ -282,7 +421,7 @@ namespace cloud.charging.open.Smartphone.Charging
                     new JProperty("documents",      Signed.Count),
                     new JProperty("readings",       new JArray(Readings.Select(reading => reading.ToJSON()))),
                     new JProperty("energyKWh",      EnergyKWh),
-                    new JProperty("checked",        false));
+                    new JProperty("start",          Start?.ToJSON()));
 
         #endregion
 
@@ -310,6 +449,9 @@ namespace cloud.charging.open.Smartphone.Charging
             if (EndedBecause  is not null)  json.Add(new JProperty("endedBecause",   EndedBecause));
 
             json.Add(new JProperty("documents", new JArray(Signed.Select(document => document.ToJSON()))));
+
+            if (Start is not null)
+                json.Add(new JProperty("start", Start.ToStorageJSON()));
 
             return json;
 
@@ -343,7 +485,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                       json.Value<String>("problem"),
                                       Time(json["endedAt"]),
                                       json.Value<String>("endedBecause"),
-                                      [.. (json["documents"] as JArray ?? []).Select(LiveLinkDocument.TryParse).OfType<LiveLinkDocument>()]);
+                                      [.. (json["documents"] as JArray ?? []).Select(LiveLinkDocument.TryParse).OfType<LiveLinkDocument>()],
+                                      LiveLinkStartCheck.TryParse(json["start"]));
 
         }
 

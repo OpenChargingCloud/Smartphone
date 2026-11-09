@@ -84,7 +84,8 @@ namespace cloud.charging.open.Smartphone.Charging
     /// the driver handed over: starting until something comes over it,
     /// charging from then on, finished once its meter signs the end of the
     /// transaction or the station ends the stream - nothing simulated, and
-    /// what it charged is what its signed documents say.
+    /// what it charged is what its signed documents say. Stopped by this
+    /// phone where its signed start value is a wrong one.
     /// </para>
     /// </remarks>
     public sealed record ChargingSession(String           Id,
@@ -209,7 +210,7 @@ namespace cloud.charging.open.Smartphone.Charging
         {
 
             if (LiveLink is LiveLinkFollow liveLink)
-                return StoppedAt is not null
+                return StoppedAt is not null || liveLink.StartRefused
                            ? ChargingSessionStatus.Stopped
                            : liveLink.EndedAt is not null
                                  ? ChargingSessionStatus.Finished
@@ -264,7 +265,7 @@ namespace cloud.charging.open.Smartphone.Charging
 
             if (LiveLink is LiveLinkFollow liveLink)
                 return status switch {
-                           ChargingSessionStatus.Stopped   => StoppedAt,
+                           ChargingSessionStatus.Stopped   => StoppedAt ?? liveLink.Start?.CheckedAt,
                            ChargingSessionStatus.Finished  => liveLink.EndedAt,
                            _                               => null
                        };
@@ -457,8 +458,9 @@ namespace cloud.charging.open.Smartphone.Charging
         /// <summary>
         /// The session the web payment page of the operator of its station
         /// started, as its live link says it: its energy what its signed
-        /// documents say, not checked, and its cost what the price of the proof
-        /// of its station makes of that.
+        /// documents say, and its cost what the price of the proof of its
+        /// station makes of that - and why this phone stopped it, where its
+        /// signed start value is a wrong one.
         /// </summary>
         private JObject LiveLinkJSON(LiveLinkFollow LiveLink, DateTimeOffset Now)
         {
@@ -505,8 +507,11 @@ namespace cloud.charging.open.Smartphone.Charging
             if (since is DateTimeOffset first)
                 json.Add(new JProperty("chargingSince", first.ToString("o")));
 
-            if (status == ChargingSessionStatus.Stopped)
+            if (status == ChargingSessionStatus.Stopped && StoppedBy is not null)
                 json.Add(new JProperty("stoppedBy", StoppedBy));
+
+            if (status == ChargingSessionStatus.Stopped && LiveLink.StartRefused)
+                json.Add(new JProperty("stoppedBecause", $"Its signed start meter value is a wrong one: {LiveLink.Start!.Error}"));
 
             return json;
 
