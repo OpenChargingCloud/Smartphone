@@ -111,6 +111,19 @@ namespace cloud.charging.open.Smartphone.Tests
         /// </summary>
         public ECPrivateKeyParameters     DCMeter           { get; }
 
+        /// <summary>
+        /// The private key of the signing key of DE*GEF for its charge
+        /// transparency records: what a test signs meter values with as the
+        /// operator, in place of its meter.
+        /// </summary>
+        public ECPrivateKeyParameters     OperatorRecords   { get; }
+
+        /// <summary>
+        /// The private key of the signing key of DE*GEF for its price
+        /// statements alone: a key of the operator that signs no records.
+        /// </summary>
+        public ECPrivateKeyParameters     OperatorPrices    { get; }
+
         public String                     URL
             => TrustAnchor.URLs[0].ToString();
 
@@ -124,15 +137,19 @@ namespace cloud.charging.open.Smartphone.Tests
                                    RoamingNetworkTrustAnchor  TrustAnchor,
                                    String                     ACMeterKey,
                                    String                     DCMeterKey,
-                                   ECPrivateKeyParameters     DCMeter)
+                                   ECPrivateKeyParameters     DCMeter,
+                                   ECPrivateKeyParameters     OperatorRecords,
+                                   ECPrivateKeyParameters     OperatorPrices)
         {
-            this.HTTPServer   = HTTPServer;
-            this.API          = API;
-            this.History      = History;
-            this.TrustAnchor  = TrustAnchor;
-            this.ACMeterKey   = ACMeterKey;
-            this.DCMeterKey   = DCMeterKey;
-            this.DCMeter      = DCMeter;
+            this.HTTPServer       = HTTPServer;
+            this.API              = API;
+            this.History          = History;
+            this.TrustAnchor      = TrustAnchor;
+            this.ACMeterKey       = ACMeterKey;
+            this.DCMeterKey       = DCMeterKey;
+            this.DCMeter          = DCMeter;
+            this.OperatorRecords  = OperatorRecords;
+            this.OperatorPrices   = OperatorPrices;
         }
 
         #endregion
@@ -155,10 +172,14 @@ namespace cloud.charging.open.Smartphone.Tests
             var gefSigning   = NewKey("secp256r1");
             var acMeter      = NewKey("secp256r1");
             var dcMeter      = NewKey("secp256r1");
+            var gefRecords   = NewKey("secp256r1");
+            var gefPrices    = NewKey("secp256r1");
 
             var rnoIdentityKey  = POIPublicKey.From(rnoIdentity);
             var rnoSigningKey   = POIPublicKey.From(rnoSigning);
             var gefSigningKey   = POIPublicKey.From(gefSigning);
+            var gefRecordsKey   = POIPublicKey.From(gefRecords, Usages: [ POIKeyUsages.ChargeTransparencyRecords ]);
+            var gefPricesKey    = POIPublicKey.From(gefPrices,  Usages: [ POIKeyUsages.PriceStatements ]);
 
             var keyStatement    = RoamingNetworkKeyStatement.Create(rnoIdentity, COSEAlgorithm.ES512, 1, NetworkId, RNOId, [ rnoIdentityKey ], created, now.AddYears(1));
             var certificate     = RoamingNetworkSigningKeyCertificate.Create(rnoIdentity, COSEAlgorithm.ES512, RNOId, rnoSigningKey, created);
@@ -187,7 +208,10 @@ namespace cloud.charging.open.Smartphone.Tests
                                new JProperty("created",       created.ToISO8601()),
                                new JProperty("lastChange",    created.ToISO8601()),
                                new JProperty("identityKeys",  new JArray(POIPublicKey.From(gefIdentity).ToJSON(Embedded: true))),
-                               new JProperty("signingKeys",   new JArray(gefSigningKey.ToJSON(Embedded: true))),
+                               // In the order POI holds them in: by their @id.
+                               new JProperty("signingKeys",   new JArray(new[] { gefSigningKey, gefRecordsKey, gefPricesKey }.
+                                                                             OrderBy(key => key.Id, StringComparer.Ordinal).
+                                                                             Select (key => key.ToJSON(Embedded: true)))),
                                new JProperty("webPaymentURL", WebPaymentURL),
                                new JProperty("chargingTariffs", new JArray(
                                    Tariff(ACTariff, "AC", 0.49m, created),
@@ -248,7 +272,7 @@ namespace cloud.charging.open.Smartphone.Tests
                                                             [ org.GraphDefined.Vanaheimr.Hermod.HTTP.URL.Parse($"http://127.0.0.1:{httpServer.TCPPort}/RNs/{NetworkId}") ],
                                                             [ rnoIdentityKey.Id ]);
 
-            return new TestRoamingNetwork(httpServer, api, history, anchor, acMeterKey, dcMeterKey, dcMeter);
+            return new TestRoamingNetwork(httpServer, api, history, anchor, acMeterKey, dcMeterKey, dcMeter, gefRecords, gefPrices);
 
         }
 

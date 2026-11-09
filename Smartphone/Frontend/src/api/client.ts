@@ -449,13 +449,13 @@ export interface LiveLinkFollow {
     endedBecause:   string | null;
     /** How many signed documents it brought. */
     documents:      number;
-    /** Its readings, each with whether the document it came in held: null while it was not checked or could not be. */
-    readings:       (MeterReading & { holds: boolean | null })[];
+    /** Its readings, each with whether the document it came in held - null while it was not checked or could not be - and whose key signed it, where it held. */
+    readings:       (MeterReading & { holds: boolean | null; signedBy?: SignedBy | null })[];
     energyKWh:      number | null;
     /** How its signed start value held, checked once it came; null while none came. */
     start:          LiveLinkStartCheck | null;
-    /** How the signed values after the start held, its end value among them - "notChecked" while one was not checked yet. */
-    values:         { holding: number; wrong: number; undecided: number; notChecked: number };
+    /** How the signed values after the start held, its end value among them - "notChecked" while one was not checked yet; "byOperator" of those that hold, signed by the operator. */
+    values:         { holding: number; byOperator?: number; wrong: number; undecided: number; notChecked: number };
     /** The signed value after the start and before the end that is a wrong one - the phone stopped the session -, or null. */
     wrong:          LiveLinkWrongValue | null;
     /** Whether one of its signed values before the end is a wrong one: the phone stopped the session. */
@@ -553,12 +553,23 @@ export interface LiveLinkValueCheck {
     error:              string | null;
     meterSerialNumber:  string | null;
     meterId:            string | null;
+    /** The key it was checked with: the meter's, or the operator's that signed it. */
     keyId:              string | null;
+    /** Whose key its signature is of, where one's is. */
+    signedBy?:          SignedBy | null;
+    /** The operator, where its key signed it. */
+    operatorId?:        string | null;
     /** What ChargyCore said of its signature, where it was asked. */
     result:             string | null;
     /** What it says identified the charging - its "ID": of a web payment, the reference of the payment -, where it was read. */
     identification:     string | null;
 }
+
+/**
+ * Whose key signed a meter value: its meter's - or, of a value between the start and the end, its operator's, with the
+ * key the proof of the station gives it for its charge transparency records.
+ */
+export type SignedBy = 'meter' | 'operator';
 
 /** The signed start value of a live link, checked. */
 export interface LiveLinkStartCheck extends LiveLinkValueCheck {
@@ -597,6 +608,10 @@ export interface MeterValueCheck {
     meterSerialNumber:  string | null;
     meterId:            string | null;
     keyId:              string | null;
+    /** Whose key its signature is of, where one's is. */
+    signedBy?:          SignedBy | null;
+    /** The operator, where its key signed it. */
+    operatorId?:        string | null;
     identification:     string | null;
     /** Whether what it says identified the charging is the token or the ticket of this start. */
     ofThisStart:        boolean;

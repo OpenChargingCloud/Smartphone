@@ -1006,10 +1006,11 @@ namespace cloud.charging.open.Smartphone.Tests
 
         /// <summary>
         /// A signed start value the meter's key, as the proof of the station
-        /// gives it, did not sign, one of another meter, and one the meter
-        /// itself says is not good are wrong start values: the phone stops the
-        /// session, says why, follows its live link no more - and the session
-        /// stays stopped across a restart.
+        /// gives it, did not sign, one of another meter, one the meter itself
+        /// says is not good, and one its operator signed - with the key the
+        /// proof gives it for its charge transparency records - are wrong start
+        /// values: the phone stops the session, says why, follows its live link
+        /// no more - and the session stays stopped across a restart.
         /// </summary>
         [Test]
         public async Task AWrongSignedStartValueStopsTheSession()
@@ -1029,7 +1030,8 @@ namespace cloud.charging.open.Smartphone.Tests
             var cases = new (String Session, String Start, String Result, String Error)[] {
                             ("S1", TestRoamingNetwork.OCMF        (TestRoamingNetwork.NewMeterKey(), TestRoamingNetwork.DCMeterSerial, "web-payment-1",      (begin, "B", 1000.000m)),  "InvalidSignature", "is not signed by the key"),
                             ("S2", TestRoamingNetwork.OCMF        (network!.DCMeter,                 "AC-2026-001",                    "web-payment-2",      (begin, "B", 1000.000m)),  "",                 $"It is of the meter AC-2026-001, and the proof of {TestRoamingNetwork.DCStation} names the meter {TestRoamingNetwork.DCMeterSerial} for {TestRoamingNetwork.DCEVSE}"),
-                            ("S3", TestRoamingNetwork.OCMFOfStatus(network.DCMeter,                  TestRoamingNetwork.DCMeterSerial, "web-payment-3", "M", (begin, "B", 1000.000m)),  "ValidSignature",   "its status is \"M\" (manipulated)")
+                            ("S3", TestRoamingNetwork.OCMFOfStatus(network.DCMeter,                  TestRoamingNetwork.DCMeterSerial, "web-payment-3", "M", (begin, "B", 1000.000m)),  "ValidSignature",   "its status is \"M\" (manipulated)"),
+                            ("S4", TestRoamingNetwork.OCMF        (network.OperatorRecords,          TestRoamingNetwork.DCMeterSerial, "web-payment-4",      (begin, "B", 1000.000m)),  "ValidSignature",   $"of its operator {TestRoamingNetwork.GEF}, not by its meter {TestRoamingNetwork.DCMeterSerial}: only the meter signs the start and the end")
                         };
 
             var stopped = new List<String>();
@@ -1166,9 +1168,11 @@ namespace cloud.charging.open.Smartphone.Tests
         /// <summary>
         /// A signed value after a start value that held is a wrong one where
         /// the meter's key, as the proof of the station gives it, did not sign
-        /// it, where the meter counts backwards, and where it was measured
-        /// before the start: the phone stops the session, says why, and
-        /// follows its live link no more.
+        /// it, nor a key the proof gives its operator for its charge
+        /// transparency records - one for its price statements alone is none -,
+        /// where the meter counts backwards, its operator signed it or not, and
+        /// where it was measured before the start: the phone stops the session,
+        /// says why, and follows its live link no more.
         /// </summary>
         [Test]
         public async Task AWrongSignedValueAfterTheStartStopsTheSession()
@@ -1186,7 +1190,9 @@ namespace cloud.charging.open.Smartphone.Tests
             var cases = new (String Session, Func<DateTimeOffset, String> After, String Result, String Error)[] {
                             ("S1", begin => TestRoamingNetwork.OCMF(TestRoamingNetwork.NewMeterKey(), TestRoamingNetwork.DCMeterSerial, "web-payment-1", (DateTimeOffset.UtcNow,         "C", 1004.000m)), "InvalidSignature", "is not signed by the key"),
                             ("S2", begin => TestRoamingNetwork.OCMF(network!.DCMeter,                 TestRoamingNetwork.DCMeterSerial, "web-payment-2", (DateTimeOffset.UtcNow,         "C",  999.000m)), "ValidSignature",   "The meter counts backwards: 999"),
-                            ("S3", begin => TestRoamingNetwork.OCMF(network!.DCMeter,                 TestRoamingNetwork.DCMeterSerial, "web-payment-3", (begin.AddMilliseconds(-10),    "C",  999.990m)), "ValidSignature",   "before the start value of")
+                            ("S3", begin => TestRoamingNetwork.OCMF(network!.DCMeter,                 TestRoamingNetwork.DCMeterSerial, "web-payment-3", (begin.AddMilliseconds(-10),    "C",  999.990m)), "ValidSignature",   "before the start value of"),
+                            ("S4", begin => TestRoamingNetwork.OCMF(network!.OperatorPrices,          TestRoamingNetwork.DCMeterSerial, "web-payment-4", (DateTimeOffset.UtcNow,         "C", 1004.000m)), "InvalidSignature", "nor by a key its operator may sign its charge transparency records with"),
+                            ("S5", begin => TestRoamingNetwork.OCMF(network!.OperatorRecords,         TestRoamingNetwork.DCMeterSerial, "web-payment-5", (DateTimeOffset.UtcNow,         "C",  999.000m)), "ValidSignature",   "The meter counts backwards: 999")
                         };
 
             foreach (var (name, after, result, error) in cases)
@@ -1560,9 +1566,10 @@ namespace cloud.charging.open.Smartphone.Tests
         /// <summary>
         /// A signed end value is checked as the values before it: one the
         /// meter's key did not sign, one where the meter counts backwards, a
-        /// whole transaction that began other than its start value says, and
-        /// an end measured before a value of the transaction that held are
-        /// wrong ones. A wrong end value stops nothing: this phone disputes the
+        /// whole transaction that began other than its start value says, an
+        /// end measured before a value of the transaction that held, and one
+        /// its operator signed in place of its meter are wrong ones. A wrong
+        /// end value stops nothing: this phone disputes the
         /// session through the dispute link of the web payment page, with why
         /// and the signed values it disputes, as they came - and counts the
         /// wrong one for nothing.
@@ -1588,7 +1595,9 @@ namespace cloud.charging.open.Smartphone.Tests
                             ("S3", false, (begin, between) => TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-S3", (begin, "B", 1000.500m), (DateTimeOffset.UtcNow, "E", 1020.000m)),
                                    "It says the transaction began with 1000.5 kWh",               0m),
                             ("S4", true,  (begin, between) => TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-S4", (between.AddMilliseconds(-1), "E", 1005.000m)),
-                                   "and a value of it was measured after its end",                5m)
+                                   "and a value of it was measured after its end",                5m),
+                            ("S5", false, (begin, between) => TestRoamingNetwork.OCMF(network!.OperatorRecords, TestRoamingNetwork.DCMeterSerial, "web-payment-S5", (DateTimeOffset.UtcNow, "E", 1020.000m)),
+                                   "only the meter signs the start and the end of a transaction", 0m)
                         };
 
             foreach (var (name, between, end, error, energy) in cases)
@@ -1648,8 +1657,126 @@ namespace cloud.charging.open.Smartphone.Tests
             // Disputed once each, and nothing stopped.
             await Task.Delay(1000);
 
-            Assert.That(cpo.Disputes.Select(one => one.Session), Is.EqualTo(new[] { "S1", "S2", "S3", "S4" }));
+            Assert.That(cpo.Disputes.Select(one => one.Session), Is.EqualTo(new[] { "S1", "S2", "S3", "S4", "S5" }));
             Assert.That(cpo.Stops,                               Is.Empty, "a session whose end value is a wrong one was stopped");
+
+        }
+
+        #endregion
+
+        #region AValueBetweenTheStartAndTheEndMayBeSignedByItsOperator()
+
+        /// <summary>
+        /// A value between the start value and the end value may be signed by
+        /// the operator of the station in place of its meter, as many stations
+        /// do: with the key the proof of the station gives it for its charge
+        /// transparency records. It holds, said to be its operator's, and is
+        /// checked against the values before it as the meter's are - one that
+        /// says the begin of the transaction again as the start value said it
+        /// as well. What was charged and what it costs are what the meter
+        /// signed at the start and at the end - and whose each value is, is
+        /// kept across a restart.
+        /// </summary>
+        [Test]
+        public async Task AValueBetweenTheStartAndTheEndMayBeSignedByItsOperator()
+        {
+
+            await WithTheRoamingNetwork();
+
+            using var driver = await SignedInAs("driver1", "driver");
+
+            await Send(driver, HttpMethod.Get, "api/v1/map");
+            await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            cpo = await TestCPO.Start();
+
+            var begin = DateTimeOffset.UtcNow;
+
+            cpo.Send(TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (begin, "B", 1000.000m)));
+
+            var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                               new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, liveLink = cpo.LiveLinkURL("S1"), paymentReference = "web-payment-1" });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            var id = session["id"]!.Value<String>()!;
+
+            var started = await SessionWhen(driver, id, json => json["liveLink"]?["start"] is JObject start && start["holds"]?.Value<Boolean?>() == true);
+
+            Assert.That(started["liveLink"]!["start"]!["signedBy"]!.Value<String>(), Is.EqualTo("meter"), started.ToString());
+
+            await Task.Delay(20);
+
+            var between = DateTimeOffset.UtcNow;
+
+            cpo.Send(TestRoamingNetwork.OCMF(network.OperatorRecords, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (between, "C", 1006.500m)));
+
+            var charging = await SessionWhen(driver, id, json => json["liveLink"]?["values"]?["holding"]?.Value<Int32>() == 1);
+            var readings = charging["liveLink"]!["readings"]!;
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(charging["status"]!.Value<String>(),                        Is.EqualTo("charging"), charging.ToString());
+                Assert.That(charging["energyKWh"]!.Value<Decimal>(),                    Is.EqualTo(6.5m), "how the session goes, as its operator signed it");
+                Assert.That(charging["liveLink"]!["values"]!["byOperator"]!.Value<Int32>(), Is.EqualTo(1));
+                Assert.That(charging["liveLink"]!["wrong"]!.Type,                       Is.EqualTo(JTokenType.Null), "a value its operator signed is a wrong one");
+                Assert.That(readings[0]!["signedBy"]!.Value<String>(),                  Is.EqualTo("meter"));
+                Assert.That(readings[1]!["holds"]!.Value<Boolean?>(),                   Is.True);
+                Assert.That(readings[1]!["signedBy"]!.Value<String>(),                  Is.EqualTo("operator"));
+            }
+
+            await Task.Delay(20);
+
+            // The whole transaction so far, signed by the operator: its begin
+            // as the start value said it.
+            cpo.Send(TestRoamingNetwork.OCMF(network.OperatorRecords, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (begin, "B", 1000.000m), (DateTimeOffset.UtcNow, "C", 1012.000m)));
+
+            charging = await SessionWhen(driver, id, json => json["liveLink"]?["values"]?["holding"]?.Value<Int32>() == 2);
+            readings = charging["liveLink"]!["readings"]!;
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(charging["energyKWh"]!.Value<Decimal>(),                    Is.EqualTo(12m), charging.ToString());
+                Assert.That(charging["liveLink"]!["values"]!["byOperator"]!.Value<Int32>(), Is.EqualTo(2));
+                Assert.That(readings.Count(),                                           Is.EqualTo(3), "the begin said again is one reading");
+                Assert.That(readings[0]!["signedBy"]!.Value<String>(),                  Is.EqualTo("meter"), "the begin the meter signed is the meter's, whoever says it again");
+                Assert.That(readings[2]!["signedBy"]!.Value<String>(),                  Is.EqualTo("operator"));
+            }
+
+            await Task.Delay(20);
+
+            cpo.Send(TestRoamingNetwork.OCMF(network.DCMeter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (DateTimeOffset.UtcNow, "E", 1020.000m)));
+
+            var finished = await SessionWhen(driver, id, json => json["status"]?.Value<String>() == "finished");
+            var end      = finished["liveLink"]!["end"]!;
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(end["holds"]!.Value<Boolean?>(),                            Is.True, finished.ToString());
+                Assert.That(end["signedBy"]!.Value<String>(),                           Is.EqualTo("meter"));
+                Assert.That(finished["energyKWh"]!.Value<Decimal>(),                    Is.EqualTo(20m), "from the start to the end the meter signed");
+                Assert.That(finished["cost"]!["amount"]!.Value<Decimal>(),              Is.EqualTo(13.00m));
+                Assert.That(finished["liveLink"]!["disputeBecause"]!.Type,              Is.EqualTo(JTokenType.Null));
+                Assert.That(finished["liveLink"]!["values"]!["byOperator"]!.Value<Int32>(), Is.EqualTo(2));
+            }
+
+            var configuration = File.ReadAllText(Path.Combine(directory, WWCPConfigFile.DefaultFileName));
+
+            await smartphone!.DisposeAsync();
+            smartphone = null;
+
+            await TestPorts.StartedOnFreshPorts(() => SmartphoneFrom(configuration));
+
+            using var again = await SignedInAs("driver2", "driver");
+
+            (status, var read) = await Send(again, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(read["status"]!.Value<String>(),                            Is.EqualTo("finished"), read.ToString());
+                Assert.That(read["liveLink"]!["values"]!["byOperator"]!.Value<Int32>(), Is.EqualTo(2), "whose the values are was not kept");
+                Assert.That(read["liveLink"]!["readings"]![1]!["signedBy"]!.Value<String>(), Is.EqualTo("operator"));
+            }
 
         }
 
@@ -2212,6 +2339,55 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(values?["values"]?[3]?["error"]?.Value<String>(),       Does.Contain("No key of the meter " + TestRoamingNetwork.DCMeterSerial));
                 Assert.That(values?["energyKWh"]?.Type,                             Is.EqualTo(JTokenType.Null), "no end the meter signed");
                 Assert.That(values?["energyMatches"]?.Type,                         Is.EqualTo(JTokenType.Null));
+            }
+
+        }
+
+        #endregion
+
+        #region AnIntermediateValueOfAChargeDetailRecordMayBeItsOperators()
+
+        /// <summary>
+        /// A meter value of a charge detail record between its start and its
+        /// end may be signed by the operator of the station, with the key the
+        /// proof gives it for its charge transparency records: it is verified,
+        /// said to be its operator's - and what was charged is what the meter
+        /// signed at the start and at the end.
+        /// </summary>
+        [Test]
+        public async Task AnIntermediateValueOfAChargeDetailRecordMayBeItsOperators()
+        {
+
+            var (admin, driver, session, token) = await ChargingThroughTheProvider();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            var id       = session["id"]!.Value<String>()!;
+            var begin    = StartedAt(session);
+            var end      = DateTimeOffset.UtcNow;
+            var between  = begin + (end - begin) / 2;
+
+            emsp!.OperatorCDR(token, 12.5m, 8.13m, end, SignedValues(
+                ("Start",         TestRoamingNetwork.OCMF(network!.DCMeter,        TestRoamingNetwork.DCMeterSerial, token, (begin,   "B", 1000.000m))),
+                ("Intermediate",  TestRoamingNetwork.OCMF(network.OperatorRecords, TestRoamingNetwork.DCMeterSerial, token, (between, "T", 1006.000m))),
+                ("End",           TestRoamingNetwork.OCMF(network.DCMeter,         TestRoamingNetwork.DCMeterSerial, token, (end,     "E", 1012.500m)))
+            ));
+
+            var (_, finished) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+            var values = finished["check"]?["meterValues"];
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(values?["verified"]?.Value<Boolean>(),                  Is.True,  finished.ToString());
+                Assert.That(values?["values"]?[0]?["signedBy"]?.Value<String>(),   Is.EqualTo("meter"));
+                Assert.That(values?["values"]?[1]?["verified"]?.Value<Boolean>(),   Is.True);
+                Assert.That(values?["values"]?[1]?["signedBy"]?.Value<String>(),   Is.EqualTo("operator"));
+                Assert.That(values?["values"]?[1]?["operatorId"]?.Value<String>(), Is.EqualTo(TestRoamingNetwork.GEF.ToString()));
+                Assert.That(values?["values"]?[1]?["result"]?.Value<String>(),     Is.EqualTo("ValidSignature"));
+                Assert.That(values?["energyKWh"]?.Value<Decimal>(),                Is.EqualTo(12.5m), "from the start to the end the meter signed");
+                Assert.That(values?["costMatches"]?.Value<Boolean>(),              Is.True);
             }
 
         }

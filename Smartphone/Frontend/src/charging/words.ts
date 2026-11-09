@@ -245,16 +245,21 @@ export function startInWords(Start: LiveLinkStartCheck | null): string {
 /**
  * How the signed values after the start of a live link held, its end value
  * among them, in a sentence or two, each with a space before it: how many are
- * the meter's as well, how many could not be checked, and how many are not
- * checked yet.
+ * the meter's as well, how many its operator's, how many could not be checked,
+ * and how many are not checked yet.
  */
 export function valuesInWords(Link: LiveLinkFollow): string {
 
-    const values = Link.values;
-    let   words  = '';
+    const values      = Link.values;
+    const byOperator  = values.byOperator ?? 0;
+    const byMeter     = values.holding - byOperator;
+    let   words       = '';
 
-    if (values.holding > 0)
-        words += ` ${values.holding} signed value${values.holding === 1 ? '' : 's'} after it ${values.holding === 1 ? 'is' : 'are'} the meter's as well, and fit${values.holding === 1 ? 's' : ''} the values before.`;
+    if (byMeter > 0)
+        words += ` ${byMeter} signed value${byMeter === 1 ? '' : 's'} after it ${byMeter === 1 ? 'is' : 'are'} the meter's as well, and fit${byMeter === 1 ? 's' : ''} the values before.`;
+
+    if (byOperator > 0)
+        words += ` ${byOperator} signed value${byOperator === 1 ? '' : 's'} between the start and the end ${byOperator === 1 ? 'is' : 'are'} its operator's, by the key the proof of the station gives it for its charge transparency records, and fit${byOperator === 1 ? 's' : ''} the values before: ${byOperator === 1 ? 'it shows' : 'they show'} how the session goes, and count${byOperator === 1 ? 's' : ''} for nothing.`;
 
     if (values.undecided > 0)
         words += ` ${values.undecided} could not be checked.`;

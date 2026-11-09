@@ -40,9 +40,11 @@ namespace cloud.charging.open.Smartphone.Charging
     /// <param name="Error">Why it does not hold, or was not checked.</param>
     /// <param name="MeterSerialNumber">The meter, as the document names it.</param>
     /// <param name="MeterId">The meter, as the proof names it, where its key was found.</param>
-    /// <param name="KeyId">The key it was checked with.</param>
+    /// <param name="KeyId">The key it was checked with: the meter's, or the operator's that signed it.</param>
     /// <param name="Result">What ChargyCore said of its signature, where it was asked.</param>
     /// <param name="Identification">What the document says identified the charging - its "ID" -, where it was read.</param>
+    /// <param name="SignedBy">Whose key its signature is of, where one's is: the meter's, or - of a value between the start and the end - its operator's (<see cref="MeterValueCheck.ByMeter"/>, <see cref="MeterValueCheck.ByOperator"/>).</param>
+    /// <param name="OperatorId">The operator, where its key signed it.</param>
     public sealed record LiveLinkValueCheck(DateTimeOffset  CheckedAt,
                                             Boolean?        Holds,
                                             String?         Error,
@@ -50,7 +52,9 @@ namespace cloud.charging.open.Smartphone.Charging
                                             String?         MeterId            = null,
                                             String?         KeyId              = null,
                                             String?         Result             = null,
-                                            String?         Identification     = null)
+                                            String?         Identification     = null,
+                                            String?         SignedBy           = null,
+                                            String?         OperatorId         = null)
     {
 
         public JObject ToJSON()
@@ -61,6 +65,8 @@ namespace cloud.charging.open.Smartphone.Charging
                     new JProperty("meterSerialNumber",  MeterSerialNumber),
                     new JProperty("meterId",            MeterId),
                     new JProperty("keyId",              KeyId),
+                    new JProperty("signedBy",           SignedBy),
+                    new JProperty("operatorId",         OperatorId),
                     new JProperty("result",             Result),
                     new JProperty("identification",     Identification));
 
@@ -79,7 +85,9 @@ namespace cloud.charging.open.Smartphone.Charging
                                             json.Value<String>("meterId"),
                                             json.Value<String>("keyId"),
                                             json.Value<String>("result"),
-                                            json.Value<String>("identification"))
+                                            json.Value<String>("identification"),
+                                            json.Value<String>("signedBy"),
+                                            json.Value<String>("operatorId"))
                    : null;
 
     }
@@ -363,13 +371,13 @@ namespace cloud.charging.open.Smartphone.Charging
         public const Int32 MaxDocuments = 1000;
 
         /// <summary>
-        /// The readings of the documents they were read of, whether each held,
-        /// and the first document with the begin of the transaction among
-        /// them: read once for every list of documents - a copy made with other
-        /// documents reads anew.
+        /// The readings of the documents they were read of, whether each held
+        /// and whose key signed it, and the first document with the begin of
+        /// the transaction among them: read once for every list of documents -
+        /// a copy made with other documents reads anew.
         /// </summary>
-        private sealed record ReadingsOfDocuments(IReadOnlyList<LiveLinkDocument>?                       Documents,
-                                                  IReadOnlyList<(MeterReading Reading, Boolean? Holds)>  Checked,
+        private sealed record ReadingsOfDocuments(IReadOnlyList<LiveLinkDocument>?                                         Documents,
+                                                  IReadOnlyList<(MeterReading Reading, Boolean? Holds, String? SignedBy)>  Checked,
                                                   IReadOnlyList<MeterReading>                            Readings,
                                                   IReadOnlyList<MeterReading>                            Counted,
                                                   (LiveLinkDocument Document, MeterReading Reading)?     Start);
@@ -569,11 +577,13 @@ namespace cloud.charging.open.Smartphone.Charging
             if (readings is ReadingsOfDocuments read && ReferenceEquals(read.Documents, Documents))
                 return read;
 
-            var all    = new Dictionary<(DateTimeOffset, Decimal?, String?), (MeterReading Reading, Boolean? Holds)>();
+            var all    = new Dictionary<(DateTimeOffset, Decimal?, String?), (MeterReading Reading, Boolean? Holds, String? SignedBy)>();
             (LiveLinkDocument, MeterReading)? start = null;
 
             foreach (var document in Signed)
             {
+
+                var signedBy = document.Check?.Holds == true ? document.Check.SignedBy : null;
 
                 foreach (var reading in document.Readings)
                 {
@@ -581,9 +591,13 @@ namespace cloud.charging.open.Smartphone.Charging
                     var key = (reading.MeasuredAt, reading.EnergyKWh, reading.Transaction);
 
                     // Of a reading in more than one document: how the first
-                    // that was decided held.
+                    // that was decided held - and the meter's, where one the
+                    // meter signed holds it as well.
                     if (!all.TryGetValue(key, out var known) || (known.Holds is null && document.Check?.Holds is not null))
-                        all[key] = (known.Reading ?? reading, document.Check?.Holds);
+                        all[key] = (known.Reading ?? reading, document.Check?.Holds, signedBy);
+
+                    else if (known.Holds == true && signedBy == MeterValueCheck.ByMeter)
+                        all[key] = known with { SignedBy = signedBy };
 
                 }
 
@@ -592,7 +606,7 @@ namespace cloud.charging.open.Smartphone.Charging
 
             }
 
-            IReadOnlyList<(MeterReading Reading, Boolean? Holds)> ordered = [.. all.Values.OrderBy(reading => reading.Reading.MeasuredAt)];
+            IReadOnlyList<(MeterReading Reading, Boolean? Holds, String? SignedBy)> ordered = [.. all.Values.OrderBy(reading => reading.Reading.MeasuredAt)];
 
             var fresh = new ReadingsOfDocuments(Documents,
                                                 ordered,
@@ -751,7 +765,8 @@ namespace cloud.charging.open.Smartphone.Charging
                         new JProperty("documents",      Signed.Count),
                         new JProperty("readings",       new JArray(Read().Checked.Select(reading => {
                                                             var json = reading.Reading.ToJSON();
-                                                            json.Add(new JProperty("holds", reading.Holds));
+                                                            json.Add(new JProperty("holds",     reading.Holds));
+                                                            json.Add(new JProperty("signedBy",  reading.SignedBy));
                                                             return json;
                                                         }))),
                         new JProperty("energyKWh",      EnergyKWh),
@@ -760,6 +775,7 @@ namespace cloud.charging.open.Smartphone.Charging
                                                             : null),
                         new JProperty("values",         new JObject(
                                                             new JProperty("holding",     after.Count(document => document.Check?.Holds == true)),
+                                                            new JProperty("byOperator",  after.Count(document => document.Check?.Holds == true && document.Check.SignedBy == MeterValueCheck.ByOperator)),
                                                             new JProperty("wrong",       after.Count(document => document.Check?.Holds == false)),
                                                             new JProperty("undecided",   after.Count(document => document.Check is not null && document.Check.Holds is null)),
                                                             new JProperty("notChecked",  after.Count(document => document.Check is null))

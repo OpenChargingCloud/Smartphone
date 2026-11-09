@@ -22,6 +22,8 @@ using System.Text;
 
 using Newtonsoft.Json.Linq;
 
+using org.GraphDefined.Vanaheimr.Illias;
+
 using cloud.charging.open.chargy.Formats.OCMF;
 using cloud.charging.open.protocols.WWCP.POI;
 using cloud.charging.open.Smartphone.Roaming;
@@ -69,19 +71,22 @@ namespace cloud.charging.open.Smartphone.Charging
     /// <summary>
     /// One signed meter value of a charge detail record, checked: an OCMF
     /// document, signed by the key the proofs kept of the session's station
-    /// give for the energy meter of its EVSE at the time it was measured - or
-    /// why not.
+    /// give for the energy meter of its EVSE at the time it was measured - or,
+    /// a value between the start and the end, by a key the proofs give its
+    /// operator for its charge transparency records then - or why not.
     /// </summary>
     /// <param name="Nature">What the record calls it: "Start", "End", "Intermediate".</param>
-    /// <param name="Verified">Whether its signature is the meter's.</param>
+    /// <param name="Verified">Whether its signature is the meter's - or, of a value between the start and the end, its operator's.</param>
     /// <param name="Error">Why not.</param>
     /// <param name="Result">What ChargyCore said of its signature, where it was asked.</param>
     /// <param name="MeterSerialNumber">The meter, as the document names it.</param>
     /// <param name="MeterId">The meter, as the proof names it, where its key was found.</param>
-    /// <param name="KeyId">The key it was checked with.</param>
+    /// <param name="KeyId">The key it was checked with: the meter's, or the operator's that signed it.</param>
     /// <param name="Identification">What the document says identified the charging (its "ID").</param>
     /// <param name="OfThisStart">Whether that is the token or the ticket of the session's start.</param>
     /// <param name="Readings">Its readings.</param>
+    /// <param name="SignedBy">Whose key its signature is of, where one's is: <see cref="ByMeter"/> or <see cref="ByOperator"/>.</param>
+    /// <param name="OperatorId">The operator, where its key signed it.</param>
     public sealed record MeterValueCheck(String?                      Nature,
                                          Boolean                      Verified,
                                          String?                      Error,
@@ -91,8 +96,21 @@ namespace cloud.charging.open.Smartphone.Charging
                                          String?                      KeyId,
                                          String?                      Identification,
                                          Boolean                      OfThisStart,
-                                         IReadOnlyList<MeterReading>  Readings)
+                                         IReadOnlyList<MeterReading>  Readings,
+                                         String?                      SignedBy    = null,
+                                         String?                      OperatorId  = null)
     {
+
+        /// <summary>
+        /// Signed by the key of the meter.
+        /// </summary>
+        public const String ByMeter     = "meter";
+
+        /// <summary>
+        /// Signed by a key of the operator of the station, for its charge
+        /// transparency records.
+        /// </summary>
+        public const String ByOperator  = "operator";
 
         public JObject ToJSON()
 
@@ -103,6 +121,8 @@ namespace cloud.charging.open.Smartphone.Charging
                     new JProperty("meterSerialNumber",  MeterSerialNumber),
                     new JProperty("meterId",            MeterId),
                     new JProperty("keyId",              KeyId),
+                    new JProperty("signedBy",           SignedBy),
+                    new JProperty("operatorId",         OperatorId),
                     new JProperty("identification",     Identification),
                     new JProperty("ofThisStart",        OfThisStart),
                     new JProperty("readings",           new JArray(Readings.Select(reading => reading.ToJSON()))));
@@ -138,6 +158,14 @@ namespace cloud.charging.open.Smartphone.Charging
     /// EVSE. The times are the ones the meter signed; that the meter's clock
     /// was right, and that the version of the proof was the latest one, is
     /// not proven (WWCP_POI's HistoricalMeterVerification).
+    /// </para>
+    /// <para>
+    /// A value between the start and the end may be signed by its operator in
+    /// place of its meter, as many stations do: with a signing key of the
+    /// operator the proof attests and that may sign its charge transparency
+    /// records then (WWCP_POI's AuthorizedChargingDocumentKeys). The start and
+    /// the end are the meter's alone, and so is what was charged: a value the
+    /// operator signed shows how the session goes, and counts for nothing.
     /// </para>
     /// <para>
     /// The price is the one the operator of the station stated for its EVSE,
@@ -208,19 +236,20 @@ namespace cloud.charging.open.Smartphone.Charging
         public Decimal?                        CDRCost            { get; }
 
         /// <summary>
-        /// Whether every signed meter value of the record is the meter's.
+        /// Whether every signed meter value of the record is the meter's - or,
+        /// between the start and the end, its operator's.
         /// </summary>
         public Boolean                         MeterValuesVerified
             => MeterValuesError is null && MeterValues is { Count: > 0 } values && values.All(value => value.Verified);
 
         /// <summary>
-        /// The reading the transaction began with, of those verified.
+        /// The reading the transaction began with, of those the meter signed.
         /// </summary>
         public MeterReading?                   StartReading
             => Verified.FirstOrDefault(reading => reading.Transaction == "B") ?? Verified.FirstOrDefault();
 
         /// <summary>
-        /// The reading the transaction ended with, of those verified.
+        /// The reading the transaction ended with, of those the meter signed.
         /// </summary>
         public MeterReading?                   EndReading
             => Verified.LastOrDefault(reading => reading.Transaction == "E") ?? Verified.LastOrDefault();
@@ -244,8 +273,12 @@ namespace cloud.charging.open.Smartphone.Charging
                    ? Math.Round(energy * price, 2, MidpointRounding.AwayFromZero)
                    : null;
 
+        /// <summary>
+        /// The readings of the values the meter signed: no value its operator
+        /// signed says what was charged.
+        /// </summary>
         private IEnumerable<MeterReading> Verified
-            => (MeterValues ?? []).Where(value => value.Verified).
+            => (MeterValues ?? []).Where(value => value.Verified && value.SignedBy == MeterValueCheck.ByMeter).
                                    SelectMany(value => value.Readings).
                                    OrderBy(reading => reading.MeasuredAt);
 
@@ -325,7 +358,11 @@ namespace cloud.charging.open.Smartphone.Charging
         /// <para>
         /// A value holds where it is signed by the key the proofs kept give
         /// for the meter the proof of the station names for the EVSE, at the
-        /// time it was measured, as ChargyCore checks the signature; where the
+        /// time it was measured, as ChargyCore checks the signature - a value
+        /// between the start value and the end value, of that meter, by a key
+        /// they give its operator for its charge transparency records then as
+        /// well, which says the begin of the transaction only as the start
+        /// value that held says it -; where the
         /// meter says each of its readings is good - its status "G", no error
         /// flagged - and of an energy register; and where it fits the values
         /// that held before it, and its readings each other: not measured
@@ -420,12 +457,12 @@ namespace cloud.charging.open.Smartphone.Charging
                                                      DateTimeOffset                 Now)
         {
 
-            var value = CheckDocument(Authority, Evidence.MeterEvidence, Evidence.EVSEId,
+            var value = CheckDocument(Authority, Evidence, Evidence.MeterEvidence,
                                       IsStart ? "Start" : Document.Ends ? "End" : "Intermediate",
                                       Document.Text, Session, out var noKey);
 
             LiveLinkValueCheck Checked(Boolean? Holds, String? Error)
-                => new (Now, Holds, Error, value.MeterSerialNumber, value.MeterId, value.KeyId, value.Result, value.Identification);
+                => new (Now, Holds, Error, value.MeterSerialNumber, value.MeterId, value.KeyId, value.Result, value.Identification, value.SignedBy, value.OperatorId);
 
             static Boolean Ends(MeterReading Reading)
                 => Reading.Transaction is String transaction && LiveLinkDocument.EndingTransactions.Contains(transaction);
@@ -462,6 +499,11 @@ namespace cloud.charging.open.Smartphone.Charging
                     return Checked(false, $"{Capital(which)} is no energy register in kWh or Wh.");
 
             }
+
+            // Its operator signs no begin: one it says again is compared with
+            // the start value the meter signed, once that held.
+            if (value.SignedBy == MeterValueCheck.ByOperator && Document.Begin is not null && Begin is null)
+                return Checked(null, $"Its operator {value.OperatorId} signed the begin of the transaction again, and no start value the meter signed held yet to compare it with.");
 
             // A transaction begins once: a begin it says again - the whole
             // transaction, at its end - is the start value that held.
@@ -621,21 +663,21 @@ namespace cloud.charging.open.Smartphone.Charging
 
             var meterEvidence = Evidence.MeterEvidence;
 
-            return ([ .. values.Select(value => Check(Authority, meterEvidence, Evidence.EVSEId, value, Session)) ], null);
+            return ([ .. values.Select(value => Check(Authority, Evidence, meterEvidence, value, Session)) ], null);
 
         }
 
         #endregion
 
-        #region (private static) Check(Authority, Evidence, EVSEId, Value, Session)
+        #region (private static) Check(Authority, Evidence, MeterEvidence, Value, Session)
 
         /// <summary>
         /// One signed meter value of a charge detail record: its OCMF document,
         /// as its signed data or its plain data say it, checked.
         /// </summary>
         private static MeterValueCheck Check(IRoamingNetworkTrustAuthority  Authority,
-                                             HistoricalMeterEvidence        Evidence,
-                                             String                         EVSEId,
+                                             SessionEvidence                Evidence,
+                                             HistoricalMeterEvidence        MeterEvidence,
                                              JObject                        Value,
                                              ChargingSession                Session)
         {
@@ -643,26 +685,31 @@ namespace cloud.charging.open.Smartphone.Charging
             var nature = Value.Value<String>("nature");
 
             return OCMFText(Value) is String text
-                       ? CheckDocument(Authority, Evidence, EVSEId, nature, text, Session, out _)
+                       ? CheckDocument(Authority, Evidence, MeterEvidence, nature, text, Session, out _)
                        : new MeterValueCheck(nature, false, "It is no OCMF document with a signature, neither as its signed data nor as its plain data.", null, null, null, null, null, false, []);
 
         }
 
         #endregion
 
-        #region (private static) CheckDocument(Authority, Evidence, EVSEId, Nature, Text, Session, out NoKey)
+        #region (private static) CheckDocument(Authority, Evidence, MeterEvidence, Nature, Text, Session, out NoKey)
 
         /// <summary>
         /// One signed meter value: its OCMF document read by ChargyCore, the key
         /// of its meter at the times of its readings taken of the proofs kept,
-        /// and its signature checked by ChargyCore with that key. Where it is
-        /// not the meter's, whether that is because no key of its meter could
-        /// be had to check it with (NoKey) - no proof kept attests one for its
-        /// times, or more than one - rather than that it is none.
+        /// and its signature checked by ChargyCore with that key - and, where
+        /// that key did not sign it, with the keys the proofs give the operator
+        /// of the station for its charge transparency records then. Where it is
+        /// neither's, whether that is because no key could be had to check it
+        /// with (NoKey) - no proof kept attests one of its meter for its times,
+        /// or more than one, nor one of its operator - rather than that it is
+        /// none. A value the operator signed holds only between the start and
+        /// the end: its nature "Intermediate", and none of its readings ending
+        /// the transaction.
         /// </summary>
         private static MeterValueCheck CheckDocument(IRoamingNetworkTrustAuthority  Authority,
-                                                     HistoricalMeterEvidence        Evidence,
-                                                     String                         EVSEId,
+                                                     SessionEvidence                Evidence,
+                                                     HistoricalMeterEvidence        MeterEvidence,
                                                      String?                        Nature,
                                                      String                         Text,
                                                      ChargingSession                Session,
@@ -707,40 +754,93 @@ namespace cloud.charging.open.Smartphone.Charging
             if (serial is null)
                 return Refused("It names no meter: its \"MS\" is missing.", readings);
 
-            NoKey = true;
+            var evseId  = Evidence.EVSEId;
+            var times   = readings.Select(reading => reading.MeasuredAt).ToArray();
 
-            if (!Evidence.TryVerify(Authority, EVSEId, serial, readings.Select(reading => reading.MeasuredAt), MeasurementKeyFormat.SPKIDER, out var verification, out var bindingError))
-                return Refused($"No key of the meter {serial} of {EVSEId} is attested for when it was measured: {bindingError}", readings);
+            // The key of its meter: one, of P-256, at all its times.
+            VerifiedMeterKeyBinding? binding  = null;
+            String?                  noKey    = null;
 
-            var keys = verification.Bindings.DistinctBy(binding => binding.Key.CanonicalId).ToArray();
+            if (!MeterEvidence.TryVerify(Authority, evseId, serial, times, MeasurementKeyFormat.SPKIDER, out var verification, out var bindingError))
+                noKey = $"No key of the meter {serial} of {evseId} is attested for when it was measured: {bindingError}";
 
-            if (keys.Length != 1)
-                return Refused($"Its readings are of times its meter had {keys.Length} different keys.", readings);
+            else if (verification.Bindings.DistinctBy(attested => attested.Key.CanonicalId).ToArray() is { Length: not 1 } keys)
+                noKey = $"Its readings are of times its meter had {keys.Length} different keys.";
 
-            var binding = keys[0];
+            else if (verification.Bindings[0].Key.Key.X is null || verification.Bindings[0].Key.Key.Y is null)
+                noKey = $"The key {verification.Bindings[0].Key.Id} of the meter {serial} is no point of P-256.";
 
-            if (binding.Key.Key.X is not Byte[] x || binding.Key.Key.Y is not Byte[] y)
-                return Refused($"The key {binding.Key.Id} of the meter {serial} is no point of P-256.", readings);
+            else
+                binding = verification.Bindings[0];
 
-            NoKey = false;
+            ChargyResult? result = null;
 
-            ChargyResult result;
-
-            try
+            if (binding is not null)
             {
-                result = new OCMFSignatureValidator(chargyDictionary.Value).
-                             Validate(document, P256SPKIPrefix + "04" + Convert.ToHexStringLower(x) + Convert.ToHexStringLower(y), "hex");
-            }
-            catch (Exception e)
-            {
-                return Refused($"ChargyCore could not check its signature: {e.Message}", readings);
+
+                try
+                {
+                    result = Validate(document, binding.Key.Key.X!, binding.Key.Key.Y!);
+                }
+                catch (Exception e)
+                {
+                    return Refused($"ChargyCore could not check its signature: {e.Message}", readings);
+                }
+
+                if (result == ChargyResult.ValidSignature)
+                    return new MeterValueCheck(Nature, true, null, result.ToString(), serial, binding.MeterId, binding.Key.Id, identification, ofThisStart, readings,
+                                               MeterValueCheck.ByMeter);
+
             }
 
-            var verified = result == ChargyResult.ValidSignature;
+            // Not the meter's: its operator's, where a key the proofs give it
+            // for its charge transparency records signed it - of the meter the
+            // proof names for the EVSE.
+            var operatorMay  = String.Equals(Nature, "Intermediate", StringComparison.OrdinalIgnoreCase) &&
+                               !readings.Any(reading => reading.Transaction is String transaction && LiveLinkDocument.EndingTransactions.Contains(transaction));
+
+            var operatorKeys = serial == Evidence.MeterSerialNumber
+                                   ? OperatorKeysOf(Authority, Evidence, times)
+                                   : [];
+
+            foreach (var key in operatorKeys)
+            {
+
+                ChargyResult byOperator;
+
+                try
+                {
+                    byOperator = Validate(document, key.X, key.Y);
+                }
+                catch (Exception)
+                {
+                    continue;
+                }
+
+                if (byOperator != ChargyResult.ValidSignature)
+                    continue;
+
+                return operatorMay
+                           ? new MeterValueCheck(Nature, true, null, byOperator.ToString(), serial, binding?.MeterId, key.Id, identification, ofThisStart, readings,
+                                                 MeterValueCheck.ByOperator, key.OperatorId)
+                           : new MeterValueCheck(Nature, false,
+                                                 $"It is signed by the key {key.Id} of its operator {key.OperatorId}, not by its meter {serial}: only the meter signs the start and the end of a transaction.",
+                                                 byOperator.ToString(), serial, binding?.MeterId, key.Id, identification, ofThisStart, readings,
+                                                 MeterValueCheck.ByOperator, key.OperatorId);
+
+            }
+
+            // Whether its meter signed it can not be told.
+            if (binding is null)
+            {
+                NoKey = true;
+                return Refused(noKey!, readings);
+            }
 
             return new MeterValueCheck(Nature,
-                                       verified,
-                                       verified ? null : $"It is not signed by the key {binding.Key.Id} of the meter {serial}: {result}.",
+                                       false,
+                                       $"It is not signed by the key {binding.Key.Id} of the meter {serial}: {result}" +
+                                           (operatorMay ? ", nor by a key its operator may sign its charge transparency records with." : "."),
                                        result.ToString(),
                                        serial,
                                        binding.MeterId,
@@ -748,6 +848,94 @@ namespace cloud.charging.open.Smartphone.Charging
                                        identification,
                                        ofThisStart,
                                        readings);
+
+        }
+
+        /// <summary>
+        /// What ChargyCore says of the signature of an OCMF document, checked
+        /// with the given point of a key of P-256.
+        /// </summary>
+        private static ChargyResult Validate(OCMFDocument  Document,
+                                             Byte[]        X,
+                                             Byte[]        Y)
+
+            => new OCMFSignatureValidator(chargyDictionary.Value).
+                   Validate(Document, P256SPKIPrefix + "04" + Convert.ToHexStringLower(X) + Convert.ToHexStringLower(Y), "hex");
+
+        #endregion
+
+        #region (private static) OperatorKeysOf(Authority, Evidence, Times)
+
+        /// <summary>
+        /// A key the operator of a station may sign its charge transparency
+        /// records with: its operator, its @id, and its point of P-256.
+        /// </summary>
+        private sealed record OperatorKey(String  OperatorId,
+                                          String  Id,
+                                          Byte[]  X,
+                                          Byte[]  Y);
+
+        /// <summary>
+        /// The keys the operator of the station of the session's EVSE may sign
+        /// its charge transparency records with at every one of the given
+        /// times, as WWCP_POI gives them of the proofs kept
+        /// (AuthorizedChargingDocumentKeys): signing keys of the operator a
+        /// proof attests for that time, valid then, and naming the usage
+        /// "chargeTransparencyRecords" or none - of P-256, the curve the meter
+        /// values are checked with here. None, where no proof kept gives one
+        /// for a time.
+        /// </summary>
+        private static IReadOnlyList<OperatorKey> OperatorKeysOf(IRoamingNetworkTrustAuthority  Authority,
+                                                                 SessionEvidence                Evidence,
+                                                                 IEnumerable<DateTimeOffset>    Times)
+        {
+
+            IReadOnlyList<OperatorKey>? atAll = null;
+
+            foreach (var time in Times.Distinct())
+            {
+
+                var atTime = new List<OperatorKey>();
+
+                foreach (var json in Evidence.Proofs)
+                {
+
+                    if (!RoamingNetworkProof.TryParse(json, out var proof, out _))
+                        continue;
+
+                    foreach (var operatorId in proof.Given(RoamingNetwork.PropertyKeys.ChargingStationOperators).
+                                                     Select(chargingStationOperator => chargingStationOperator["@id"]).
+                                                     OfType<JValue>().
+                                                     Where (id => id.Type == JTokenType.String).
+                                                     Select(id => id.Value<String>()!))
+                    {
+
+                        if (!AuthorizedChargingDocumentKeys.TryVerify(Authority, proof, Evidence.EVSEId, operatorId, time, out var authorized, out _))
+                            continue;
+
+                        foreach (var key in authorized.Keys)
+                            if (key.Algorithm == "ECDSA-secp256r1"                                                 &&
+                                !atTime.Any(known => known.Id == key.Id)                                           &&
+                                COSEKey.TryParse(Convert.FromBase64String(key.Value), out var cose, out _)         &&
+                                cose.X is Byte[] x && cose.Y is Byte[] y)
+                            {
+                                atTime.Add(new OperatorKey(operatorId, key.Id, x, y));
+                            }
+
+                    }
+
+                }
+
+                atAll = atAll is null
+                            ? atTime
+                            : [.. atAll.Where(key => atTime.Any(other => other.Id == key.Id))];
+
+                if (atAll.Count == 0)
+                    return [];
+
+            }
+
+            return atAll ?? [];
 
         }
 

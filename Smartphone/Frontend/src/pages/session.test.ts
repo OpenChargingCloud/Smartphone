@@ -497,4 +497,43 @@ describe('a charging session', () => {
 
     });
 
+    it("says a value of a live link between the start and the end is its operator's, and counts for nothing", async () => {
+
+        const link = liveLinkSession().liveLink!;
+
+        current = liveLinkSession({ liveLink: { ...link,
+                                                readings: [ { ...link.readings[0]!, signedBy: 'meter' }, { ...link.readings[1]!, signedBy: 'operator' } ],
+                                                values:   { ...link.values, holding: 1, byOperator: 1 } } });
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                                smartphone, root => root.querySelector('.session-live-link') !== null);
+
+        assert.equal(root.querySelectorAll('ul.live-readings li.verified').length,    2);
+        assert.equal(root.querySelectorAll('ul.live-readings li.by-operator').length, 1, 'a reading its operator signed is not said to be its');
+        assert.match(root.textContent!, /1 signed value between the start and the end is its operator's[^]*counts for nothing/);
+        assert.doesNotMatch(root.textContent!, /after it is the meter's as well/);
+
+    });
+
+    it("says a meter value of the charge detail record between its start and its end is its operator's", async () => {
+
+        const checked   = sessionCheck();
+        const between: MeterValueCheck = { ...checked.meterValues!.values[0]!, nature: 'Intermediate', signedBy: 'operator', operatorId: 'DE*GEF', keyId: 'c0ffee' };
+
+        current = reportedSession({ status: 'finished', endedAt: '2026-10-10T09:30:00Z',
+                                    provider: { state: 'ended', receivedAt: '2026-10-10T09:31:00Z', cdr: true },
+                                    check: { ...checked,
+                                             meterValues: { ...checked.meterValues!, values: [ checked.meterValues!.values[0]!, between, checked.meterValues!.values[1]! ] } } });
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                                smartphone, root => root.querySelector('.session-check') !== null);
+
+        const check = root.querySelector('.session-check')!.textContent!;
+
+        assert.match(check, /signed by the meter, between by its operator/);
+        assert.equal(root.querySelectorAll('.meter-value.verified').length, 3);
+        assert.match(root.querySelectorAll('.meter-value')[1]!.textContent!, /its operator's[^]*signed by its operator DE\*GEF/);
+
+    });
+
 });

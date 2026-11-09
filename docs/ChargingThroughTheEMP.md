@@ -333,12 +333,13 @@ and checked:
 | # | Check | |
 |---|---|---|
 | 1 | **The meter's key:** the key of the energy meter of the EVSE, by the serial number the document names (`MS`), as a proof kept attested it at the time of each of its readings (`TM`) - WWCP_POI's `HistoricalMeterEvidence`, under the identity keys trusted now | a key the CDR names itself (`public_key`) is not taken |
-| 2 | **The signature,** with that key, by ChargyCore | |
+| 2 | **The signature,** with that key, by ChargyCore - of a value the CDR calls `Intermediate`, none of its readings ending the transaction, a key of the operator for its charge transparency records as well, as for ad hoc charging ([Step 4 there](AdHocChargingAtTheCPO.md#step-4---checking-every-signed-meter-value-as-it-comes)) | shown as *its operator's* |
 | 3 | **Whose it is:** its `ID` the token of the start or the ticket's id | shown as *of this start*, or not |
 
-Of the readings that hold, the begin (`TX` = `B`) and the end (`E`) give the
-**energy the meter signed**: end register − begin register. It is compared
-with the CDR's `total_energy` (to the Wh).
+Of the readings the meter signed, the begin (`TX` = `B`) and the end (`E`)
+give the **energy the meter signed**: end register − begin register - a value
+its operator signed counts for nothing. It is compared with the CDR's
+`total_energy` (to the Wh).
 
 **Open:** the checks ad hoc charging makes of every value beyond the key and
 the signature - the meter's status (`ST` = `G`), its error flags (`EF`), the

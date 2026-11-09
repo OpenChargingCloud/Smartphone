@@ -89,7 +89,9 @@ export const sessionPage: Page = {
                         <h3>
                             Meter values
                             ${values.verified
-                                  ? html`<span class="chip ok"><i class="fa-solid fa-check"></i> signed by the meter</span>`
+                                  ? values.values.some(value => value.signedBy === 'operator')
+                                        ? html`<span class="chip ok"><i class="fa-solid fa-check"></i> signed by the meter, between by its operator</span>`
+                                        : html`<span class="chip ok"><i class="fa-solid fa-check"></i> signed by the meter</span>`
                                   : html`<span class="chip bad"><i class="fa-solid fa-xmark"></i> not all signed by the meter</span>`}
                         </h3>
                         ${values.error !== null ? html`<div class="error-box meter-values-error">${values.error}</div>` : nothing}
@@ -213,9 +215,11 @@ export const sessionPage: Page = {
                     ${link.readings.length > 0 ? html`
                         <ul class="live-readings">
                             ${link.readings.map(reading => html`
-                                <li class="${reading.holds === true ? 'verified' : reading.holds === false ? 'refused' : 'unchecked'}">
+                                <li class="${reading.holds === true ? 'verified' : reading.holds === false ? 'refused' : 'unchecked'}${reading.signedBy === 'operator' ? ' by-operator' : ''}">
                                     ${reading.holds === true
-                                          ? html`<i class="fa-solid fa-check" title="the meter's"></i>`
+                                          ? reading.signedBy === 'operator'
+                                                ? html`<i class="fa-solid fa-building" title="its operator's: shows how the session goes, counts for nothing"></i>`
+                                                : html`<i class="fa-solid fa-check" title="the meter's"></i>`
                                           : reading.holds === false
                                                 ? html`<i class="fa-solid fa-xmark" title="a wrong one"></i>`
                                                 : html`<i class="fa-solid fa-minus" title="not checked"></i>`}
@@ -230,7 +234,10 @@ export const sessionPage: Page = {
                     <p class="small muted">
                         A key a live link names is no authority, the one the proof of the station gives for the meter
                         is: every signed value is checked with it as it comes, and against the values before it - none
-                        measured before the start, the meter counting forwards, nothing after the end -, and where the
+                        measured before the start, the meter counting forwards, nothing after the end. A value between
+                        the start and the end may be signed by the operator of the station instead, with the key the
+                        proof gives it for its charge transparency records: it shows how the session goes, and counts for
+                        nothing - what was charged is what the meter signed at the start and at the end. And where the
                         page gave the reference of the payment it took, it is to name it as what identified the charging:
                         one of another payment, or of none, is of another session. A wrong one stops
                         the session here, and the station through the stop link of the page, where it gave one. A wrong
@@ -362,12 +369,12 @@ export const sessionPage: Page = {
         }
 
 
-        /** The meter and its key a signed value of a live link was checked with, and when. */
+        /** The meter and its key a signed value of a live link was checked with - or its operator's key that signed it -, and when. */
         function checkedWith(check: LiveLinkValueCheck): TemplateResult {
 
             return html`
                 <div class="small muted">
-                    ${check.meterSerialNumber !== null ? `meter ${check.meterSerialNumber}, ` : ''}${check.keyId !== null ? html`key <span class="commit">${check.keyId}</span>, ` : nothing}${check.identification !== null ? html`identified by <span class="mono">${check.identification}</span>, ` : nothing}checked ${dayAndTime(check.checkedAt)}
+                    ${check.meterSerialNumber !== null ? `meter ${check.meterSerialNumber}, ` : ''}${check.signedBy === 'operator' ? `signed by its operator ${check.operatorId ?? ''}, ` : ''}${check.keyId !== null ? html`key <span class="commit">${check.keyId}</span>, ` : nothing}${check.identification !== null ? html`identified by <span class="mono">${check.identification}</span>, ` : nothing}checked ${dayAndTime(check.checkedAt)}
                 </div>
             `;
 
@@ -379,7 +386,9 @@ export const sessionPage: Page = {
             return html`
                 <li class="meter-value ${value.verified ? 'verified' : 'not-verified'}">
                     ${value.verified
-                          ? html`<span class="chip ok"><i class="fa-solid fa-check"></i> the meter's</span>`
+                          ? value.signedBy === 'operator'
+                                ? html`<span class="chip"><i class="fa-solid fa-building"></i> its operator's</span>`
+                                : html`<span class="chip ok"><i class="fa-solid fa-check"></i> the meter's</span>`
                           : html`<span class="chip bad"><i class="fa-solid fa-xmark"></i> ${value.result === null ? 'not checked' : 'not the meter\'s'}</span>`}
                     <span>${value.nature ?? 'Meter value'}</span>
                     ${value.readings.map(reading => html`
@@ -388,6 +397,7 @@ export const sessionPage: Page = {
                     ${value.meterSerialNumber !== null || value.keyId !== null ? html`
                         <div class="small muted">
                             ${value.meterSerialNumber !== null ? `meter ${value.meterSerialNumber}` : ''}
+                            ${value.signedBy === 'operator' ? `, signed by its operator ${value.operatorId ?? ''}` : ''}
                             ${value.keyId !== null ? html`, key <span class="commit">${value.keyId}</span>` : nothing}
                             ${value.ofThisStart ? ', identified by this start' : nothing}
                         </div>

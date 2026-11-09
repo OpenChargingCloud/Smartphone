@@ -140,7 +140,7 @@ the CPO or the live link names. What the station has its meter sign:
 | OCMF | Must be | A wrong value where |
 |---|---|---|
 | `MS` | the serial number the station's proof names for the meter of this EVSE | it names another meter |
-| signature | by the meter's own key, as the roaming network attests it for the time `TM` of the reading - **every value, the intermediate ones as well** | it is signed by another key, the operator's among them |
+| signature | by the meter's own key, as the roaming network attests it for the time `TM` of the reading - the start value and the end value always; a value between them by a key of the operator for its charge transparency records as well (below) | it is signed by another key - a start or an end value by the operator's among them |
 | `ID` | the payment reference, in every document of the session, where the page gave one | it names another payment, or none |
 | `RD[].ST` | `G`, the meter says the reading is good | another status |
 | `RD[].EF` | empty: no error flagged | `E` (energy) or `t` (time) flagged |
@@ -151,10 +151,16 @@ the CPO or the live link names. What the station has its meter sign:
 - The **start value** is the first document with a reading `TX` = `B`.
 - `IS` and `IT` are not read: they should say what the station's
   authorization says - see [6](#6-ocpp-21-on-the-side-of-the-station).
-- **One key for all values.** A station that has the start and end values
-  signed by the meter and the values between by a key of the operator - which
-  ChargyCore's LiveLink allows - stops every session at its first intermediate
-  value: the phone takes it for a wrong one.
+- **Values between, signed by the operator.** A station may have its meter
+  sign the start and the end value only, and sign the values between with a
+  key of the operator - as ChargyCore's LiveLink allows. That key is a signing
+  key of the CPO in the roaming network, attested in the station's proof, valid
+  at the time `TM`, and naming the usage `chargeTransparencyRecords` or none
+  (WWCP_POI's `AuthorizedChargingDocumentKeys`); a key for price statements
+  alone does not do, nor does one the live link names. Such a value names the
+  meter of the EVSE in `MS` as well, and ends nothing: a begin it says again is
+  the start value the meter signed. The phone shows it as the operator's, and
+  counts it for nothing: what was charged is what the meter signed.
 - Where no proof the phone kept attests a key of the meter for a reading's
   time, the value is **not decided**: the phone says so, stops nothing, and
   checks it again - an end value with the proof asked for at the end.
@@ -314,8 +320,9 @@ stopped, what was disputed and what the page answered.
 - **The payment reference** is handed over with the live link only, not later
   as the links can be: values that held before it came would have to be judged
   anew.
-- **Values signed by the operator** between the meter's are wrong values for
-  the phone. Where stations do that, the phone would need the operator's key
-  attested in the station's proof, for that purpose.
+- **Values signed by the operator** between the meter's are taken with a key
+  of the CPO for `chargeTransparencyRecords` - WWCP_POI has no usage for meter
+  values alone, so that key signs the CPO's whole documents as well - and of
+  P-256 only.
 - **The amount the page took** is not compared with the cost the phone works
   out: the page gives no receipt.

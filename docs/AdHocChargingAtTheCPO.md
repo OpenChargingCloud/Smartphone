@@ -360,7 +360,7 @@ whole transaction from its begin.
 
 | # | Check | A wrong value where |
 |---|---|---|
-| 1 | **The meter's key:** the key the proofs kept attest for the energy meter of this EVSE at the time the value was measured (WWCP_POI's `HistoricalMeterEvidence`) | it is of another meter (`MS`) than the proof names for the EVSE, or signed by another key |
+| 1 | **The meter's key:** the key the proofs kept attest for the energy meter of this EVSE at the time the value was measured (WWCP_POI's `HistoricalMeterEvidence`) - between the start and the end, or a key of the operator for its charge transparency records (see below) | it is of another meter (`MS`) than the proof names for the EVSE, or signed by another key |
 | 2 | **The signature,** with that key, by ChargyCore | it does not verify |
 | 3 | **This payment:** its `ID` is the payment reference handed over | it names another payment, or none |
 | 4 | **The meter says it is good:** status `ST` = `G`, no error flags `EF` (`E` energy, `t` time) | the meter says otherwise |
@@ -369,11 +369,27 @@ whole transaction from its begin.
 | 7 | **In order:** nothing measured before the start value, the meter counting forwards, one time one value | it does not fit the values that held before, or its own readings |
 | 8 | **Nothing after the end:** no reading after one that ends the transaction (`TX` = `E`, `L`, `R`, `A`, `P`) | there is one |
 
-**One key for all values.** Every value - the intermediate ones as well - has
-to be signed by the meter's own key. A Charge Transparency LiveLink allows the
-values between the start and the end to be signed by a key of the operator
-instead; the app takes such a value for a wrong one, and stops the session at
-its first intermediate value.
+**Values between, signed by the operator.** Many stations have their meter
+sign only the start and the end, and sign the values between with a key of the
+operator - which a Charge Transparency LiveLink allows. The app takes such a
+value where:
+
+- its key is a **signing key of the operator** of the station that the proof
+  attests, valid at the time the value was measured, and that may sign the
+  operator's **charge transparency records** - it names the usage
+  `chargeTransparencyRecords`, or none (WWCP_POI's
+  `AuthorizedChargingDocumentKeys`). A key for price statements alone is none;
+  nor is a key the live link names;
+- it names the meter the proof names for the EVSE (`MS`);
+- it is **between the start and the end**: no start value, and none of its
+  readings ends the transaction. A begin it says again counts only as the
+  start value the meter signed says it - and is not decided while none held.
+
+Everything else in the table holds for it as for the meter's. A start value or
+an end value the operator signed is a **wrong** one. The page shows such a
+value as the operator's: it shows how the session goes, and **counts for
+nothing**. What was charged, the cost and the end against the limit are what
+the meter signed at the start and at the end.
 
 A value **holds**, is **wrong**, or is **not decided**: where the identity
 keys trusted here do not suffice, or no proof kept attests a key of the meter
@@ -517,11 +533,11 @@ dispute link, the driver is told to dispute the session at the page.
   meter signs (OCMF `TT`) with it.
 - **Only prices of energy** are counted: a price per kWh. Time, parking and
   flat fees of a tariff are not worked into the cost.
-- **Values signed by the operator.** A station whose meter signs only the
-  start and the end, and whose operator signs the values between, has every
-  session stopped at its first intermediate value. Whether the app should take
-  such values - with a key of the operator the roaming network attests for it,
-  and never in place of the meter's for the start and the end - is open.
+- **Values signed by the operator** between the start and the end are taken
+  with a key of the operator the proof attests for its charge transparency
+  records (Step 4). WWCP_POI has no usage of its own for meter values: one key
+  for `chargeTransparencyRecords` signs the operator's whole documents and its
+  meter values alike. And only keys of P-256 are taken, as for the meter.
 - **A state-of-charge limit** cannot be checked: no meter measures it.
 - **The payment reference in OCMF `ID`** is up to the station and its CSMS;
   the app only checks that it is there.
