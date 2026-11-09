@@ -308,7 +308,8 @@ ul.trust-keys {
         margin-top:   0.15rem;
     }
 
-    // The live link the web payment page gave, handed over.
+    // The live link the web payment page gave, handed over - with its stop
+    // link, and the limit chosen there.
     .live-link {
 
         display:         flex;
@@ -321,6 +322,25 @@ ul.trust-keys {
             margin-top:   0.2rem;
         }
 
+        .limit-input {
+
+            display:      flex;
+            gap:          0.35rem;
+            margin-top:   0.2rem;
+
+            input {
+                flex:         1 1 5rem;
+                min-width:    0;
+                margin-top:   0;
+            }
+
+            select {
+                flex:         0 1 auto;
+                min-width:    0;
+            }
+
+        }
+
         .btn {
             align-self:   flex-start;
         }
@@ -330,11 +350,13 @@ ul.trust-keys {
 }
 
 // The readings a live link brought, as its signed documents say them, each
-// checked, its signed start value, and a wrong value after it.
+// checked, its signed start value, and a wrong value after it - its limit
+// against them, and how it ended.
 .session-live-link {
 
     .live-start,
-    .live-wrong {
+    .live-wrong,
+    .live-ending {
 
         padding:     0.4rem 0;
         border-top:  1px solid $color-border;
@@ -373,6 +395,28 @@ ul.trust-keys {
         li.verified  > i { color: $color-ok;    }
         li.refused   > i { color: $color-error; }
         li.unchecked > i { color: $color-muted; }
+
+    }
+
+    ul.live-limits {
+
+        list-style:  none;
+        padding:     0;
+        margin:      0.6rem 0 0.3rem 0;
+
+        li {
+            padding:     0.3rem 0;
+            border-top:  1px solid $color-border;
+        }
+
+        li > span + span,
+        li > i + span {
+            margin-left:  0.5rem;
+        }
+
+        li.reached     > i { color: $color-ok;    }
+        li.not-reached > i { color: $color-muted; }
+        li.unknown     > i { color: $color-muted; }
 
     }
 

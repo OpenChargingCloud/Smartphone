@@ -431,6 +431,73 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
+        #region AnEndIsComparedWithTheLimitTheDriverChose()
+
+        /// <summary>
+        /// A live link keeps its stop link, the limit the driver chose and the
+        /// stop this phone asked for, and shows the host of its stop link only.
+        /// Its end is compared with each part of its limit: reached within a
+        /// hundredth of it, not reached below - the state of charge no meter
+        /// measures not at all -, and stopped where this phone stopped it.
+        /// </summary>
+        [Test]
+        public void AnEndIsComparedWithTheLimitTheDriverChose()
+        {
+
+            var at      = new DateTimeOffset(2026, 10, 10, 8, 10, 5, TimeSpan.Zero);
+            var meter   = TestRoamingNetwork.NewMeterKey();
+            var begin   = TestRoamingNetwork.OCMF(meter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (at.AddMinutes(-10), "B", 1000m));
+            var link    = new JObject(new JProperty("@context", "https://open.charging.cloud/contexts/chargeTransparency/live/link/1.0"));
+            var limit   = new TransactionLimit(MaxEnergy: 20000m, MaxCost: 13m, MaxTime: 3600, MaxSoC: 80);
+
+            LiveLinkFollow Ended(Decimal EnergyKWh)
+                => new LiveLinkFollow(link, null, at.AddMinutes(-11), StopLink: "https://pay.example/sessions/S1/stop", Limit: limit).
+                       WithUpdate(at.AddMinutes(-10), "https", "https://pay.example/live", "OCMF", [ begin ]).
+                       WithUpdate(at,                 "https", "https://pay.example/live", "OCMF", [ TestRoamingNetwork.OCMF(meter, TestRoamingNetwork.DCMeterSerial, "web-payment-1", (at, "E", EnergyKWh)) ]);
+
+            ChargingSession SessionOf(LiveLinkFollow Follow)
+                => new ("S1", "pool-1", "Jena", "Holzmarkt 1", "Jena", "GraphDefined", "dc-1", TestRoamingNetwork.DCEVSE, "CCS", "DC",
+                        150m, 0.65m, "EUR", ChargingSession.DefaultTargetEnergyKWh, at.AddMinutes(-11), "driver1", LiveLink: Follow);
+
+            var atLimit  = SessionOf(Ended(1019.850m));
+            var below    = SessionOf(Ended(1019.700m));
+            var stop     = new LiveLinkStop(at.AddMinutes(-1), "driver1", true, "202 Accepted: The station stops.");
+            var stopped  = SessionOf(Ended(1019.700m) with { Stop = stop });
+            var read     = LiveLinkFollow.TryParse(stopped.LiveLink!.ToStorageJSON())!;
+            var limits   = LiveLinkEnding.LimitsOf(atLimit);
+
+            Assert.Multiple(() => {
+
+                Assert.That(limits.Select(one => one.Kind),     Is.EqualTo(new[] { "energy", "cost", "time", "soc" }));
+                Assert.That(limits.Select(one => one.Value),    Is.EqualTo(new Decimal?[] { 19.85m, 12.90m, 600m, null }));
+                Assert.That(limits.Select(one => one.Reached),  Is.EqualTo(new Boolean?[] { true, true, false, null }), "within a hundredth of 20 kWh and 13.00 EUR, not of an hour");
+
+                Assert.That(LiveLinkEnding.Of(atLimit)!.Reason,   Is.EqualTo("limit"));
+                Assert.That(LiveLinkEnding.Of(atLimit)!.Because,  Does.Contain("at its limit of 20 kWh and 13.00 EUR: 19.85 kWh, 12.90 EUR"));
+                Assert.That(atLimit.StatusAt(at),                 Is.EqualTo(ChargingSessionStatus.Finished));
+
+                Assert.That(LiveLinkEnding.Of(below)!.Reason,     Is.EqualTo("unknown"), "19.7 kWh reached a limit of 20 kWh, or its state of charge is known");
+                Assert.That(LiveLinkEnding.Of(below)!.Because,    Does.Contain("before its limit of 20 kWh and 13.00 EUR and 1 h - 19.7 kWh, 12.80 EUR, 10 min").And.Contain("80 % state of charge"));
+                Assert.That(LiveLinkEnding.Of(SessionOf(Ended(1019.700m) with { Limit = limit with { MaxSoC = null } }))!.Reason, Is.EqualTo("other"));
+
+                Assert.That(LiveLinkEnding.Of(stopped)!.Reason,   Is.EqualTo("stopped"));
+                Assert.That(stopped.StatusAt(at),                 Is.EqualTo(ChargingSessionStatus.Stopped));
+                Assert.That(stopped.EndedAt(at),                  Is.EqualTo(at), "it ended once the meter signed its end");
+
+                Assert.That(read.StopLink,                        Is.EqualTo("https://pay.example/sessions/S1/stop"));
+                Assert.That(read.Limit,                           Is.EqualTo(limit));
+                Assert.That(read.Stop,                            Is.EqualTo(stop));
+                Assert.That(read.ToJSON()["stopLink"]?.Value<String>(), Is.EqualTo("pay.example"), "the stop link itself is shown");
+
+                Assert.That(TransactionLimit.TryParse(null, out var none, out _) && none is null, Is.True);
+                Assert.That(TransactionLimit.TryParse(limit.ToJSON(), out var again, out _) && again == limit, Is.True, "a limit is not read as it was written");
+
+            });
+
+        }
+
+        #endregion
+
     }
 
 }

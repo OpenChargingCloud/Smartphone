@@ -458,6 +458,57 @@ export interface LiveLinkFollow {
     values:         { holding: number; wrong: number; undecided: number; notChecked: number };
     /** The signed value after the start that is a wrong one - the phone stopped the session -, or null. */
     wrong:          LiveLinkWrongValue | null;
+    /** Where the stop link the page gave goes: its host, not the link; null where the page gave none. */
+    stopLink:       string | null;
+    /** The limit the driver chose at the page, as OCPP 2.1 says it to the station; null where none was handed over. */
+    limit:          TransactionLimit | null;
+    /** The stop this phone asked the page for last, over its stop link; null while it asked for none. */
+    stop:           LiveLinkStop | null;
+    /** Each part of its limit against what its signed values say. */
+    limits:         LimitValue[];
+    /** How it ended, against its limit, once it did; null while it did not, or where the phone stopped it for a wrong value. */
+    ending:         LiveLinkEnding | null;
+}
+
+/** The limit a driver chose at the web payment page, as OCPP 2.1 says it in the "transactionLimit" of RequestStartTransaction. */
+export interface TransactionLimit {
+    /** At most so much energy, in Wh. */
+    maxEnergy?:  number;
+    /** At most so much cost, in the currency of the tariff. */
+    maxCost?:    number;
+    /** At most so long, in seconds. */
+    maxTime?:    number;
+    /** Up to so full a battery, in percent. */
+    maxSoC?:     number;
+}
+
+/** A stop the phone asked the web payment page for, over its stop link: whether the page took it, and what it answered. */
+export interface LiveLinkStop {
+    requestedAt:  string;
+    /** The driver, or "this phone" where a signed value is a wrong one. */
+    requestedBy:  string;
+    accepted:     boolean;
+    answer:       string;
+}
+
+/** One part of the limit of a session against what its signed values say. */
+export interface LimitValue {
+    kind:     'energy' | 'cost' | 'time' | 'soc';
+    /** The limit, in its unit: kWh, the currency of the tariff, seconds or percent. */
+    limit:    number;
+    unit:     string;
+    /** What the signed values say, in its unit; null where they say nothing of it, as of a state of charge. */
+    value:    number | null;
+    /** Whether it was reached, within a hundredth of it; null where the signed values do not say. */
+    reached:  boolean | null;
+}
+
+/** How a session followed over its live link ended: stopped by the phone, at its limit, for another reason - or unknown whether at its limit. */
+export interface LiveLinkEnding {
+    reason:       'stopped' | 'limit' | 'other' | 'unknown';
+    because:      string;
+    /** How the meter says the transaction ended ("TX"), or null where it signed no end. */
+    transaction:  string | null;
 }
 
 /** A signed value of a live link, checked with the key the proof of the station gives for its meter, and against the values before it. */
@@ -604,9 +655,16 @@ export const api = {
         list:         (onlyActive = false)                  => request<ChargingSessions>('GET',  `/charging/sessions${onlyActive ? '?active=true' : ''}`),
         get:          (id: string)                          => request<ChargingSession> ('GET',  session(id)),
         start:        (locationId: string, evseUid: string) => request<ChargingSession> ('POST', '/charging/sessions', { locationId, evseUid }),
-        /** Take over the live link the web payment page of the operator gave - its https URL, or its document - of the session it started there. */
-        follow:       (locationId: string, evseUid: string, liveLink: string) => request<ChargingSession>('POST', '/charging/sessions', { locationId, evseUid, liveLink }),
-        stop:         (id: string)                          => request<ChargingSession> ('POST', `${session(id)}/stop`, {})
+        /**
+         * Take over the live link the web payment page of the operator gave - its https URL, or its document - of the session it started there,
+         * with the stop link it gave and the limit the driver chose there, where there are.
+         */
+        follow:       (locationId: string, evseUid: string, liveLink: string, stopLink?: string, limit?: TransactionLimit) =>
+                          request<ChargingSession>('POST', '/charging/sessions', { locationId, evseUid, liveLink,
+                                                                                   ...(stopLink !== undefined ? { stopLink } : {}),
+                                                                                   ...(limit    !== undefined ? { limit }    : {}) }),
+        /** Stop a session - of a live link through the stop link of the page: the one handed over, or the one given now. */
+        stop:         (id: string, stopLink?: string)       => request<ChargingSession> ('POST', `${session(id)}/stop`, stopLink !== undefined ? { stopLink } : {})
     }
 
 };

@@ -82,6 +82,47 @@ namespace cloud.charging.open.Smartphone.Charging
 
 
     /// <summary>
+    /// The stop this phone asked the web payment page of the operator for,
+    /// over the stop link the page gave: when, who asked - the driver, or
+    /// this phone itself where a signed value is a wrong one -, whether the
+    /// page took it, and what it answered.
+    /// </summary>
+    /// <param name="RequestedAt">When it was asked for.</param>
+    /// <param name="RequestedBy">Who asked.</param>
+    /// <param name="Accepted">Whether the page took it: it answered with a 2xx.</param>
+    /// <param name="Answer">What the page answered, or why it could not be asked.</param>
+    public sealed record LiveLinkStop(DateTimeOffset  RequestedAt,
+                                      String          RequestedBy,
+                                      Boolean         Accepted,
+                                      String          Answer)
+    {
+
+        public JObject ToJSON()
+
+            => new (new JProperty("requestedAt",  RequestedAt.ToString("o")),
+                    new JProperty("requestedBy",  RequestedBy),
+                    new JProperty("accepted",     Accepted),
+                    new JProperty("answer",       Answer));
+
+        /// <summary>
+        /// A stop as the store kept it, or null where it kept none.
+        /// </summary>
+        public static LiveLinkStop? TryParse(JToken? JSON)
+
+            => JSON is JObject json                                                                                     &&
+               json.Value<String>("requestedAt") is String requestedAt                                                    &&
+               DateTimeOffset.TryParse(requestedAt, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)        &&
+               json["accepted"]?.Type == JTokenType.Boolean
+                   ? new LiveLinkStop(at,
+                                      json.Value<String>("requestedBy") ?? "",
+                                      json.Value<Boolean>("accepted"),
+                                      json.Value<String>("answer")      ?? "")
+                   : null;
+
+    }
+
+
+    /// <summary>
     /// One signed document a live link brought, as it came: an OCMF document
     /// "OCMF|{payload}|{signature}", when it came, and over which transport
     /// from where - and how it held, once it was checked.
@@ -198,7 +239,16 @@ namespace cloud.charging.open.Smartphone.Charging
     /// brings is checked as it comes, with the key the proofs of the station
     /// give for its meter, and against the values that held before it - its
     /// start value first (<see cref="Start"/>). A wrong one stops the session
-    /// here (<see cref="Wrong"/>). The end value is not checked yet.
+    /// here (<see cref="Wrong"/>), and the station, where the page gave a stop
+    /// link. The end value is not checked yet.
+    /// </para>
+    /// <para>
+    /// The page may give a stop link as well (<see cref="StopLink"/>): a URL
+    /// of this session alone, which this phone sends a POST to, to stop it
+    /// (<see cref="Stop"/>) - followed on until the meter signs its end. And
+    /// the limit the driver chose there (<see cref="Limit"/>), as OCPP 2.1
+    /// says it to the station: what its signed values say at the end is
+    /// compared with it (<see cref="LiveLinkEnding"/>).
     /// </para>
     /// </remarks>
     /// <param name="Link">The live link, its JSON document as it was handed over or fetched.</param>
@@ -213,6 +263,9 @@ namespace cloud.charging.open.Smartphone.Charging
     /// <param name="EndedAt">When it ended: the meter signed the end of the transaction, or the station ended the stream.</param>
     /// <param name="EndedBecause">Why it is taken as ended.</param>
     /// <param name="Documents">The signed documents it brought, each once, in the order they came.</param>
+    /// <param name="StopLink">The stop link the web payment page gave for the session, where it gave one.</param>
+    /// <param name="Limit">The limit the driver chose at the page, as OCPP 2.1 says it, where it was handed over.</param>
+    /// <param name="Stop">The stop this phone asked the page for last, where it asked for one.</param>
     public sealed record LiveLinkFollow(JObject                           Link,
                                         String?                           From,
                                         DateTimeOffset                    HandedOverAt,
@@ -224,7 +277,10 @@ namespace cloud.charging.open.Smartphone.Charging
                                         String?                           Problem        = null,
                                         DateTimeOffset?                   EndedAt        = null,
                                         String?                           EndedBecause   = null,
-                                        IReadOnlyList<LiveLinkDocument>?  Documents      = null)
+                                        IReadOnlyList<LiveLinkDocument>?  Documents      = null,
+                                        String?                           StopLink       = null,
+                                        TransactionLimit?                 Limit          = null,
+                                        LiveLinkStop?                     Stop           = null)
     {
 
         #region Data
@@ -287,6 +343,28 @@ namespace cloud.charging.open.Smartphone.Charging
         /// </summary>
         public LiveLinkValueCheck? Start
             => StartDocument?.Document.Check;
+
+        /// <summary>
+        /// The reading that ends the transaction, of its readings in the order
+        /// the meter measured them - or null while none came.
+        /// </summary>
+        public MeterReading? EndReading
+            => Readings.FirstOrDefault(reading => reading.Transaction is String transaction && LiveLinkDocument.EndingTransactions.Contains(transaction));
+
+        /// <summary>
+        /// Where its stop link goes, for the pages and the log: its host - not
+        /// the link itself, which stops the session for anyone who has it.
+        /// </summary>
+        public String? StopLinkHost
+            => StopLink is not null && Uri.TryCreate(StopLink, UriKind.Absolute, out var uri)
+                   ? uri.Authority
+                   : null;
+
+        /// <summary>
+        /// Whether the page took a stop this phone asked for.
+        /// </summary>
+        public Boolean StopAccepted
+            => Stop?.Accepted == true;
 
         /// <summary>
         /// The first signed document it brought that is a wrong meter value:
@@ -498,6 +576,8 @@ namespace cloud.charging.open.Smartphone.Charging
         /// over it, the readings its signed documents say and whether each
         /// held, how its signed start value held - null while none came -, how
         /// many of the values after it held, and the wrong one, where one is.
+        /// Where its stop link goes - its host, not the link -, the limit the
+        /// driver chose, and the stop this phone asked for.
         /// </summary>
         public JObject ToJSON()
         {
@@ -546,7 +626,10 @@ namespace cloud.charging.open.Smartphone.Charging
                                                         )),
                         new JProperty("wrong",          wrong?.Check is LiveLinkValueCheck wrongCheck
                                                             ? CheckJSON(wrongCheck, "readings", new JArray(wrong.Readings.Select(reading => reading.ToJSON())))
-                                                            : null));
+                                                            : null),
+                        new JProperty("stopLink",       StopLinkHost),
+                        new JProperty("limit",          Limit?.ToJSON()),
+                        new JProperty("stop",           Stop?. ToJSON()));
 
         }
 
@@ -578,6 +661,10 @@ namespace cloud.charging.open.Smartphone.Charging
 
             json.Add(new JProperty("documents", new JArray(Signed.Select(document => document.ToJSON()))));
 
+            if (StopLink      is not null)  json.Add(new JProperty("stopLink",       StopLink));
+            if (Limit         is not null)  json.Add(new JProperty("limit",          Limit.ToJSON()));
+            if (Stop          is not null)  json.Add(new JProperty("stop",           Stop. ToJSON()));
+
             return json;
 
         }
@@ -606,6 +693,10 @@ namespace cloud.charging.open.Smartphone.Charging
             if (json["start"] is JObject start && start.Value<String>("text") is String startText && LiveLinkValueCheck.TryParse(start) is LiveLinkValueCheck startCheck)
                 documents = [.. documents.Select(document => document.Text == startText && document.Check is null ? document with { Check = startCheck } : document)];
 
+            // A limit kept was read when it was handed over: one that can not
+            // be read now is lost, and not the session with it.
+            var limit = TransactionLimit.TryParse(json["limit"], out var kept, out _) ? kept : null;
+
             return new LiveLinkFollow((JObject) link.DeepClone(),
                                       json.Value<String>("from"),
                                       handedOverAt,
@@ -617,7 +708,10 @@ namespace cloud.charging.open.Smartphone.Charging
                                       json.Value<String>("problem"),
                                       Time(json["endedAt"]),
                                       json.Value<String>("endedBecause"),
-                                      documents);
+                                      documents,
+                                      json.Value<String>("stopLink"),
+                                      limit,
+                                      LiveLinkStop.TryParse(json["stop"]));
 
         }
 

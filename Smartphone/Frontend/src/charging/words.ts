@@ -1,4 +1,4 @@
-import type { ChargingSession, ChargingSessionStatus, LiveLinkFollow, LiveLinkStartCheck } from '../api/client';
+import type { ChargingSession, ChargingSessionStatus, LimitValue, LiveLinkFollow, LiveLinkStartCheck } from '../api/client';
 
 /**
  * How a charging session is said on the pages that show one: its figures
@@ -108,9 +108,10 @@ export function reportedInWords(Session: ChargingSession): string {
 
 /**
  * What the live link of a session the web payment page of its operator
- * started says, in a line or two: that it is stopped there - or that this
- * phone stopped it, one of its signed values a wrong one -, what came over
- * it, and how its signed values held against the proof of the station.
+ * started says, in a line or two: how it is stopped - there, or here through
+ * the stop link the page gave -, or that this phone stopped it, one of its
+ * signed values a wrong one; what came over it, or how it ended against its
+ * limit; and how its signed values held against the proof of the station.
  */
 export function liveLinkInWords(Session: ChargingSession): string {
 
@@ -121,16 +122,65 @@ export function liveLinkInWords(Session: ChargingSession): string {
 
     if (link.wrong !== null || link.start?.holds === false)
         return `This phone stopped it: ${link.wrong !== null ? 'a signed meter value after its start' : 'its signed start meter value'} is a wrong one. ` +
-               `${(link.wrong ?? link.start)?.error ?? ''} ` +
-               'The web payment page of its operator gives this phone no link to stop the station with: stop it there.';
+               `${(link.wrong ?? link.start)?.error ?? ''} ${stationStopInWords(link)}`;
 
-    const what = link.endedBecause !== null
-                     ? `It is over: ${link.endedBecause}`
-                     : link.updates === 0
-                           ? link.problem ?? 'Nothing came over its live link yet.'
-                           : `${link.updates} update${link.updates === 1 ? '' : 's'} came over its live link, the last at ${clock(link.lastUpdateAt ?? '')}${link.lastTransport !== null ? ` over ${link.lastTransport}` : ''}.`;
+    const how  = link.stopLink === null
+                     ? 'Started at the web payment page of its operator, and stopped there.'
+                     : link.stop?.accepted === true && link.endedAt === null
+                           ? `Started at the web payment page of its operator, which took the stop this phone asked for at ${clock(link.stop.requestedAt)}: it charges until the meter signs its end.`
+                           : 'Started at the web payment page of its operator, and stopped through the stop link it gave.';
 
-    return `Started at the web payment page of its operator, and stopped there. ${what} ${startInWords(link.start)}${valuesInWords(link)}`;
+    const what = link.ending !== null
+                     ? `It is over: ${link.ending.because}`
+                     : link.endedBecause !== null
+                           ? `It is over: ${link.endedBecause}`
+                           : link.updates === 0
+                                 ? link.problem ?? 'Nothing came over its live link yet.'
+                                 : `${link.updates} update${link.updates === 1 ? '' : 's'} came over its live link, the last at ${clock(link.lastUpdateAt ?? '')}${link.lastTransport !== null ? ` over ${link.lastTransport}` : ''}.`;
+
+    const limit = link.ending === null && link.limits.length > 0
+                      ? ` Its limit: ${link.limits.map(one => one.value !== null ? `${limitFigure(one, one.limit)}, ${limitFigure(one, one.value)} so far` : limitFigure(one, one.limit)).join('; ')}.`
+                      : '';
+
+    return `${how} ${what}${limit} ${startInWords(link.start)}${valuesInWords(link)}`;
+
+}
+
+
+/**
+ * How the station of a session this phone stopped for a wrong signed value
+ * is stopped, in a sentence: by this phone, through the stop link the web
+ * payment page gave - or there, by the driver, where the page gave none or
+ * did not take the stop.
+ */
+export function stationStopInWords(Link: LiveLinkFollow): string {
+
+    if (Link.stop?.accepted === true)
+        return `This phone stopped the station through the stop link of the web payment page at ${clock(Link.stop.requestedAt)}.`;
+
+    if (Link.stop !== null)
+        return `The web payment page did not take the stop this phone asked for: ${Link.stop.answer} Stop it there.`;
+
+    if (Link.stopLink !== null)
+        return 'This phone stops the station through the stop link of the web payment page.';
+
+    return 'The web payment page of its operator gave this phone no stop link: stop it there.';
+
+}
+
+
+/**
+ * One part of the limit of a session, or what its signed values say of it,
+ * in words: "20 kWh", "15,00 €", "1 h 30 min", "80 % state of charge".
+ */
+export function limitFigure(Limit: LimitValue, Figure: number): string {
+
+    switch (Limit.kind) {
+        case 'energy':  return `${Figure.toLocaleString(undefined, { maximumFractionDigits: 3 })} kWh`;
+        case 'cost':    return money(Figure, Limit.unit);
+        case 'time':    return duration(Figure);
+        case 'soc':     return `${Figure.toLocaleString(undefined, { maximumFractionDigits: 0 })} % state of charge`;
+    }
 
 }
 

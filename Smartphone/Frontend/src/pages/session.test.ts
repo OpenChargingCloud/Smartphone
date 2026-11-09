@@ -8,7 +8,7 @@
  */
 
 import { asked, leave, open, refused, until, type Asked } from '../../test/smartphone.ts';
-import { liveLinkSession, reportedSession, session, sessionCheck, wrongStartSession, wrongValueSession } from '../../test/charging.ts';
+import { endedAtLimitSession, liveLinkSession, reportedSession, session, sessionCheck, stopLinkSession, wrongStartSession, wrongValueSession } from '../../test/charging.ts';
 import type { MeterValueCheck } from '../api/client.ts';
 
 import { strict as assert }    from 'node:assert';
@@ -126,6 +126,62 @@ describe('a charging session', () => {
         assert.match(start.querySelector('.error-box')!.textContent!, /This phone stopped the session/);
         assert.match(start.querySelector('.error-box')!.textContent!, /stop it there/);
         assert.match(root.querySelector('.session-status')!.textContent!, /stopped/);
+        assert.equal(root.querySelector('.btn.danger'), null, 'a Stop for a session the phone stopped');
+
+    });
+
+    it('stops a session through the stop link its operator\'s web payment page gave, and shows its limit', async () => {
+
+        current = stopLinkSession();
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.live-limits') !== null);
+
+        assert.match(root.querySelector('.session-live-link')!.textContent!, /Stop link\s*at pay\.gef\.example/);
+        assert.doesNotMatch(root.textContent!, /\/stop\b/, 'the stop link itself is shown');
+        assert.match(root.querySelector('.live-limits')!.textContent!, /Limit 20 kWh\s*12[.,]5 kWh/);
+        assert.ok(root.querySelector('.live-limits li.not-reached'));
+        assert.match(root.querySelector('.btn.danger')!.textContent!, /Stop charging/);
+
+        root.querySelector<HTMLButtonElement>('.btn.danger')!.click();
+
+        await until(() => asked.some(one => one.method === 'POST' && one.path === `/charging/sessions/${current.id}/stop`),
+                    'Stop did not ask the smartphone');
+
+    });
+
+    it('says a session ended at the limit the driver chose, and offers no Stop then', async () => {
+
+        current = endedAtLimitSession();
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.live-ending') !== null);
+
+        const ending = root.querySelector<HTMLElement>('.live-ending')!;
+
+        assert.ok(ending.classList.contains('limit'), ending.className);
+        assert.match(ending.textContent!, /at its limit\s*It ended at its limit of 20 kWh: 20 kWh/);
+        assert.ok(root.querySelector('.live-limits li.reached'));
+        assert.match(root.querySelector('.session-reported')!.textContent!, /It is over: It ended at its limit of 20 kWh/);
+        assert.equal(root.querySelector('.btn.danger'), null, 'a Stop for a session that ended');
+
+    });
+
+    it('says the phone stopped the station of a session with a wrong value through its stop link', async () => {
+
+        const wrong = wrongValueSession();
+
+        current = { ...wrong, liveLink: { ...wrong.liveLink!, stopLink: 'pay.gef.example',
+                                          stop: { requestedAt: '2026-10-10T08:10:06Z', requestedBy: 'this phone', accepted: true, answer: '200 OK: The station stops.' } } };
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.live-wrong') !== null);
+
+        const box = root.querySelector<HTMLElement>('.live-wrong .error-box')!;
+
+        assert.match(box.textContent!, /This phone stopped the station through the stop link of the web payment page/);
+        assert.doesNotMatch(box.textContent!, /stop it there/);
+        assert.match(root.querySelector('.session-live-link')!.textContent!, /Stop asked[^]*by this phone:\s*taken - 200 OK/);
         assert.equal(root.querySelector('.btn.danger'), null, 'a Stop for a session the phone stopped');
 
     });

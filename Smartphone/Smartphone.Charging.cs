@@ -47,7 +47,9 @@ namespace cloud.charging.open.Smartphone
         /// <summary>What was handed over is not what was asked for, e.g. no live link.</summary>
         Invalid,
         /// <summary>The live link handed over by its URL could not be fetched.</summary>
-        Unreachable
+        Unreachable,
+        /// <summary>The web payment page of the operator did not take the stop over its stop link, or could not be reached.</summary>
+        Operator
     }
 
 
@@ -259,19 +261,24 @@ namespace cloud.charging.open.Smartphone
 
         #endregion
 
-        #region StopChargingAsync(Id, Who, CancellationToken = default)
+        #region StopChargingAsync(Id, Who, StopLink = null, CancellationToken = default)
 
         /// <summary>
         /// Stop a charging session that is still charging - one started through
         /// the e-mobility provider through it, with a stop request signed by the
-        /// ticket's key, and only once the provider countersigned it.
+        /// ticket's key, and only once the provider countersigned it. One the
+        /// web payment page of the operator started through the stop link the
+        /// page gave, handed over with its live link or now: it charges on
+        /// until the meter signs its end.
         /// </summary>
         /// <param name="Id">The session.</param>
         /// <param name="Who">Who asked, for the log and the session.</param>
+        /// <param name="StopLink">Of a session the web payment page started: the stop link the page gave, where it was not handed over with its live link.</param>
         /// <param name="CancellationToken">To stop asking the provider.</param>
         public async Task<ChargingStop> StopChargingAsync(String             Id,
                                                           String             Who,
-                                                          CancellationToken  CancellationToken = default)
+                                                          String?            StopLink           = null,
+                                                          CancellationToken  CancellationToken  = default)
         {
 
             var running = Sessions.Get(Id);
@@ -282,10 +289,10 @@ namespace cloud.charging.open.Smartphone
             if (!running.IsActiveAt(TimeProvider.GetUtcNow()))
                 return ChargingStop.Refused(ChargingRefusal.Conflict, $"The charging session '{Id}' is {running.StatusAt(TimeProvider.GetUtcNow()).ToString().ToLowerInvariant()} already.");
 
-            // Started at the web payment page of the operator: stopped there,
-            // and this phone follows its live link until the meter signs its end.
+            // Started at the web payment page of the operator: stopped through
+            // the stop link it gave, and followed until the meter signs its end.
             if (running.LiveLink is not null)
-                return ChargingStop.Refused(ChargingRefusal.Conflict, $"The session at {running.EVSEId} was started at the web payment page of its operator, and is stopped there: this phone follows its live link until the meter signs its end.");
+                return await StopLiveLinkAsync(running, Who, StopLink, CancellationToken);
 
             ChargingStartReference? stopped = null;
 

@@ -141,10 +141,10 @@ export const chargingPage: Page = {
                         <div class="small muted session-reported">${reportedInWords(session)}</div>
                     `}
 
-                    ${mayStop && session.liveLink === undefined ? html`
+                    ${mayStop && (session.liveLink === undefined || session.liveLink.stopLink !== null) ? html`
                         <div class="form-actions">
                             <button type="button" class="btn danger" ?disabled=${busy} @click=${() => void stop(session)}>
-                                <i class="fa-solid fa-stop"></i> ${busy ? 'Stopping ...' : 'Stop charging'}
+                                <i class="fa-solid fa-stop"></i> ${busy ? 'Stopping ...' : session.liveLink?.stop?.accepted === true ? 'Stop again' : 'Stop charging'}
                             </button>
                             ${failed.has(session.id) ? html`<span class="form-error" role="alert">${failed.get(session.id)}</span>` : nothing}
                         </div>

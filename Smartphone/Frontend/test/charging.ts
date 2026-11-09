@@ -148,7 +148,7 @@ export function liveLinkSession(more: Partial<ChargingSession> = {}): ChargingSe
                                    meterSerialNumber: 'DC-2026-001', meterId: 'meter-dc-1',
                                    keyId: '95ceb48cc35ae3335c7f06fa0a8b8aff446da032057708eec66a7edc371591f6', result: 'ValidSignature' },
                           values: { holding: 1, wrong: 0, undecided: 0, notChecked: 0 },
-                          wrong: null }
+                          wrong: null, stopLink: null, limit: null, stop: null, limits: [], ending: null }
     };
 
     delete followed.fullAt;
@@ -157,6 +157,55 @@ export function liveLinkSession(more: Partial<ChargingSession> = {}): ChargingSe
     delete followed.progressPercent;
 
     return { ...followed, ...more };
+
+}
+
+
+/**
+ * The session of a live link the web payment page gave a stop link for, and
+ * the limit of 20 kWh the driver chose there, as a smartphone sends it.
+ */
+export function stopLinkSession(more: Partial<ChargingSession> = {}): ChargingSession {
+
+    const followed = liveLinkSession();
+
+    return {
+        ...followed,
+        liveLink: { ...followed.liveLink!,
+                    stopLink: 'pay.gef.example',
+                    limit:    { maxEnergy: 20000 },
+                    limits:   [ { kind: 'energy', limit: 20, unit: 'kWh', value: 12.5, reached: false } ] },
+        ...more
+    };
+
+}
+
+
+/**
+ * The session of a live link that ended at the limit of 20 kWh the driver
+ * chose at the web payment page: the meter signed its end, as a smartphone
+ * sends it.
+ */
+export function endedAtLimitSession(): ChargingSession {
+
+    const followed = stopLinkSession();
+    const link     = followed.liveLink!;
+
+    return {
+        ...followed,
+        status:     'finished',
+        endedAt:    '2026-10-10T08:16:00Z',
+        energyKWh:  20,
+        cost:       { amount: 13, pricePerKWh: 0.65, currency: 'EUR' },
+        liveLink:   { ...link, documents: 3, endedAt: '2026-10-10T08:16:00Z',
+                      endedBecause: 'The meter signed the end of the transaction ("E") at 2026-10-10T08:16:00.0000000+00:00.',
+                      readings: [ ...link.readings, { measuredAt: '2026-10-10T08:16:00Z', energyKWh: 1020, transaction: 'E', status: 'G', holds: null } ],
+                      energyKWh: 20,
+                      values: { ...link.values, notChecked: 1 },
+                      limits: [ { kind: 'energy', limit: 20, unit: 'kWh', value: 20, reached: true } ],
+                      ending: { reason: 'limit', transaction: 'E',
+                                because: 'It ended at its limit of 20 kWh: 20 kWh, as its signed values say - its meter signed the end of the transaction ("E").' } }
+    };
 
 }
 

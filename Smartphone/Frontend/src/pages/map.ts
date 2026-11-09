@@ -1,6 +1,6 @@
 import * as L from 'leaflet';
 
-import { api, type ChargingLocation, type EVSE, type LocationCheck, type MapData } from '../api/client';
+import { api, type ChargingLocation, type EVSE, type LocationCheck, type MapData, type TransactionLimit } from '../api/client';
 import { auth } from '../auth';
 import { availability, maxPowerKW, positionOf, search, standardWord, stationStatus, statusClass, statusWord, webPaymentOf, webPaymentWord } from '../map/stations';
 import { dayAndTime, money } from '../charging/words';
@@ -353,11 +353,28 @@ export const mapPage: Page = {
                                 Paid there? The live link its page gave, for ${paying.get(id) ?? pick}:
                                 <input name="liveLink" type="text" autocomplete="off"
                                        placeholder="https://... or its document" ?disabled=${busy}
-                                       @keydown=${(event: KeyboardEvent) => { if (event.key === 'Enter') void followLiveLink(location, paying.get(id) ?? pick, event.target as HTMLInputElement); }}>
+                                       @keydown=${(event: KeyboardEvent) => { if (event.key === 'Enter') void followLiveLink(location, paying.get(id) ?? pick, (event.target as HTMLElement).closest<HTMLElement>('.live-link')!); }}>
+                            </label>
+                            <label class="small">
+                                Its stop link, where it gave one:
+                                <input name="stopLink" type="text" autocomplete="off" placeholder="https://..." ?disabled=${busy}>
+                            </label>
+                            <label class="small">
+                                The limit chosen there:
+                                <span class="limit-input">
+                                    <input name="limitValue" type="number" min="0" step="any" ?disabled=${busy}>
+                                    <select name="limitKind" ?disabled=${busy}>
+                                        <option value="">no limit</option>
+                                        <option value="maxEnergy">kWh</option>
+                                        <option value="maxCost">${location.tariff?.currency ?? 'in its currency'}</option>
+                                        <option value="maxTime">min</option>
+                                        <option value="maxSoC">% state of charge</option>
+                                    </select>
+                                </span>
                             </label>
                             <button type="button" class="btn" ?disabled=${busy}
                                     @click=${(event: MouseEvent) => void followLiveLink(location, paying.get(id) ?? pick,
-                                                                                          (event.currentTarget as HTMLElement).parentElement!.querySelector<HTMLInputElement>('input[name="liveLink"]')!)}>
+                                                                                          (event.currentTarget as HTMLElement).closest<HTMLElement>('.live-link')!)}>
                                 <i class="fa-solid fa-tower-broadcast"></i> Follow it
                             </button>
                         </div>
@@ -484,10 +501,16 @@ export const mapPage: Page = {
         }
 
 
-        /** Take over the live link the web payment page gave for the session it started at an EVSE, and show the session. */
-        async function followLiveLink(location: ChargingLocation, evseUid: string | undefined, input: HTMLInputElement): Promise<void> {
+        /**
+         * Take over the live link the web payment page gave for the session it started at an EVSE - with its stop link, and the limit
+         * the driver chose there, where there are - and show the session.
+         */
+        async function followLiveLink(location: ChargingLocation, evseUid: string | undefined, form: HTMLElement): Promise<void> {
 
-            const liveLink = input.value.trim();
+            const liveLink  = form.querySelector<HTMLInputElement>('input[name="liveLink"]')!.value.trim();
+            const stopLink  = form.querySelector<HTMLInputElement>('input[name="stopLink"]')?.value.trim() ?? '';
+            const limit     = limitOf(form.querySelector<HTMLSelectElement>('select[name="limitKind"]')?.value ?? '',
+                                      Number(form.querySelector<HTMLInputElement>('input[name="limitValue"]')?.value.trim() || Number.NaN));
 
             if (evseUid === undefined || liveLink === '' || starting.has(location.id))
                 return;
@@ -499,7 +522,7 @@ export const mapPage: Page = {
             try
             {
 
-                const session = await api.charging.follow(location.id, evseUid, liveLink);
+                const session = await api.charging.follow(location.id, evseUid, liveLink, stopLink !== '' ? stopLink : undefined, limit);
 
                 paying.delete(location.id);
 
@@ -517,6 +540,26 @@ export const mapPage: Page = {
                 starting.delete(location.id);
                 if (!cancelled)
                     drawPopup(location.id);
+            }
+
+        }
+
+
+        /**
+         * The limit chosen at the web payment page, as OCPP 2.1 says it to the station: of so many kWh in Wh, of so many minutes in
+         * seconds, of an amount and of a state of charge as they are - or none, where none was chosen.
+         */
+        function limitOf(kind: string, value: number): TransactionLimit | undefined {
+
+            if (!(value > 0))
+                return undefined;
+
+            switch (kind) {
+                case 'maxEnergy':  return { maxEnergy: Math.round(value * 1000) };
+                case 'maxCost':    return { maxCost:   value };
+                case 'maxTime':    return { maxTime:   Math.round(value * 60) };
+                case 'maxSoC':     return { maxSoC:    Math.round(value) };
+                default:           return undefined;
             }
 
         }

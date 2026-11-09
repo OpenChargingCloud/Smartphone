@@ -84,8 +84,10 @@ namespace cloud.charging.open.Smartphone.Charging
     /// the driver handed over: starting until something comes over it,
     /// charging from then on, finished once its meter signs the end of the
     /// transaction or the station ends the stream - nothing simulated, and
-    /// what it charged is what its signed documents say. Stopped by this
-    /// phone where one of its signed values is a wrong one.
+    /// what it charged is what its signed documents say. Stopped where this
+    /// phone stopped it through the stop link of the page, once the meter
+    /// signed its end - and at once where one of its signed values is a
+    /// wrong one.
     /// </para>
     /// </remarks>
     public sealed record ChargingSession(String           Id,
@@ -209,11 +211,15 @@ namespace cloud.charging.open.Smartphone.Charging
         public ChargingSessionStatus StatusAt(DateTimeOffset Now)
         {
 
+            // Of a live link, stopped through its stop link once it ended: until
+            // the meter signs the end, the station charges on.
             if (LiveLink is LiveLinkFollow liveLink)
                 return StoppedAt is not null || liveLink.Refused
                            ? ChargingSessionStatus.Stopped
                            : liveLink.EndedAt is not null
-                                 ? ChargingSessionStatus.Finished
+                                 ? liveLink.StopAccepted
+                                       ? ChargingSessionStatus.Stopped
+                                       : ChargingSessionStatus.Finished
                                  : liveLink.Updates > 0
                                        ? ChargingSessionStatus.Charging
                                        : ChargingSessionStatus.Starting;
@@ -265,7 +271,7 @@ namespace cloud.charging.open.Smartphone.Charging
 
             if (LiveLink is LiveLinkFollow liveLink)
                 return status switch {
-                           ChargingSessionStatus.Stopped   => StoppedAt ?? liveLink.Wrong?.Check?.CheckedAt,
+                           ChargingSessionStatus.Stopped   => StoppedAt ?? (liveLink.Refused ? liveLink.Wrong?.Check?.CheckedAt : liveLink.EndedAt),
                            ChargingSessionStatus.Finished  => liveLink.EndedAt,
                            _                               => null
                        };
@@ -460,7 +466,8 @@ namespace cloud.charging.open.Smartphone.Charging
         /// started, as its live link says it: its energy what its signed
         /// documents say, and its cost what the price of the proof of its
         /// station makes of that - and why this phone stopped it, where one of
-        /// its signed values is a wrong one.
+        /// its signed values is a wrong one. Its limit against what its signed
+        /// values say ("limits"), and how it ended, once it did ("ending").
         /// </summary>
         private JObject LiveLinkJSON(LiveLinkFollow LiveLink, DateTimeOffset Now)
         {
@@ -504,11 +511,16 @@ namespace cloud.charging.open.Smartphone.Charging
                            new JProperty("liveLink",           LiveLink.ToJSON())
                        );
 
+            var liveLink = (JObject) json["liveLink"]!;
+
+            liveLink.Add(new JProperty("limits",  new JArray(LiveLinkEnding.LimitsOf(this).Select(limit => limit.ToJSON()))));
+            liveLink.Add(new JProperty("ending",  LiveLinkEnding.Of(this)?.ToJSON()));
+
             if (since is DateTimeOffset first)
                 json.Add(new JProperty("chargingSince", first.ToString("o")));
 
-            if (status == ChargingSessionStatus.Stopped && StoppedBy is not null)
-                json.Add(new JProperty("stoppedBy", StoppedBy));
+            if (status == ChargingSessionStatus.Stopped && (StoppedBy ?? (LiveLink.Refused ? null : LiveLink.Stop?.RequestedBy)) is String stoppedBy)
+                json.Add(new JProperty("stoppedBy", stoppedBy));
 
             if (status == ChargingSessionStatus.Stopped && LiveLink.RefusedBecause is String because)
                 json.Add(new JProperty("stoppedBecause", because));

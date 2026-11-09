@@ -1,6 +1,6 @@
-import { api, type ChargingSession, type LiveLinkFollow, type LiveLinkStartCheck, type LiveLinkValueCheck, type LiveLinkWrongValue, type MeterValueCheck, type SessionCheck } from '../api/client';
+import { api, type ChargingSession, type LiveLinkEnding, type LiveLinkFollow, type LiveLinkStartCheck, type LiveLinkValueCheck, type LiveLinkWrongValue, type MeterValueCheck, type SessionCheck } from '../api/client';
 import { auth } from '../auth';
-import { dayAndTime, duration, isRunning, money, reportedInWords, sessionStatusClass, sessionStatusWord, withUnit } from '../charging/words';
+import { dayAndTime, duration, isRunning, limitFigure, money, reportedInWords, sessionStatusClass, sessionStatusWord, stationStopInWords, withUnit } from '../charging/words';
 import { standardWord } from '../map/stations';
 import { toURL } from '@node/basePath';
 import type { Page } from '@node/router';
@@ -12,8 +12,10 @@ import { html, nothing, render, type TemplateResult } from '@node/view';
  * One charging session, with everything there is to know about it: where,
  * at which charge point, from when to when, what it charged and what it
  * cost - and, while it still starts or charges, its figures asked for again
- * every two seconds and Stop. A session the e-mobility provider reports has
- * no power, no target and no time it is full at: OCPI tells none of them.
+ * every two seconds and Stop - of one the web payment page of its operator
+ * started, where the page gave a stop link. A session the e-mobility
+ * provider reports has no power, no target and no time it is full at: OCPI
+ * tells none of them.
  * One at a station of a roaming network says how it holds against what it
  * kept of the station: whether the meter signed the values of its charge
  * detail record, and the price the operator stated for its start.
@@ -167,11 +169,32 @@ export const sessionPage: Page = {
                         ${kv('Signed documents',  String(link.documents))}
                         ${link.problem      !== null ? kv('Now',   link.problem)      : nothing}
                         ${link.endedBecause !== null ? kv('Ended', link.endedBecause) : nothing}
+                        ${kv('Stop link',         link.stopLink !== null ? html`at <span class="mono">${link.stopLink}</span>` : 'none given: it is stopped at the page')}
+                        ${link.stop !== null ? kv('Stop asked', html`${dayAndTime(link.stop.requestedAt)} by ${link.stop.requestedBy}:
+                                                                     <span class="${link.stop.accepted ? 'stop-taken' : 'form-error'}">${link.stop.accepted ? 'taken' : 'not taken'} - ${link.stop.answer}</span>`) : nothing}
                     </div>
 
-                    ${startView(link.start)}
+                    ${link.limits.length > 0 ? html`
+                        <ul class="live-limits">
+                            ${link.limits.map(limit => html`
+                                <li class="${limit.reached === true ? 'reached' : limit.reached === false ? 'not-reached' : 'unknown'}">
+                                    ${limit.reached === true
+                                          ? html`<i class="fa-solid fa-flag-checkered" title="reached"></i>`
+                                          : limit.reached === false
+                                                ? html`<i class="fa-regular fa-flag" title="not reached"></i>`
+                                                : html`<i class="fa-solid fa-question" title="its signed values do not say"></i>`}
+                                    <span>Limit ${limitFigure(limit, limit.limit)}</span>
+                                    <span class="muted">${limit.value !== null ? limitFigure(limit, limit.value) : 'not measured by the meter'}</span>
+                                </li>
+                            `)}
+                        </ul>
+                    ` : nothing}
 
-                    ${link.wrong !== null ? wrongView(link.wrong) : nothing}
+                    ${link.ending !== null ? endingView(link.ending) : nothing}
+
+                    ${startView(link, link.start)}
+
+                    ${link.wrong !== null ? wrongView(link, link.wrong) : nothing}
 
                     ${link.readings.length > 0 ? html`
                         <ul class="live-readings">
@@ -193,8 +216,10 @@ export const sessionPage: Page = {
                     <p class="small muted">
                         A key a live link names is no authority, the one the proof of the station gives for the meter
                         is: every signed value is checked with it as it comes, and against the values before it - none
-                        measured before the start, the meter counting forwards. A wrong one stops the session here.
-                        The end value is not checked yet. The documents are kept, each as it came.
+                        measured before the start, the meter counting forwards. A wrong one stops the session here, and
+                        the station through the stop link of the page, where it gave one. At the end, what the signed
+                        values say is compared with the limit chosen at the page; the end value itself is not checked
+                        yet. The documents are kept, each as it came.
                     </p>
 
                 </section>
@@ -203,7 +228,26 @@ export const sessionPage: Page = {
         }
 
 
-        function startView(start: LiveLinkStartCheck | null): TemplateResult {
+        /** How a session followed over its live link ended, against the limit chosen at the page. */
+        function endingView(ending: LiveLinkEnding): TemplateResult {
+
+            return html`
+                <div class="live-ending ${ending.reason}">
+                    ${ending.reason === 'stopped'
+                          ? html`<span class="chip"><i class="fa-solid fa-stop"></i> stopped by this phone</span>`
+                          : ending.reason === 'limit'
+                                ? html`<span class="chip ok"><i class="fa-solid fa-flag-checkered"></i> at its limit</span>`
+                                : ending.reason === 'unknown'
+                                      ? html`<span class="chip"><i class="fa-solid fa-question"></i> its limit unknown</span>`
+                                      : html`<span class="chip"><i class="fa-solid fa-circle-info"></i> another reason</span>`}
+                    <span>${ending.because}</span>
+                </div>
+            `;
+
+        }
+
+
+        function startView(link: LiveLinkFollow, start: LiveLinkStartCheck | null): TemplateResult {
 
             if (start === null)
                 return html`<p class="live-start pending">No signed start value came over it yet.</p>`;
@@ -223,8 +267,7 @@ export const sessionPage: Page = {
                     ${start.error !== null ? html`<div class="small">${start.error}</div>` : nothing}
                     ${start.holds === false ? html`
                         <div class="error-box">
-                            This phone stopped the session: its signed start meter value is a wrong one. The web payment
-                            page of its operator gives this phone no link to stop the station with: stop it there.
+                            This phone stopped the session: its signed start meter value is a wrong one. ${stationStopInWords(link)}
                         </div>
                     ` : nothing}
                 </div>
@@ -233,7 +276,7 @@ export const sessionPage: Page = {
         }
 
 
-        function wrongView(wrong: LiveLinkWrongValue): TemplateResult {
+        function wrongView(link: LiveLinkFollow, wrong: LiveLinkWrongValue): TemplateResult {
 
             return html`
                 <div class="live-wrong">
@@ -245,8 +288,7 @@ export const sessionPage: Page = {
                     ${checkedWith(wrong)}
                     ${wrong.error !== null ? html`<div class="small">${wrong.error}</div>` : nothing}
                     <div class="error-box">
-                        This phone stopped the session: a signed meter value after its start is a wrong one. The web
-                        payment page of its operator gives this phone no link to stop the station with: stop it there.
+                        This phone stopped the session: a signed meter value after its start is a wrong one. ${stationStopInWords(link)}
                     </div>
                 </div>
             `;
@@ -329,10 +371,10 @@ export const sessionPage: Page = {
                                       aria-label="How far it has charged"></progress>
                         ` : nothing}
 
-                        ${running && mayStop && session.liveLink === undefined ? html`
+                        ${running && mayStop && (session.liveLink === undefined || session.liveLink.stopLink !== null) ? html`
                             <div class="form-actions">
                                 <button type="button" class="btn danger" ?disabled=${stopping} @click=${() => void stop()}>
-                                    <i class="fa-solid fa-stop"></i> ${stopping ? 'Stopping ...' : 'Stop charging'}
+                                    <i class="fa-solid fa-stop"></i> ${stopping ? 'Stopping ...' : session.liveLink?.stop?.accepted === true ? 'Stop again' : 'Stop charging'}
                                 </button>
                                 ${failed !== null ? html`<span class="form-error" role="alert">${failed}</span>` : nothing}
                             </div>

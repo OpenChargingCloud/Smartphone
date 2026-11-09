@@ -17,11 +17,15 @@
 
 #region Usings
 
+using System.Diagnostics.CodeAnalysis;
+
 using Newtonsoft.Json.Linq;
 
 using org.GraphDefined.Vanaheimr.Hermod.HTTP;
 
 using cloud.charging.open.protocols.WWCP.Node.Web;
+
+using cloud.charging.open.Smartphone.Charging;
 
 #endregion
 
@@ -293,7 +297,11 @@ namespace cloud.charging.open.Smartphone
         /// its document - the session that page started there, followed over
         /// its live link: 400 where it is none, 409 where it is of another EVSE
         /// or the proof of the station does not hold, 502 where its URL could
-        /// not be fetched.
+        /// not be fetched. With the "stopLink" the page gave as well, where it
+        /// gave one - the https URL a POST stops the session at - and the
+        /// "limit" the driver chose there, as OCPP 2.1 says it to the station:
+        /// { "maxEnergy" in Wh, "maxCost", "maxTime" in seconds, "maxSoC" in
+        /// percent }; 400 where either is none.
         /// </summary>
         private async Task<HTTPResponse> PostChargingSession(HTTPRequest Request)
         {
@@ -318,7 +326,13 @@ namespace cloud.charging.open.Smartphone
                     return ErrorJSON(Request, HTTPStatusCode.BadRequest,
                                      "'liveLink' is the URL of the live link the web payment page of the operator gave, or its document.");
 
-                var followed = await Smartphone.FollowLiveLinkAsync(locationId, evseUid, liveLink, user.Id.ToString());
+                if (!TryStopLink(json, out var stopLink, out var stopLinkError))
+                    return ErrorJSON(Request, HTTPStatusCode.BadRequest, stopLinkError);
+
+                if (!TransactionLimit.TryParse(json["limit"], out var limit, out var limitError))
+                    return ErrorJSON(Request, HTTPStatusCode.BadRequest, limitError);
+
+                var followed = await Smartphone.FollowLiveLinkAsync(locationId, evseUid, liveLink, user.Id.ToString(), stopLink, limit);
 
                 if (followed.Session is null)
                     return Refused(Request, followed.Refusal, followed.Error ?? "No live link is followed.");
@@ -339,8 +353,11 @@ namespace cloud.charging.open.Smartphone
         /// <summary>
         /// POST /api/v1/charging/sessions/{id}/stop: stop a session that is
         /// still charging - through the e-mobility provider where it was
-        /// started through it. 409 where it is over already; 502 where the
-        /// provider stopped nothing, and the session goes on.
+        /// started through it, and through the stop link of the web payment
+        /// page where that page started it: the one handed over with its live
+        /// link, or { "stopLink" } now. 409 where it is over already, or the
+        /// page gave no stop link; 502 where the provider or the page stopped
+        /// nothing, and the session goes on.
         /// </summary>
         private async Task<HTTPResponse> PostStopChargingSession(HTTPRequest Request)
         {
@@ -348,7 +365,20 @@ namespace cloud.charging.open.Smartphone
             if (!TryAuthorize(Request, Permission.Run(SmartphoneAccess.Charging), true, out var user, out var refused))
                 return refused;
 
-            var stop = await Smartphone.StopChargingAsync(IdOf(Request), user.Id.ToString());
+            String? stopLink = null;
+
+            if (!String.IsNullOrWhiteSpace(Request.HTTPBodyAsUTF8String))
+            {
+
+                if (!TryParseJSONObject(Request, out var json, out var errorResponse))
+                    return errorResponse;
+
+                if (!TryStopLink(json, out stopLink, out var stopLinkError))
+                    return ErrorJSON(Request, HTTPStatusCode.BadRequest, stopLinkError);
+
+            }
+
+            var stop = await Smartphone.StopChargingAsync(IdOf(Request), user.Id.ToString(), stopLink);
 
             if (stop.Session is null)
                 return Refused(Request, stop.Refusal, stop.Error ?? "Nothing was stopped.");
@@ -359,6 +389,40 @@ namespace cloud.charging.open.Smartphone
 
         #endregion
 
+
+        #region (private static) TryStopLink(JSON, out StopLink, out Error)
+
+        /// <summary>
+        /// The "stopLink" of a request, where it names one: a text - whether
+        /// it is a stop link, the phone says.
+        /// </summary>
+        private static Boolean TryStopLink(JObject                           JSON,
+                                           out String?                       StopLink,
+                                           [NotNullWhen(false)] out String?  Error)
+        {
+
+            StopLink  = null;
+            Error     = null;
+
+            switch (JSON["stopLink"])
+            {
+
+                case null or { Type: JTokenType.Null }:
+                    return true;
+
+                case JValue { Type: JTokenType.String } text when text.Value<String>() is String link:
+                    StopLink = String.IsNullOrWhiteSpace(link) ? null : link.Trim();
+                    return true;
+
+                default:
+                    Error = "'stopLink' is the https URL the web payment page of the operator gave to stop the session with.";
+                    return false;
+
+            }
+
+        }
+
+        #endregion
 
         #region (private static) IdOf(Request) / Refused(Request, Refusal, Error)
 
@@ -384,6 +448,7 @@ namespace cloud.charging.open.Smartphone
                              ChargingRefusal.NotSaved     => HTTPStatusCode.InternalServerError,
                              ChargingRefusal.Provider     => HTTPStatusCode.BadGateway,
                              ChargingRefusal.Unreachable  => HTTPStatusCode.BadGateway,
+                             ChargingRefusal.Operator     => HTTPStatusCode.BadGateway,
                              ChargingRefusal.Invalid      => HTTPStatusCode.BadRequest,
                              _                            => HTTPStatusCode.Conflict
                          },

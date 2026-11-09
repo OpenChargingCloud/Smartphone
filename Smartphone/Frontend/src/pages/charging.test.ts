@@ -7,7 +7,7 @@
  */
 
 import { asked, leave, open, refused, until, type Asked } from '../../test/smartphone.ts';
-import { liveLinkSession, reportedSession, session, wrongStartSession, wrongValueSession } from '../../test/charging.ts';
+import { liveLinkSession, reportedSession, session, stopLinkSession, wrongStartSession, wrongValueSession } from '../../test/charging.ts';
 
 import { strict as assert }    from 'node:assert';
 import { after, describe, it } from 'node:test';
@@ -92,6 +92,27 @@ describe('the charging page', () => {
         assert.match(card.textContent!, /Its signed start value, 1[.,]000[.,]000 kWh at [^,]+, is the meter's, by the key the proof of the station gives for it/);
         assert.match(card.textContent!, /1 signed value after it is the meter's as well/);
         assert.equal(card.querySelector('.btn.danger'), null, 'a Stop for a session stopped at the web payment page');
+
+    });
+
+    it('stops a session its operator\'s web payment page gave a stop link for, saying its limit', async () => {
+
+        running    = [ stopLinkSession() ];
+        stopAnswer = { ...stopLinkSession(), liveLink: { ...stopLinkSession().liveLink!,
+                                                         stop: { requestedAt: '2026-10-10T08:11:00Z', requestedBy: 'driver1', accepted: true, answer: '200 OK: The station stops.' } } };
+
+        const root = await open(chargingPage, '/charging', [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.session-card .btn.danger') !== null);
+
+        const card = root.querySelector<HTMLElement>('.session-card')!;
+
+        assert.match(card.textContent!, /Started at the web payment page of its operator, and stopped through the stop link it gave/);
+        assert.match(card.textContent!, /Its limit: 20 kWh, 12[.,]5 kWh so far/);
+
+        card.querySelector<HTMLButtonElement>('.btn.danger')!.click();
+
+        await until(() => asked.some(one => one.method === 'POST' && one.path === '/charging/sessions/L1V3L1NK0001/stop'),
+                    'Stop did not ask the smartphone');
 
     });
 

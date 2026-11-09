@@ -283,6 +283,41 @@ describe('the map of a roaming network', () => {
 
     });
 
+    it('hands over the stop link the web payment page gave, and the limit chosen there, as OCPP 2.1 says it', async () => {
+
+        verified  = true;
+        checked   = false;
+        payments  = [ { url: 'https://pay.gef.example/stations/S1', of: 'chargingStation', error: null } ];
+
+        try
+        {
+
+            const root = await opened();
+
+            await until(() => root.querySelector('.station-popup .live-link') !== null, 'no way to hand over the live link');
+
+            const handOver = root.querySelector<HTMLElement>('.station-popup .live-link')!;
+
+            typeInto(handOver.querySelector<HTMLInputElement>('input[name="liveLink"]')!,   'https://pay.gef.example/liveLinks/S1');
+            typeInto(handOver.querySelector<HTMLInputElement>('input[name="stopLink"]')!,   'https://pay.gef.example/sessions/S1/stop');
+            typeInto(handOver.querySelector<HTMLInputElement>('input[name="limitValue"]')!, '22.5');
+            handOver.querySelector<HTMLSelectElement>('select[name="limitKind"]')!.value = 'maxEnergy';
+            handOver.querySelector<HTMLButtonElement>('button')!.click();
+
+            await until(() => asked.some(one => one.method === 'POST' && one.path === '/charging/sessions'), 'the live link was not handed over');
+
+            assert.deepEqual(asked.filter(one => one.method === 'POST').pop()!.body,
+                             { locationId: 'DE*GEF*P1', evseUid: 'DE*GEF*E1*1', liveLink: 'https://pay.gef.example/liveLinks/S1',
+                               stopLink: 'https://pay.gef.example/sessions/S1/stop', limit: { maxEnergy: 22500 } });
+
+        }
+        finally
+        {
+            payments = [];
+        }
+
+    });
+
     it('says when a station is not signed as the trust anchor requires, and charges nothing there', async () => {
 
         verified = false;
