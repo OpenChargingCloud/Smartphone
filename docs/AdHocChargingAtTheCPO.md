@@ -253,6 +253,10 @@ the session in [Step 2](#step-2---handing-the-session-over-to-the-app).
 
 ## Step 1 - [CPO] Paying and starting at the web payment page
 
+What the page, its CSMS and its stations have to do for the app - the live
+link endpoints, what the meter signs, the POSTs to the stop and the dispute
+link and their answers - is [WebPaymentPageInterface.md](WebPaymentPageInterface.md).
+
 1. The page shows the EVSE and the price. It should be the signed price of
    [A3](#a3---the-price): the app counts with that one, not with what the page
    says.
@@ -364,6 +368,12 @@ whole transaction from its begin.
 | 6 | **One begin:** a begin it says again - the whole transaction, at its end - is the start value that held | it says another begin |
 | 7 | **In order:** nothing measured before the start value, the meter counting forwards, one time one value | it does not fit the values that held before, or its own readings |
 | 8 | **Nothing after the end:** no reading after one that ends the transaction (`TX` = `E`, `L`, `R`, `A`, `P`) | there is one |
+
+**One key for all values.** Every value - the intermediate ones as well - has
+to be signed by the meter's own key. A Charge Transparency LiveLink allows the
+values between the start and the end to be signed by a key of the operator
+instead; the app takes such a value for a wrong one, and stops the session at
+its first intermediate value.
 
 A value **holds**, is **wrong**, or is **not decided**: where the identity
 keys trusted here do not suffice, or no proof kept attests a key of the meter
@@ -507,13 +517,19 @@ dispute link, the driver is told to dispute the session at the page.
   meter signs (OCMF `TT`) with it.
 - **Only prices of energy** are counted: a price per kWh. Time, parking and
   flat fees of a tariff are not worked into the cost.
+- **Values signed by the operator.** A station whose meter signs only the
+  start and the end, and whose operator signs the values between, has every
+  session stopped at its first intermediate value. Whether the app should take
+  such values - with a key of the operator the roaming network attests for it,
+  and never in place of the meter's for the start and the end - is open.
 - **A state-of-charge limit** cannot be checked: no meter measures it.
 - **The payment reference in OCMF `ID`** is up to the station and its CSMS;
   the app only checks that it is there.
 - **The CPO side** - the web payment page, the TOTP check, the start with its
   limit, the live link, the stop and dispute links - exists in this repository
   only as the stand-in of the tests
-  ([`SmartphoneTests/TestCPO.cs`](../SmartphoneTests/TestCPO.cs)).
+  ([`SmartphoneTests/TestCPO.cs`](../SmartphoneTests/TestCPO.cs)). What it has
+  to do is [WebPaymentPageInterface.md](WebPaymentPageInterface.md).
 
 
 ## Where it is in the code
