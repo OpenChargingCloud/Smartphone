@@ -2668,6 +2668,144 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
+        #region AHandOverIsTakenFromTheHostOfTheWebPaymentPageAlone()
+
+        /// <summary>
+        /// The hand-over of the web payment page names the live link of the
+        /// session, its stop link and its dispute link, the reference of its
+        /// payment and the limit chosen there, in one document: taken from the
+        /// host of the web payment page the proof of the DC station names, and
+        /// from no other - not even from the same server by another name -,
+        /// its links and its reference bound to the operator by that, and the
+        /// session stopped through its stop link. One that is none, or comes
+        /// with a live link beside it, is refused. One pasted as it is binds
+        /// nothing but the links that are at that host.
+        /// </summary>
+        [Test]
+        public async Task AHandOverIsTakenFromTheHostOfTheWebPaymentPageAlone()
+        {
+
+            cpo     = await TestCPO.Start();
+            network = await TestRoamingNetwork.Start(DCWebPayment: $"{cpo.URL}/pay");
+
+            await WithTheRoamingNetwork();
+
+            using var driver = await SignedInAs("driver1", "driver");
+
+            await Send(driver, HttpMethod.Get, "api/v1/map");
+            await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            var pool      = TestRoamingNetwork.PoolId;
+            var dc        = TestRoamingNetwork.DCEVSE;
+            var host      = new Uri(cpo.URL).Authority;
+            var elsewhere = cpo.HandOverURL("H1").Replace("127.0.0.1", "localhost");
+
+            var refusals = new (Object Request, HttpStatusCode Status, String Error)[] {
+                               (new { locationId = pool, evseUid = dc, handOver = cpo.HandOverURL("H1"), liveLink = cpo.LiveLinkURL("H1") },       HttpStatusCode.BadRequest, "'liveLink' is not handed over beside it"),
+                               (new { locationId = pool, evseUid = dc, handOver = cpo.HandOverURL("H1"), paymentReference = "payment-H1" },         HttpStatusCode.BadRequest, "'paymentReference' is not handed over beside it"),
+                               (new { locationId = pool, evseUid = dc, handOver = 42 },                                                             HttpStatusCode.BadRequest, "'handOver' is the URL of the hand-over"),
+                               (new { locationId = pool, evseUid = dc, handOver = "ftp://cpo.example/handOvers/H1" },                               HttpStatusCode.BadRequest, "is neither the https URL of a hand-over"),
+                               (new { locationId = pool, evseUid = dc, handOver = elsewhere },                                                      HttpStatusCode.Conflict,   $"and the web payment page the proof of {dc} at"),
+                               (new { locationId = pool, evseUid = TestRoamingNetwork.ACEVSE, handOver = cpo.HandOverURL("H1") },                   HttpStatusCode.Conflict,   "names is at pay.gef.example: a hand-over is taken from that host alone"),
+                               (new { locationId = pool, evseUid = dc, handOver = cpo.LiveLinkURL("H1") },                                          HttpStatusCode.BadRequest, $"What {host} answered is no hand-over: It is no hand-over of a web payment page"),
+                               (new { locationId = pool, evseUid = dc, handOver = "{ \"@context\": \"" + Charging.WebPaymentHandOver.JSONLDContext + "\" }" },
+                                                                                                                                                    HttpStatusCode.BadRequest, "Its 'liveLink' is the https URL of the live link")
+                           };
+
+            foreach (var (request, expected, error) in refusals)
+            {
+
+                var (refusedStatus, refused) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", request);
+
+                Assert.That(refusedStatus,                       Is.EqualTo(expected), $"{error}: {refused}");
+                Assert.That(refused["error"]!.Value<String>(),   Does.Contain(error));
+
+            }
+
+            Assert.That(cpo.HandOverRequests, Is.Zero, "a hand-over was asked for at another host than that of the web payment page");
+
+            var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                               new { locationId = pool, evseUid = dc, handOver = cpo.HandOverURL("H1") });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            var id    = session["id"]!.Value<String>()!;
+            var link  = session["liveLink"]!;
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(cpo.HandOverRequests,                                Is.EqualTo(1));
+                Assert.That(link["handOver"]!.Value<String>(),                    Is.EqualTo(host), "where the hand-over came from");
+                Assert.That(link["webPaymentHost"]!.Value<String>(),              Is.EqualTo(host));
+                Assert.That(link["from"]!.Value<String>(),                        Is.EqualTo(cpo.LiveLinkURL("H1")));
+                Assert.That(link["stopLink"]!.Value<String>(),                    Is.EqualTo(host));
+                Assert.That(link["disputeLink"]!.Value<String>(),                 Is.EqualTo(host));
+                Assert.That(link["paymentReference"]!.Value<String>(),            Is.EqualTo(TestCPO.PaymentReferenceOf("H1")));
+                Assert.That(link["limit"]!["maxEnergy"]!.Value<Decimal>(),        Is.EqualTo(20000m));
+                Assert.That(link["bound"]!["stopLink"]!.Value<Boolean>(),         Is.True);
+                Assert.That(link["bound"]!["disputeLink"]!.Value<Boolean>(),      Is.True);
+                Assert.That(link["bound"]!["paymentReference"]!.Value<Boolean>(), Is.True);
+                Assert.That(session.ToString(),                                   Does.Not.Contain("/handOvers/H1"), "the hand-over itself is shown");
+                Assert.That(session.ToString(),                                   Does.Not.Contain("/sessions/H1/stop"), "the stop link itself is shown");
+            }
+
+            var meter  = network.DCMeter;
+            var serial = TestRoamingNetwork.DCMeterSerial;
+
+            cpo.Send(TestRoamingNetwork.OCMF(meter, serial, TestCPO.PaymentReferenceOf("H1"), (DateTimeOffset.UtcNow, "B", 1000.000m)));
+
+            var charging = await SessionWhen(driver, id, json => json["liveLink"]?["start"] is JObject);
+
+            Assert.That(charging["liveLink"]!["start"]!["holds"]!.Value<Boolean?>(), Is.True, charging.ToString());
+
+            (status, var stopping) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{id}/stop");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                                                Is.EqualTo(HttpStatusCode.OK), stopping.ToString());
+                Assert.That(stopping["liveLink"]!["stop"]!["accepted"]!.Value<Boolean>(), Is.True);
+                Assert.That(cpo.Stops.Select(stop => stop.Session),                Is.EqualTo(new[] { "H1" }), "stopped through the stop link of the hand-over");
+            }
+
+            cpo.Send(TestRoamingNetwork.OCMF(meter, serial, TestCPO.PaymentReferenceOf("H1"), (DateTimeOffset.UtcNow, "R", 1007.000m)));
+
+            var stopped = await SessionWhen(driver, id, json => json["status"]?.Value<String>() == "stopped" && json["liveLink"]?["end"] is JObject);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(stopped["energyKWh"]!.Value<Decimal>(),                         Is.EqualTo(7m), stopped.ToString());
+                Assert.That(stopped["liveLink"]!["end"]!["holds"]!.Value<Boolean?>(),        Is.True);
+                Assert.That(stopped["liveLink"]!["disputeBecause"]!.Type,                    Is.EqualTo(JTokenType.Null));
+                Assert.That(stopped["liveLink"]!["ending"]!["because"]!.Value<String>(),     Does.Contain("20 kWh was not reached: 7 kWh"), "the limit of the hand-over");
+            }
+
+            // Pasted as it is: bound to nothing but what is at the host of the
+            // web payment page - here its stop link, not its dispute link.
+            cpo.Send(null);
+
+            var pasted = cpo.HandOver("H2");
+            pasted["disputeLink"] = cpo.DisputeLinkURL("H2").Replace("127.0.0.1", "localhost");
+
+            (status, var typed) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                             new { locationId = pool, evseUid = dc, handOver = pasted.ToString() });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), typed.ToString());
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(cpo.HandOverRequests,                                          Is.EqualTo(1), "a hand-over pasted is asked for");
+                Assert.That(typed["liveLink"]!["handOver"]!.Type,                           Is.EqualTo(JTokenType.Null));
+                Assert.That(typed["liveLink"]!["webPaymentHost"]!.Value<String>(),          Is.EqualTo(host));
+                Assert.That(typed["liveLink"]!["paymentReference"]!.Value<String>(),        Is.EqualTo(TestCPO.PaymentReferenceOf("H2")));
+                Assert.That(typed["liveLink"]!["bound"]!["stopLink"]!.Value<Boolean>(),     Is.True,  "a stop link at the host of the web payment page");
+                Assert.That(typed["liveLink"]!["bound"]!["disputeLink"]!.Value<Boolean>(),  Is.False, "a dispute link at another host");
+                Assert.That(typed["liveLink"]!["bound"]!["paymentReference"]!.Value<Boolean>(), Is.False, "a payment reference pasted");
+            }
+
+        }
+
+        #endregion
+
     }
 
 }

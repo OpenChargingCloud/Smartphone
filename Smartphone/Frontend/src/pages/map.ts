@@ -348,9 +348,22 @@ export const mapPage: Page = {
                     ` : nothing}
 
                     ${mayCharge && signed && checked?.verified === true && (paying.get(id) ?? pick) !== undefined ? html`
+                        <div class="hand-over">
+                            <label class="small">
+                                Paid there? The hand-over its page gave, for ${paying.get(id) ?? pick}:
+                                <input name="handOver" type="text" autocomplete="off" placeholder="https://..." ?disabled=${busy}
+                                       @keydown=${(event: KeyboardEvent) => { if (event.key === 'Enter') void takeHandOver(location, paying.get(id) ?? pick, (event.target as HTMLElement).closest<HTMLElement>('.hand-over')!); }}>
+                            </label>
+                            <button type="button" class="btn" ?disabled=${busy}
+                                    @click=${(event: MouseEvent) => void takeHandOver(location, paying.get(id) ?? pick,
+                                                                                        (event.currentTarget as HTMLElement).closest<HTMLElement>('.hand-over')!)}>
+                                <i class="fa-solid fa-handshake"></i> Take it over
+                            </button>
+                            <div class="small muted">Its live link, its links, the reference of the payment and the limit in one - taken from the host of its web payment page alone.</div>
+                        </div>
                         <div class="live-link">
                             <label class="small">
-                                Paid there? The live link its page gave, for ${paying.get(id) ?? pick}:
+                                No hand-over? The live link its page gave, for ${paying.get(id) ?? pick}:
                                 <input name="liveLink" type="text" autocomplete="off"
                                        placeholder="https://... or its document" ?disabled=${busy}
                                        @keydown=${(event: KeyboardEvent) => { if (event.key === 'Enter') void followLiveLink(location, paying.get(id) ?? pick, (event.target as HTMLElement).closest<HTMLElement>('.live-link')!); }}>
@@ -538,6 +551,47 @@ export const mapPage: Page = {
                                         ...(reference   !== '' ? { paymentReference: reference } : {}),
                                         ...(limit !== undefined ? { limit }      : {})
                                     });
+
+                paying.delete(location.id);
+
+                if (!cancelled)
+                    navigate(`/charging?session=${encodeURIComponent(session.id)}`);
+
+            }
+            catch (error)
+            {
+                if (!cancelled)
+                    failed.set(location.id, errorMessage(error));
+            }
+            finally
+            {
+                starting.delete(location.id);
+                if (!cancelled)
+                    drawPopup(location.id);
+            }
+
+        }
+
+
+        /**
+         * Take over the session the web payment page started at an EVSE through the hand-over it gave - its URL, or its document - and show the
+         * session.
+         */
+        async function takeHandOver(location: ChargingLocation, evseUid: string | undefined, form: HTMLElement): Promise<void> {
+
+            const handOver = form.querySelector<HTMLInputElement>('input[name="handOver"]')!.value.trim();
+
+            if (evseUid === undefined || handOver === '' || starting.has(location.id))
+                return;
+
+            starting.add(location.id);
+            failed.delete(location.id);
+            drawPopup(location.id);
+
+            try
+            {
+
+                const session = await api.charging.takeOver(location.id, evseUid, handOver);
 
                 paying.delete(location.id);
 

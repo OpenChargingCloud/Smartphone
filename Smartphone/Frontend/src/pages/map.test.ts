@@ -321,6 +321,41 @@ describe('the map of a roaming network', () => {
 
     });
 
+    it('takes over the hand-over the web payment page gave, in place of its live link and its links', async () => {
+
+        verified  = true;
+        checked   = false;
+        payments  = [ { url: 'https://pay.gef.example/stations/S1', of: 'chargingStation', error: null } ];
+
+        try
+        {
+
+            const root = await opened();
+
+            await until(() => root.querySelector('.station-popup .hand-over') !== null, 'no way to take over the hand-over');
+
+            const handOver = root.querySelector<HTMLElement>('.station-popup .hand-over')!;
+
+            assert.match(handOver.textContent!, /The hand-over its page gave, for DE\*GEF\*E1\*1/);
+            assert.match(handOver.textContent!, /taken from the host of its web payment page alone/);
+            assert.match(root.querySelector('.station-popup .live-link')!.textContent!, /No hand-over\? The live link its page gave/);
+
+            typeInto(handOver.querySelector<HTMLInputElement>('input[name="handOver"]')!, ' https://pay.gef.example/handOvers/S1 ');
+            handOver.querySelector<HTMLButtonElement>('button')!.click();
+
+            await until(() => asked.some(one => one.method === 'POST' && one.path === '/charging/sessions'), 'the hand-over was not handed over');
+
+            assert.deepEqual(asked.filter(one => one.method === 'POST').pop()!.body,
+                             { locationId: 'DE*GEF*P1', evseUid: 'DE*GEF*E1*1', handOver: 'https://pay.gef.example/handOvers/S1' });
+
+        }
+        finally
+        {
+            payments = [];
+        }
+
+    });
+
     it('says when a station is not signed as the trust anchor requires, and charges nothing there', async () => {
 
         verified = false;

@@ -38,7 +38,9 @@ namespace cloud.charging.open.Smartphone.Tests
     /// test sets it. Nothing is there to ask before the test sets something.
     /// Its stop link, at /sessions/{session}/stop, takes a POST - and answers
     /// what the test sets, 200 at first. So does its dispute link, at
-    /// /sessions/{session}/dispute.
+    /// /sessions/{session}/dispute. And its hand-over, at
+    /// /handOvers/{session}: all of these in one document, with the payment
+    /// reference "payment-{session}" and a limit of 20 kWh.
     /// </summary>
     public sealed class TestCPO : IAsyncDisposable
     {
@@ -48,6 +50,7 @@ namespace cloud.charging.open.Smartphone.Tests
         private readonly HTTPServer                                   server;
         private volatile String?                                      live;
         private          Int32                                        liveRequests;
+        private          Int32                                        handOverRequests;
         private readonly ConcurrentQueue<(String Session, String Body)>  stops     = new();
         private readonly ConcurrentQueue<(String Session, String Body)>  disputes  = new();
 
@@ -66,6 +69,12 @@ namespace cloud.charging.open.Smartphone.Tests
         /// </summary>
         public Int32 LiveRequests
             => liveRequests;
+
+        /// <summary>
+        /// How often a hand-over was asked for.
+        /// </summary>
+        public Int32 HandOverRequests
+            => handOverRequests;
 
         /// <summary>
         /// The stops asked for over its stop links: of which session, and
@@ -116,6 +125,7 @@ namespace cloud.charging.open.Smartphone.Tests
             api.AddHandler(HTTPPath.Parse("/sessions/{session}/live"),  request => Task.FromResult(cpo.GetLive(request)),      HTTPMethod.GET);
             api.AddHandler(HTTPPath.Parse("/sessions/{session}/stop"),  request => Task.FromResult(cpo.PostStop(request)),     HTTPMethod.POST);
             api.AddHandler(HTTPPath.Parse("/sessions/{session}/dispute"), request => Task.FromResult(cpo.PostDispute(request)), HTTPMethod.POST);
+            api.AddHandler(HTTPPath.Parse("/handOvers/{session}"),      request => Task.FromResult(cpo.GetHandOver(request)),  HTTPMethod.GET);
 
             await server.Start();
 
@@ -177,6 +187,36 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
+        #region HandOverURL(Session) / HandOver(Session) / PaymentReferenceOf(Session)
+
+        /// <summary>
+        /// Where the hand-over of the given session is.
+        /// </summary>
+        public String HandOverURL(String Session)
+            => $"{URL}/handOvers/{Session}";
+
+        /// <summary>
+        /// The hand-over of the given session: its live link, its stop link
+        /// and its dispute link, the reference of its payment and a limit of
+        /// 20 kWh.
+        /// </summary>
+        public JObject HandOver(String Session)
+
+            => new Charging.WebPaymentHandOver(LiveLinkURL(Session),
+                                               StopLinkURL(Session),
+                                               DisputeLinkURL(Session),
+                                               PaymentReferenceOf(Session),
+                                               new Charging.TransactionLimit(MaxEnergy: 20000m)).ToJSON();
+
+        /// <summary>
+        /// The reference of the payment of the given session, as its hand-over
+        /// gives it.
+        /// </summary>
+        public static String PaymentReferenceOf(String Session)
+            => $"payment-{Session}";
+
+        #endregion
+
         #region Send(SignedDocument)
 
         /// <summary>
@@ -191,12 +231,22 @@ namespace cloud.charging.open.Smartphone.Tests
         #endregion
 
 
-        #region (private) GetLiveLink(Request) / GetLive(Request) / PostStop(Request) / PostDispute(Request)
+        #region (private) GetLiveLink(Request) / GetHandOver(Request) / GetLive(Request) / PostStop(Request) / PostDispute(Request)
 
         private HTTPResponse GetLiveLink(HTTPRequest Request)
 
             => Response(Request, HTTPStatusCode.OK, HTTPContentType.Application.JSON_UTF8,
                         LiveLink(Request.ParsedURLParameters[0]).ToString());
+
+        private HTTPResponse GetHandOver(HTTPRequest Request)
+        {
+
+            Interlocked.Increment(ref handOverRequests);
+
+            return Response(Request, HTTPStatusCode.OK, HTTPContentType.Application.JSON_UTF8,
+                            HandOver(Request.ParsedURLParameters[0]).ToString());
+
+        }
 
         private HTTPResponse GetLive(HTTPRequest Request)
         {

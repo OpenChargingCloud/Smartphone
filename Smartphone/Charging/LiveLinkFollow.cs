@@ -323,6 +323,15 @@ namespace cloud.charging.open.Smartphone.Charging
     /// the page gave none, that the values are of this very session is not
     /// proven: the live link names the charge point alone.
     /// </para>
+    /// <para>
+    /// What the page gave is bound to the operator of the station where it
+    /// came from the host of the web payment page the proof of the station
+    /// names (<see cref="WebPaymentPage"/>): a stop link or a dispute link at
+    /// that host (<see cref="StopLinkBound"/>, <see cref="DisputeLinkBound"/>),
+    /// and the payment reference of a hand-over the phone took from there
+    /// (<see cref="HandOver"/>, <see cref="PaymentReferenceBound"/>). What was
+    /// typed or pasted, or is at another host, is the word of whoever gave it.
+    /// </para>
     /// </remarks>
     /// <param name="Link">The live link, its JSON document as it was handed over or fetched.</param>
     /// <param name="From">The URL it was fetched from, or null where the document itself was handed over.</param>
@@ -342,6 +351,8 @@ namespace cloud.charging.open.Smartphone.Charging
     /// <param name="DisputeLink">The dispute link the web payment page gave for the session, where it gave one.</param>
     /// <param name="Dispute">The dispute this phone sent the page last, where it sent one.</param>
     /// <param name="PaymentReference">The reference of the payment the page took, which every signed value of the session names as its identification, where the page gave one.</param>
+    /// <param name="WebPaymentPage">The web payment page the proof of the station named when the live link was handed over, where it named one.</param>
+    /// <param name="HandOver">The URL of the hand-over the page gave, at the host of that page, where the phone took it from there - null where what the page gave was typed or pasted.</param>
     public sealed record LiveLinkFollow(JObject                           Link,
                                         String?                           From,
                                         DateTimeOffset                    HandedOverAt,
@@ -359,7 +370,9 @@ namespace cloud.charging.open.Smartphone.Charging
                                         LiveLinkStop?                     Stop           = null,
                                         String?                           DisputeLink       = null,
                                         LiveLinkDispute?                  Dispute           = null,
-                                        String?                           PaymentReference  = null)
+                                        String?                           PaymentReference  = null,
+                                        String?                           WebPaymentPage    = null,
+                                        String?                           HandOver          = null)
     {
 
         #region Data
@@ -444,9 +457,47 @@ namespace cloud.charging.open.Smartphone.Charging
         /// the link itself, which stops the session for anyone who has it.
         /// </summary>
         public String? StopLinkHost
-            => StopLink is not null && Uri.TryCreate(StopLink, UriKind.Absolute, out var uri)
-                   ? uri.Authority
-                   : null;
+            => WebPaymentHandOver.HostOf(StopLink);
+
+        /// <summary>
+        /// Where the web payment page the proof of the station names is: its
+        /// host - what binds a link to the operator of the station.
+        /// </summary>
+        public String? WebPaymentHost
+            => WebPaymentHandOver.HostOf(WebPaymentPage);
+
+        /// <summary>
+        /// Where the hand-over the phone took came from: its host - not the
+        /// link, which gives the stop link to anyone who has it.
+        /// </summary>
+        public String? HandOverHost
+            => WebPaymentHandOver.HostOf(HandOver);
+
+        /// <summary>
+        /// Whether its stop link is bound to the operator of the station: it is
+        /// at the host of the web payment page the proof of the station names.
+        /// </summary>
+        public Boolean StopLinkBound
+            => IsBound(StopLinkHost);
+
+        /// <summary>
+        /// Whether its dispute link is bound to the operator of the station: it
+        /// is at the host of the web payment page the proof of the station
+        /// names.
+        /// </summary>
+        public Boolean DisputeLinkBound
+            => IsBound(DisputeLinkHost);
+
+        /// <summary>
+        /// Whether its payment reference is bound to the operator of the
+        /// station: it came with a hand-over the phone took from the host of
+        /// the web payment page the proof of the station names.
+        /// </summary>
+        public Boolean PaymentReferenceBound
+            => PaymentReference is not null && IsBound(HandOverHost);
+
+        private Boolean IsBound(String? Host)
+            => Host is not null && WebPaymentHost is String webPayment && String.Equals(Host, webPayment, StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// Whether the page took a stop this phone asked for.
@@ -533,9 +584,7 @@ namespace cloud.charging.open.Smartphone.Charging
         /// Where its dispute link goes, for the pages and the log: its host.
         /// </summary>
         public String? DisputeLinkHost
-            => DisputeLink is not null && Uri.TryCreate(DisputeLink, UriKind.Absolute, out var uri)
-                   ? uri.Authority
-                   : null;
+            => WebPaymentHandOver.HostOf(DisputeLink);
 
         /// <summary>
         /// Whether the session is disputed still, and the page gave a dispute
@@ -730,7 +779,10 @@ namespace cloud.charging.open.Smartphone.Charging
         /// goes - its host, not the link -, the limit the driver chose, and the
         /// stop this phone asked for. Why this phone disputes the session,
         /// where its dispute link goes, and the dispute it sent. And the
-        /// reference of the payment its signed values are to name.
+        /// reference of the payment its signed values are to name. Where the
+        /// web payment page the proof of the station names is, where the
+        /// hand-over came from, and which of what the page gave is bound to
+        /// the operator of the station by that.
         /// </summary>
         public JObject ToJSON()
         {
@@ -793,7 +845,14 @@ namespace cloud.charging.open.Smartphone.Charging
                         new JProperty("disputeBecause", DisputeBecause),
                         new JProperty("disputeLink",    DisputeLinkHost),
                         new JProperty("dispute",        Dispute?.ToJSON()),
-                        new JProperty("paymentReference", PaymentReference));
+                        new JProperty("paymentReference", PaymentReference),
+                        new JProperty("webPaymentHost",   WebPaymentHost),
+                        new JProperty("handOver",         HandOverHost),
+                        new JProperty("bound",            new JObject(
+                                                              new JProperty("stopLink",          StopLinkBound),
+                                                              new JProperty("disputeLink",       DisputeLinkBound),
+                                                              new JProperty("paymentReference",  PaymentReferenceBound)
+                                                          )));
 
         }
 
@@ -831,6 +890,8 @@ namespace cloud.charging.open.Smartphone.Charging
             if (DisputeLink   is not null)  json.Add(new JProperty("disputeLink",    DisputeLink));
             if (Dispute       is not null)  json.Add(new JProperty("dispute",        Dispute.ToJSON()));
             if (PaymentReference is not null) json.Add(new JProperty("paymentReference", PaymentReference));
+            if (WebPaymentPage   is not null) json.Add(new JProperty("webPaymentPage",   WebPaymentPage));
+            if (HandOver         is not null) json.Add(new JProperty("handOver",         HandOver));
 
             return json;
 
@@ -881,7 +942,9 @@ namespace cloud.charging.open.Smartphone.Charging
                                       LiveLinkStop.   TryParse(json["stop"]),
                                       json.Value<String>("disputeLink"),
                                       LiveLinkDispute.TryParse(json["dispute"]),
-                                      json.Value<String>("paymentReference"));
+                                      json.Value<String>("paymentReference"),
+                                      json.Value<String>("webPaymentPage"),
+                                      json.Value<String>("handOver"));
 
         }
 

@@ -310,6 +310,7 @@ ul.trust-keys {
 
     // The live link the web payment page gave, handed over - with its stop
     // link, and the limit chosen there.
+    .hand-over,
     .live-link {
 
         display:         flex;

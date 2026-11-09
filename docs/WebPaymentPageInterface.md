@@ -9,9 +9,9 @@ This is the contract for whoever builds the CPO's side. How a session goes
 from the driver's point of view, step by step, is
 [AdHocChargingAtTheCPO.md](AdHocChargingAtTheCPO.md).
 
-**Status:** this is what the phone does today (Smartphone `c30d94a`, November
-2026). The links, their bodies and the payment reference are conventions of
-this family, not a standard: no Charge Transparency LiveLink carries them yet.
+**Status:** this is what the phone does today (November 2026). The hand-over,
+the links, their bodies and the payment reference are conventions of this
+family, not a standard: no Charge Transparency LiveLink carries them.
 The only implementation of the CPO's side is the stand-in of the phone's tests,
 [`SmartphoneTests/TestCPO.cs`](../SmartphoneTests/TestCPO.cs). *Must* and
 *should* mean what the phone requires and what it recommends.
@@ -21,21 +21,60 @@ The only implementation of the CPO's side is the stand-in of the phone's tests,
 
 | | From | To | Over | Required |
 |---|---|---|---|---|
-| **live link** | the page | the phone | the driver | yes |
+| **hand-over** | the page | the phone | the driver, once | no - without it, the driver hands over each of the rest |
+| **live link** | the page | the phone | the hand-over, or the driver | yes |
 | **signed meter values** | the meter | the phone | the live link | yes |
-| **stop link** | the page | the phone | the driver | no - without it, the driver stops the session at the page |
-| **dispute link** | the page | the phone | the driver | no - without it, the driver disputes the session at the page |
-| **payment reference** | the page | the phone, and the meter | the driver; the CSMS and the station | no - without it, the values are not proven to be of this session |
-| **limit** | the page | the phone, and the station | the driver; OCPP 2.1 | no - without it, nothing is compared at the end |
+| **stop link** | the page | the phone | the hand-over, or the driver | no - without it, the driver stops the session at the page |
+| **dispute link** | the page | the phone | the hand-over, or the driver | no - without it, the driver disputes the session at the page |
+| **payment reference** | the page | the phone, and the meter | the hand-over, or the driver; the CSMS and the station | no - without it, the values are not proven to be of this session |
+| **limit** | the page | the phone, and the station | the hand-over, or the driver; OCPP 2.1 | no - without it, nothing is compared at the end |
 | **stop** | the phone | the page | a POST to the stop link | - |
 | **dispute** | the phone | the page | a POST to the dispute link | - |
 
-The driver hands over what the page gave by typing or pasting it into the
-popup of the station in the phone, at the charge point paid for. How the page
-could hand it over itself is an [open point](#open-points).
+The driver hands over what the page gave in the popup of the station in the
+phone, at the charge point paid for: the URL of the hand-over, which names all
+the rest - or, where the page gives none, the live link, the links, the
+reference and the limit, each typed or pasted.
 
 
 ## 1. What the page gives the driver
+
+### The hand-over
+
+All that follows in one document, which the page gives at an `https` URL of
+this session alone - as a link, or as text to copy -, so that the driver hands
+over one thing, not five:
+
+```json
+{
+  "@context":          "https://open.charging.cloud/contexts/wwcp/webPayment/handOver/v1",
+  "liveLink":          "https://pay.gef.example/liveLinks/4711",
+  "stopLink":          "https://pay.gef.example/sessions/4711/stop?key=9f2c...",
+  "disputeLink":       "https://pay.gef.example/sessions/4711/dispute?key=41ab...",
+  "paymentReference":  "GEF-2026-11-09-0815",
+  "limit":             { "maxEnergy": 20000 }
+}
+```
+
+- It must name its `@context` and its `liveLink`: the URL of the live link, or
+  the live link document itself. `stopLink`, `disputeLink`,
+  `paymentReference` and `limit` are each as below, and may be left out; what
+  else it says, the phone passes over.
+- Its URL must be at the **host of the web payment page** the proof of the
+  station names - the `webPaymentURL` of the station, else of its pool, else
+  of its operator, as a CPO key that may sign `payments` signed it -, port
+  included. The phone asks no other host: a hand-over elsewhere is refused
+  before it is asked, and so is one where the proof names no web payment page.
+- The phone asks it with a `GET`, `Accept: application/json`, and waits 30
+  seconds at most; it must answer `2xx` with the document.
+- What it says is then what the page says: its **payment reference** is bound
+  to the CPO, and so is every **link at that host** (see
+  [Security](#security)). The links should be at that host.
+- It gives the stop link and the dispute link to whoever has it: it is a secret
+  of the session as they are. The phone keeps its URL, and shows and logs its
+  host only.
+- The driver may paste the document itself as well. That binds nothing to the
+  CPO but the links at the host of the web payment page, as typing them does.
 
 ### The live link
 
@@ -71,7 +110,9 @@ document, or the URL of one.
 Each an `https` URL of this session alone, query included. Whoever has one
 can stop or dispute the session: they are secrets of it (see
 [Security](#security)). The phone keeps them whole and shows and logs their
-host only.
+host only. Each should be at the host of the web payment page the proof of
+the station names: there it is the CPO's, and the session page says so;
+elsewhere it says that it is not proven to be.
 
 ### The payment reference
 
@@ -276,12 +317,18 @@ station of this family do it is not checked here.
 - **The links are keys.** A stop link stops the session, a dispute link
   disputes it, for anybody: each should hold at least 128 random bits, be of
   one session alone, be `https`, and stop working once the payment is settled.
-- **Nothing of the hand-over is signed.** The phone binds what it can: the
-  live link to the charge point it names, every value to the meter's attested
-  key, and - by the payment reference - to the payment. It does not check that
-  the stop and dispute links are the CPO's: their host is not compared with the
-  signed `webPaymentURL`. A forged stop link that answers `2xx` makes the phone
-  believe the station stops; the phone sees only that no end comes.
+- **The host of the web payment page binds the hand-over to the CPO.** That
+  host is in the station's proof, signed by a CPO key that may sign
+  `payments`, and TLS proves who answers there: a hand-over is taken from that
+  host alone, its payment reference is the page's, and a stop or dispute link
+  at that host is the CPO's - the session page says which are. Nothing of the
+  hand-over itself is signed.
+- **The rest is the word of whoever gave it:** links at another host, and a
+  reference typed or pasted. A forged stop link that answers `2xx` makes the
+  phone believe the station stops; the phone sees only that no end comes.
+- **The values are bound regardless:** the live link to the charge point it
+  names, every value to the key the roaming network attests, and - by the
+  payment reference - to the payment.
 - **The payment reference is public** to whoever sees the meter values: it is
   no secret, and no personal data should be in it.
 
@@ -297,22 +344,27 @@ the smallest page the phone works with:
 | `GET /sessions/{session}/live` | the latest signed value, `text/plain`; `404` before the first |
 | `POST /sessions/{session}/stop` | `200` `{ "message": "The station stops." }`, or what a test sets |
 | `POST /sessions/{session}/dispute` | `200` `{ "message": "The dispute is taken." }`, or what a test sets |
+| `GET /handOvers/{session}` | the hand-over: the live link, the stop and dispute links above, the payment reference `payment-{session}` and a limit of 20 kWh, `application/json` |
+
+The tests give the DC station the stand-in's own URL as its web payment page,
+so that its hand-over is taken from there. The stand-in serves `http` on the
+loopback, which the phone allows there alone.
 
 A real page can be tried the same way: on a phone that trusts the roaming
-network of the station, hand its live link, links and reference over at the
-charge point paid for, and watch the session's page - what held, what was
+network of the station, hand its hand-over over at the charge point paid for -
+or its live link, links and reference -, and watch the session's page: where
+the hand-over came from and what of it is the CPO's, what held, what was
 stopped, what was disputed and what the page answered.
 
 
 ## Open points
 
-- **The hand-over is typed or pasted.** One machine-readable hand-over is
-  missing: e.g. the live link document carrying `stopLink`, `disputeLink`,
-  `paymentReference` and `limit` - which ChargyCore's LiveLink would have to
-  declare -, an app link the page redirects to, or a QR code of its own.
-- **The links are not attested.** They could be bound to the CPO by asking
-  their host to be that of the signed `webPaymentURL`, or by the CPO signing the
-  hand-over with a key the roaming network attests for `payments`.
+- **The driver still carries the hand-over** from the page to the phone, as
+  one URL to copy. An app link the page redirects to, or a QR code of that URL
+  the phone scans, would spare that; the phone has neither.
+- **Links at another host** than that of the web payment page are not bound to
+  the CPO, nor is anything typed or pasted. Binding them would take the CPO
+  signing the hand-over with a key the roaming network attests for `payments`.
 - **The answer to a dispute has no form:** no case number, no place to ask how
   it is decided.
 - **A dispute the page did not take** is sent again only where the driver asks,

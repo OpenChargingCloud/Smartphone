@@ -155,12 +155,15 @@ namespace cloud.charging.open.Smartphone.Tests
         #endregion
 
 
-        #region (static) Start(Now = null)
+        #region (static) Start(Now = null, DCWebPayment = null)
 
         /// <summary>
-        /// The network, attested now, served on a free port of the loopback.
+        /// The network, attested now, served on a free port of the loopback -
+        /// the web payment page of its DC station where a test gives one, as
+        /// a test CPO serves it, else <see cref="DCWebPaymentURL"/>.
         /// </summary>
-        public static async Task<TestRoamingNetwork> Start(DateTimeOffset? Now = null)
+        public static async Task<TestRoamingNetwork> Start(DateTimeOffset?  Now           = null,
+                                                           String?          DCWebPayment  = null)
         {
 
             var now          = Now ?? DateTimeOffset.UtcNow;
@@ -232,7 +235,7 @@ namespace cloud.charging.open.Smartphone.Tests
                                    new JProperty("lastChange",   created.ToISO8601()),
                                    new JProperty("chargingStations", new JArray(
                                        Station(ACStation, ACEVSE, "AC_ThreePhases", 22000, "IEC_62196_T2",       "SOCKET", ACTariff, "meter-ac-1", "AC-2026-001", acMeterKey, created),
-                                       WithWebPayment(Station(DCStation, DCEVSE, "DC", 150000, "IEC_62196_T2_COMBO", "CABLE", DCTariff, "meter-dc-1", DCMeterSerial, dcMeterKey, created), DCWebPaymentURL)
+                                       WithWebPayment(Station(DCStation, DCEVSE, "DC", 150000, "IEC_62196_T2_COMBO", "CABLE", DCTariff, "meter-dc-1", DCMeterSerial, dcMeterKey, created), DCWebPayment ?? DCWebPaymentURL)
                                    ))
                                )))
                            )))

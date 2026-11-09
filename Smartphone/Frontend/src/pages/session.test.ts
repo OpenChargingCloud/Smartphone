@@ -259,6 +259,37 @@ describe('a charging session', () => {
 
     });
 
+    it('says where the hand-over came from, and which link and which payment reference are bound to the operator', async () => {
+
+        const link = liveLinkSession().liveLink!;
+
+        current = liveLinkSession({ liveLink: { ...link, stopLink: 'pay.gef.example', disputeLink: 'other.example',
+                                                bound: { stopLink: true, disputeLink: false, paymentReference: true } } });
+
+        let root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                              smartphone, root => root.querySelector('.session-live-link') !== null);
+
+        let text = root.querySelector('.session-live-link')!.textContent!;
+
+        assert.match(text, /Hand-over\s*from pay\.gef\.example, the host of the web payment page its proof names/);
+        assert.match(text, /Payment reference\s*web-payment-S1: every signed value is to name it -\s*from the web payment page its proof names/);
+        assert.match(text, /Stop link\s*at pay\.gef\.example, the host of the web payment page its proof names/);
+        assert.match(text, /Dispute link\s*at other\.example, not pay\.gef\.example, the host of the web payment page its proof names: not proven to be its operator's/);
+
+        current = liveLinkSession({ liveLink: { ...link, handOver: null, webPaymentHost: null, stopLink: 'pay.gef.example',
+                                                bound: { stopLink: false, disputeLink: false, paymentReference: false } } });
+
+        root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                          smartphone, root => root.querySelector('.session-live-link') !== null);
+
+        text = root.querySelector('.session-live-link')!.textContent!;
+
+        assert.match(text, /Hand-over\s*none taken: what its page gave was typed or pasted/);
+        assert.match(text, /web-payment-S1: every signed value is to name it -\s*typed or pasted, not proven to be that of its page/);
+        assert.match(text, /Stop link\s*at pay\.gef\.example: not proven to be its operator's, as its proof names no web payment page/);
+
+    });
+
     it('says no signed start value came over a live link yet, and one that could not be checked', async () => {
 
         const link = liveLinkSession().liveLink!;

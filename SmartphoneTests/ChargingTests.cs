@@ -591,6 +591,130 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
+        #region AHandOverNamesWhatThePageGave()
+
+        /// <summary>
+        /// A hand-over names its @context and the live link, and may name the
+        /// stop link, the dispute link, the payment reference and the limit -
+        /// each one that is one, and passes over what else it says. It reads
+        /// as it is written.
+        /// </summary>
+        [Test]
+        public void AHandOverNamesWhatThePageGave()
+        {
+
+            JObject HandOver(params JProperty[] Properties)
+            {
+                var json = new JObject(new JProperty("@context", WebPaymentHandOver.JSONLDContext),
+                                       new JProperty("liveLink", "https://pay.example/liveLinks/S1"));
+                foreach (var property in Properties)
+                    json[property.Name] = property.Value;
+                return json;
+            }
+
+            String? ErrorOf(JObject JSON)
+                => WebPaymentHandOver.TryParse(JSON, out _, out var error) ? null : error;
+
+            var full = new WebPaymentHandOver(new JValue("https://pay.example/liveLinks/S1"),
+                                              "https://pay.example/sessions/S1/stop",
+                                              "https://pay.example/sessions/S1/dispute",
+                                              "payment-S1",
+                                              new TransactionLimit(MaxEnergy: 20000m));
+
+            var json = full.ToJSON();
+            json.Add(new JProperty("validUntil", "2026-11-10T00:00:00Z"));
+
+            Assert.Multiple(() => {
+
+                Assert.That(WebPaymentHandOver.TryParse(json, out var read, out var error), Is.True, error);
+                Assert.That(read!.LiveLink.Value<String>(),    Is.EqualTo("https://pay.example/liveLinks/S1"));
+                Assert.That(read.StopLink,                     Is.EqualTo(full.StopLink));
+                Assert.That(read.DisputeLink,                  Is.EqualTo(full.DisputeLink));
+                Assert.That(read.PaymentReference,             Is.EqualTo("payment-S1"));
+                Assert.That(read.Limit,                        Is.EqualTo(full.Limit));
+                Assert.That(json["@context"]!.Value<String>(), Is.EqualTo("https://open.charging.cloud/contexts/wwcp/webPayment/handOver/v1"));
+
+                Assert.That(WebPaymentHandOver.TryParse(HandOver(), out var bare, out _), Is.True);
+                Assert.That(bare!.StopLink,                    Is.Null);
+                Assert.That(bare.Limit,                        Is.Null);
+
+                Assert.That(ErrorOf(HandOver(new JProperty("@context", "https://open.charging.cloud/contexts/chargeTransparency/live/link/1.0"))),
+                                                                                     Does.StartWith("It is no hand-over of a web payment page"));
+                Assert.That(ErrorOf(new JObject(new JProperty("@context", WebPaymentHandOver.JSONLDContext))),   Does.Contain("'liveLink'"));
+                Assert.That(ErrorOf(HandOver(new JProperty("liveLink", 42))),                                    Does.Contain("'liveLink'"));
+                Assert.That(ErrorOf(HandOver(new JProperty("liveLink", " "))),                                   Does.Contain("'liveLink'"));
+                Assert.That(ErrorOf(HandOver(new JProperty("stopLink", "http://pay.example/stop"))),             Does.Contain("'stopLink' 'http://pay.example/stop' is no https URL"));
+                Assert.That(ErrorOf(HandOver(new JProperty("disputeLink", new JArray()))),                       Does.Contain("'disputeLink' is a text"));
+                Assert.That(ErrorOf(HandOver(new JProperty("paymentReference", "a\u0007b"))),                    Does.Contain("is no payment reference"));
+                Assert.That(ErrorOf(HandOver(new JProperty("paymentReference", new String('p', 256)))),          Does.Contain("is no payment reference"));
+                Assert.That(ErrorOf(HandOver(new JProperty("limit", new JObject(new JProperty("maxSoC", 120))))), Does.Contain("'limit.maxSoC'"));
+                Assert.That(ErrorOf(HandOver(new JProperty("stopLink", "http://127.0.0.1:8080/stop"))),          Is.Null, "a stop link on this machine's loopback");
+
+            });
+
+        }
+
+        #endregion
+
+        #region WhatThePageGaveIsBoundByTheHostOfItsWebPaymentPage()
+
+        /// <summary>
+        /// A stop link and a dispute link are bound to the operator where they
+        /// are at the host of the web payment page the proof of the station
+        /// names - its port as well -, the payment reference where it came
+        /// with a hand-over from there. Nothing is bound where the proof named
+        /// no web payment page. The hand-over is kept, and shown by its host
+        /// alone.
+        /// </summary>
+        [Test]
+        public void WhatThePageGaveIsBoundByTheHostOfItsWebPaymentPage()
+        {
+
+            var at    = new DateTimeOffset(2026, 11, 9, 8, 0, 0, TimeSpan.Zero);
+            var link  = new JObject(new JProperty("@context", "https://open.charging.cloud/contexts/chargeTransparency/live/link/1.0"));
+
+            var handedOver  = new LiveLinkFollow(link, null, at,
+                                                 StopLink:          "https://PAY.example/sessions/S1/stop",
+                                                 DisputeLink:       "https://pay.example:8443/sessions/S1/dispute",
+                                                 PaymentReference:  "payment-S1",
+                                                 WebPaymentPage:    "https://pay.example/stations/S1",
+                                                 HandOver:          "https://pay.example/handOvers/S1");
+
+            var typed       = handedOver with { HandOver = null };
+            var noPage      = handedOver with { WebPaymentPage = null };
+            var read        = LiveLinkFollow.TryParse(handedOver.ToStorageJSON())!;
+            var shown       = read.ToJSON();
+
+            Assert.Multiple(() => {
+
+                Assert.That(handedOver.StopLinkBound,          Is.True,  "a stop link at the host of the web payment page, in other letters");
+                Assert.That(handedOver.DisputeLinkBound,       Is.False, "a dispute link at another port");
+                Assert.That(handedOver.PaymentReferenceBound,  Is.True);
+
+                Assert.That(typed.StopLinkBound,               Is.True,  "a stop link typed at the host of the web payment page");
+                Assert.That(typed.PaymentReferenceBound,       Is.False, "a payment reference typed");
+
+                Assert.That(noPage.StopLinkBound,              Is.False);
+                Assert.That(noPage.PaymentReferenceBound,      Is.False);
+
+                Assert.That(read.WebPaymentPage,               Is.EqualTo("https://pay.example/stations/S1"));
+                Assert.That(read.HandOver,                     Is.EqualTo("https://pay.example/handOvers/S1"));
+                Assert.That(read.PaymentReferenceBound,        Is.True);
+                Assert.That(shown["handOver"]!.Value<String>(),        Is.EqualTo("pay.example"));
+                Assert.That(shown["webPaymentHost"]!.Value<String>(),  Is.EqualTo("pay.example"));
+                Assert.That(shown["bound"]!["stopLink"]!.Value<Boolean>(),          Is.True);
+                Assert.That(shown["bound"]!["disputeLink"]!.Value<Boolean>(),       Is.False);
+                Assert.That(shown["bound"]!["paymentReference"]!.Value<Boolean>(),  Is.True);
+                Assert.That(shown.ToString(),                  Does.Not.Contain("/handOvers/S1"), "the hand-over itself is shown");
+
+                Assert.That(new LiveLinkFollow(link, null, at).ToJSON()["bound"]!["stopLink"]!.Value<Boolean>(), Is.False);
+
+            });
+
+        }
+
+        #endregion
+
     }
 
 }

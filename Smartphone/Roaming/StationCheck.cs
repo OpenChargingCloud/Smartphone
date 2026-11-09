@@ -498,6 +498,45 @@ namespace cloud.charging.open.Smartphone.Roaming
                                               JObject  Operator)
         {
 
+            if (WebPaymentOf(Station, Pool, Operator) is not (String text, String of))
+                return null;
+
+            var https = Uri.TryCreate(text, UriKind.Absolute, out var uri) &&
+                        uri.Scheme == Uri.UriSchemeHttps;
+
+            return new JObject(
+                       new JProperty("url",    https ? text : null),
+                       new JProperty("of",     of),
+                       new JProperty("error",  https ? null : $"'{text}' is no https URL, so it is not offered.")
+                   );
+
+        }
+
+        #endregion
+
+        #region WebPaymentURL / (private static) WebPaymentOf(Station, Pool, Operator)
+
+        /// <summary>
+        /// The web payment page of the operator of the station, where its proof
+        /// holds - the station's own, else that of its pool, else the
+        /// operator's -, as the proof gives it: what a hand-over of the page is
+        /// taken from (<see cref="Charging.WebPaymentHandOver"/>). Null where
+        /// the proof gives none.
+        /// </summary>
+        public String? WebPaymentURL
+            => Station is VerifiedChargingStation station
+                   ? WebPaymentOf(station.ChargingStation, station.ChargingPool, station.Operator)?.URL
+                   : null;
+
+        /// <summary>
+        /// The first web payment page given - of the station, its pool, its
+        /// operator - and whose it is, or null where none is given.
+        /// </summary>
+        private static (String URL, String Of)? WebPaymentOf(JObject  Station,
+                                                             JObject  Pool,
+                                                             JObject  Operator)
+        {
+
             foreach (var (entity, of) in new (JObject Entity, String Of)[] {
                                              (Station,   "chargingStation"),
                                              (Pool,      "chargingPool"),
@@ -506,20 +545,11 @@ namespace cloud.charging.open.Smartphone.Roaming
             {
 
                 // "webPaymentURL" of a station, a pool and an operator alike.
-                if (entity[ChargingStationOperator.PropertyKeys.WebPaymentURL] is not JValue { Type: JTokenType.String } value ||
-                    value.Value<String>() is not String text)
+                if (entity[ChargingStationOperator.PropertyKeys.WebPaymentURL] is JValue { Type: JTokenType.String } value &&
+                    value.Value<String>() is String text)
                 {
-                    continue;
+                    return (text, of);
                 }
-
-                var https = Uri.TryCreate(text, UriKind.Absolute, out var uri) &&
-                            uri.Scheme == Uri.UriSchemeHttps;
-
-                return new JObject(
-                           new JProperty("url",    https ? text : null),
-                           new JProperty("of",     of),
-                           new JProperty("error",  https ? null : $"'{text}' is no https URL, so it is not offered.")
-                       );
 
             }
 

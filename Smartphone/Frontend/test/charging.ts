@@ -150,7 +150,9 @@ export function liveLinkSession(more: Partial<ChargingSession> = {}): ChargingSe
                                    identification: 'web-payment-S1' },
                           values: { holding: 1, wrong: 0, undecided: 0, notChecked: 0 },
                           wrong: null, refused: false, end: null, stopLink: null, limit: null, stop: null, limits: [], ending: null,
-                          disputeBecause: null, disputeLink: null, dispute: null, paymentReference: 'web-payment-S1' }
+                          disputeBecause: null, disputeLink: null, dispute: null, paymentReference: 'web-payment-S1',
+                          webPaymentHost: 'pay.gef.example', handOver: 'pay.gef.example',
+                          bound: { stopLink: false, disputeLink: false, paymentReference: true } }
     };
 
     delete followed.fullAt;

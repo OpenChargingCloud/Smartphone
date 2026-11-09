@@ -156,6 +156,16 @@ export const sessionPage: Page = {
         }
 
 
+        /** Whether a link the web payment page gave is bound to the operator of the station: at the host of the web payment page its proof names. */
+        function boundWords(bound: boolean, link: LiveLinkFollow): string {
+            return bound
+                       ? ', the host of the web payment page its proof names'
+                       : link.webPaymentHost !== null
+                             ? `, not ${link.webPaymentHost}, the host of the web payment page its proof names: not proven to be its operator's`
+                             : ': not proven to be its operator\'s, as its proof names no web payment page';
+        }
+
+
         /** The live link of a session the web payment page of its operator started: how it is followed, and what came over it. */
         function liveLinkView(link: LiveLinkFollow): TemplateResult {
 
@@ -166,6 +176,9 @@ export const sessionPage: Page = {
 
                     <div class="kv-list">
                         ${kv('Handed over',       dayAndTime(link.handedOverAt))}
+                        ${kv('Hand-over',         link.handOver !== null
+                                                      ? html`from <span class="mono">${link.handOver}</span>, the host of the web payment page its proof names`
+                                                      : 'none taken: what its page gave was typed or pasted')}
                         ${kv('From',              link.from !== null ? html`<span class="mono">${link.from}</span>` : 'its document itself')}
                         ${kv('Followed over',     link.transports.length > 0 ? link.transports.join(', ') : 'nothing')}
                         ${kv('Updates',           link.lastUpdateAt !== null
@@ -174,14 +187,15 @@ export const sessionPage: Page = {
                         ${link.lastEndpoint !== null ? kv('Last from', html`<span class="mono">${link.lastEndpoint}</span>`) : nothing}
                         ${kv('Signed documents',  String(link.documents))}
                         ${kv('Payment reference', link.paymentReference !== null
-                                                      ? html`<span class="mono">${link.paymentReference}</span>: every signed value is to name it`
+                                                      ? html`<span class="mono">${link.paymentReference}</span>: every signed value is to name it -
+                                                             ${link.bound.paymentReference ? 'from the web payment page its proof names' : 'typed or pasted, not proven to be that of its page'}`
                                                       : 'none given: that its values are of this payment is not proven')}
                         ${link.problem      !== null ? kv('Now',   link.problem)      : nothing}
                         ${link.endedBecause !== null ? kv('Ended', link.endedBecause) : nothing}
-                        ${kv('Stop link',         link.stopLink !== null ? html`at <span class="mono">${link.stopLink}</span>` : 'none given: it is stopped at the page')}
+                        ${kv('Stop link',         link.stopLink !== null ? html`at <span class="mono">${link.stopLink}</span>${boundWords(link.bound.stopLink, link)}` : 'none given: it is stopped at the page')}
                         ${link.stop !== null ? kv('Stop asked', html`${dayAndTime(link.stop.requestedAt)} by ${link.stop.requestedBy}:
                                                                      <span class="${link.stop.accepted ? 'stop-taken' : 'form-error'}">${link.stop.accepted ? 'taken' : 'not taken'} - ${link.stop.answer}</span>`) : nothing}
-                        ${kv('Dispute link',      link.disputeLink !== null ? html`at <span class="mono">${link.disputeLink}</span>` : 'none given: it is disputed at the page')}
+                        ${kv('Dispute link',      link.disputeLink !== null ? html`at <span class="mono">${link.disputeLink}</span>${boundWords(link.bound.disputeLink, link)}` : 'none given: it is disputed at the page')}
                         ${link.dispute !== null ? kv('Dispute sent', html`${dayAndTime(link.dispute.requestedAt)} by ${link.dispute.requestedBy}:
                                                                           <span class="${link.dispute.accepted ? 'stop-taken' : 'form-error'}">${link.dispute.accepted ? 'taken' : 'not taken'} - ${link.dispute.answer}</span>`) : nothing}
                     </div>

@@ -304,7 +304,13 @@ namespace cloud.charging.open.Smartphone
         /// every signed value of the session is to name as its identification
         /// ("ID") - and the "limit" the driver chose there, as OCPP 2.1 says it
         /// to the station: { "maxEnergy" in Wh, "maxCost", "maxTime" in
-        /// seconds, "maxSoC" in percent }; 400 where one is none.
+        /// seconds, "maxSoC" in percent }; 400 where one is none. Or, in place
+        /// of all of these, the "handOver" the page gave - the https URL of
+        /// the document that names them, taken from the host of the web
+        /// payment page the proof of the station names alone, or the document
+        /// itself: 400 where it is none, or comes with one of them as well,
+        /// 409 where it is at another host or the proof names no web payment
+        /// page, 502 where it could not be fetched.
         /// </summary>
         private async Task<HTTPResponse> PostChargingSession(HTTPRequest Request)
         {
@@ -321,6 +327,26 @@ namespace cloud.charging.open.Smartphone
             if (String.IsNullOrEmpty(locationId) || String.IsNullOrEmpty(evseUid))
                 return ErrorJSON(Request, HTTPStatusCode.BadRequest,
                                  "Say where to charge: 'locationId' and 'evseUid', as the map gives them.");
+
+            if (json["handOver"] is JToken handOver && handOver.Type != JTokenType.Null)
+            {
+
+                if (handOver.Type is not (JTokenType.String or JTokenType.Object))
+                    return ErrorJSON(Request, HTTPStatusCode.BadRequest,
+                                     "'handOver' is the URL of the hand-over the web payment page of the operator gave, or its document.");
+
+                if (HandedOverAlone.FirstOrDefault(name => json[name] is JToken given && given.Type != JTokenType.Null) is String also)
+                    return ErrorJSON(Request, HTTPStatusCode.BadRequest,
+                                     $"A hand-over names the live link, the links, the payment reference and the limit the web payment page gave: '{also}' is not handed over beside it.");
+
+                var takenOver = await Smartphone.TakeHandOverAsync(locationId, evseUid, handOver, user.Id.ToString());
+
+                if (takenOver.Session is null)
+                    return Refused(Request, takenOver.Refusal, takenOver.Error ?? "No hand-over is taken.");
+
+                return JSONResponse(Request, HTTPStatusCode.Created, Smartphone.SessionJSON(takenOver.Session, Smartphone.TimeProvider.GetUtcNow()));
+
+            }
 
             if (json["liveLink"] is JToken liveLink && liveLink.Type != JTokenType.Null)
             {
@@ -446,6 +472,11 @@ namespace cloud.charging.open.Smartphone
         private const String StopLinkIs          = "the https URL the web payment page of the operator gave to stop the session with";
         private const String DisputeLinkIs       = "the https URL the web payment page of the operator gave to dispute the session with";
         private const String PaymentReferenceIs  = "the reference of the payment the web payment page of the operator took, as the station writes it into the identification (\"ID\") of the signed meter values of the session";
+
+        /// <summary>
+        /// What a hand-over names, and is not handed over beside it.
+        /// </summary>
+        private static readonly String[] HandedOverAlone = [ "liveLink", "stopLink", "disputeLink", "paymentReference", "limit" ];
 
         /// <summary>
         /// What of a request the web payment page gave, where it names it -

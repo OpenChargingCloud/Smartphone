@@ -48,7 +48,7 @@ namespace cloud.charging.open.Smartphone
     /// | <c>GET v1/configuration/roamingNetwork/keyStatement</c> | the key statement of its operator, asked of it now, and how it fares against the keys trusted here |
     /// | <c>PUT v1/configuration/roamingNetwork/trustedKeys/{id}</c>, <c>DELETE</c> | trust one identity key of the trust anchor, or no longer |
     /// | <c>GET v1/charging/sessions</c> | every session, the newest first; <c>?active=true</c> for those still charging |
-    /// | <c>POST v1/charging/sessions</c> | <c>{ "locationId", "evseUid" }</c>: start one, 201 and the session; with a <c>"liveLink"</c> as well - the https URL of the live link the web payment page of the operator gave, or its document - the session that page started there, followed over its live link |
+    /// | <c>POST v1/charging/sessions</c> | <c>{ "locationId", "evseUid" }</c>: start one, 201 and the session; with a <c>"liveLink"</c> as well - the https URL of the live link the web payment page of the operator gave, or its document - the session that page started there, followed over its live link; or with the <c>"handOver"</c> the page gave in place of it - the https URL of the document that names its live link, its links, the reference of the payment and the limit, taken from the host of the web payment page the proof of the station names alone |
     /// | <c>GET v1/charging/sessions/{id}</c> | one session, as it is now - at a station of a roaming network with its <c>"check"</c>: its signed meter values and its price |
     /// | <c>POST v1/charging/sessions/{id}/stop</c> | stop one that is still charging |
     /// | <c>GET v1/provider</c> | the account at the e-mobility provider, without its password and key |

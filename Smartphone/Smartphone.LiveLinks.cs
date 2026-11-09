@@ -32,6 +32,7 @@ using cloud.charging.open.chargy.IO;
 using cloud.charging.open.chargy.LiveLink;
 
 using cloud.charging.open.Smartphone.Charging;
+using cloud.charging.open.Smartphone.Roaming;
 
 using ChargingSession  = cloud.charging.open.Smartphone.Charging.ChargingSession;
 
@@ -93,7 +94,9 @@ namespace cloud.charging.open.Smartphone
         /// With the stop link the page gave, where it gave one, to stop it
         /// with, the limit the driver chose there, the dispute link the page
         /// gave, to dispute it with, and the reference of the payment it took,
-        /// which every signed value of the session is to name.
+        /// which every signed value of the session is to name - each as the
+        /// driver typed or pasted it. Where the page gives a hand-over, see
+        /// <see cref="TakeHandOverAsync"/>.
         /// </summary>
         /// <param name="LocationId">The station, by the id the map gave it.</param>
         /// <param name="EVSEUid">Its EVSE, by the uid the map gave it.</param>
@@ -124,6 +127,77 @@ namespace cloud.charging.open.Smartphone
             if (PaymentReference is not null && !IsPaymentReference(PaymentReference.Trim()))
                 return ChargingStart.Refused(ChargingRefusal.Invalid, $"'{PaymentReference}' is no payment reference: it is the reference of the payment the web payment page took, as the station writes it into the identification (\"ID\") of the signed meter values - a text of at most {MaxPaymentReferenceLength} characters, none of them a control character.");
 
+            var handOver = new WebPaymentHandOver(LiveLink, StopLink?.Trim(), DisputeLink?.Trim(), PaymentReference?.Trim(), Limit);
+
+            return await FollowAsync(LocationId,
+                                     EVSEUid,
+                                     Who,
+                                     (_, _, _) => Task.FromResult(new HandedOver(handOver, null, null)),
+                                     CancellationToken);
+
+        }
+
+        #endregion
+
+        #region TakeHandOverAsync(LocationId, EVSEUid, HandOver, Who, CancellationToken = default)
+
+        /// <summary>
+        /// Take over a charging session that the web payment page of the
+        /// operator of the station started, through the hand-over the page gave
+        /// for it (<see cref="WebPaymentHandOver"/>): its live link, its stop
+        /// link and its dispute link, the reference of the payment it took and
+        /// the limit the driver chose there, in one document - and follow it,
+        /// as <see cref="FollowLiveLinkAsync"/> does.
+        /// </summary>
+        /// <remarks>
+        /// A hand-over at an https URL is taken from the host of the web payment
+        /// page the proof of the station names, and from no other - what it
+        /// says is then what that page says, over TLS to a host the operator
+        /// signed. A hand-over pasted as it is binds nothing to the operator.
+        /// </remarks>
+        /// <param name="LocationId">The station, by the id the map gave it.</param>
+        /// <param name="EVSEUid">Its EVSE, by the uid the map gave it.</param>
+        /// <param name="HandOver">The hand-over the page gave: its https URL, or the document itself, as text or JSON.</param>
+        /// <param name="Who">Who handed it over, for the log and the session.</param>
+        /// <param name="CancellationToken">To stop fetching it and its live link.</param>
+        public Task<ChargingStart> TakeHandOverAsync(String             LocationId,
+                                                     String             EVSEUid,
+                                                     JToken             HandOver,
+                                                     String             Who,
+                                                     CancellationToken  CancellationToken  = default)
+
+            => FollowAsync(LocationId,
+                           EVSEUid,
+                           Who,
+                           (station, where, token) => HandOverAsync(HandOver, station, where, token),
+                           CancellationToken);
+
+        #endregion
+
+        #region (private) FollowAsync(LocationId, EVSEUid, Who, HandedOverAt, CancellationToken)
+
+        /// <summary>
+        /// What the web payment page gave for a session - or why nothing - and
+        /// the URL of the hand-over it came in, where the phone took it from
+        /// the host of the web payment page.
+        /// </summary>
+        private sealed record HandedOver(WebPaymentHandOver?  HandOver,
+                                         String?              From,
+                                         String?              Problem,
+                                         ChargingRefusal      Refusal  = ChargingRefusal.Invalid);
+
+        /// <summary>
+        /// Follow the live link of a session the web payment page of the
+        /// operator of the station started, with what the page gave for it -
+        /// asked once the station is known to be checked, and to be free.
+        /// </summary>
+        private async Task<ChargingStart> FollowAsync(String                                                           LocationId,
+                                                      String                                                           EVSEUid,
+                                                      String                                                           Who,
+                                                      Func<StationCheck, String, CancellationToken, Task<HandedOver>>  HandedOverAt,
+                                                      CancellationToken                                                CancellationToken)
+        {
+
             var network = RoamingNetwork;
 
             if (network.TrustAnchor is null)
@@ -147,14 +221,24 @@ namespace cloud.charging.open.Smartphone
             if (Sessions.IsCharging(location.Id, evse.Uid, TimeProvider.GetUtcNow()))
                 return ChargingStart.Refused(ChargingRefusal.Conflict, $"This phone is already charging at {evse.EVSEId}.");
 
-            var (document, from, problem, unreachable) = await LiveLinkDocumentAsync(LiveLink, CancellationToken);
+            var (handOver, handOverFrom, handOverProblem, handOverRefusal) = await HandedOverAt(station, $"{evse.EVSEId} at {location.Name}", CancellationToken);
+
+            if (handOver is null)
+                return ChargingStart.Refused(handOverRefusal, handOverProblem ?? "Nothing was handed over.");
+
+            var (document, from, problem, unreachable) = await LiveLinkDocumentAsync(handOver.LiveLink, CancellationToken);
 
             if (document is null)
                 return ChargingStart.Refused(unreachable ? ChargingRefusal.Unreachable : ChargingRefusal.Invalid,
                                              problem ?? "No live link was handed over.");
 
-            var follow = new LiveLinkFollow(document, from, TimeProvider.GetUtcNow(), StopLink: StopLink?.Trim(), Limit: Limit, DisputeLink: DisputeLink?.Trim(),
-                                            PaymentReference: PaymentReference?.Trim());
+            var follow = new LiveLinkFollow(document, from, TimeProvider.GetUtcNow(),
+                                            StopLink:          handOver.StopLink,
+                                            Limit:             handOver.Limit,
+                                            DisputeLink:       handOver.DisputeLink,
+                                            PaymentReference:  handOver.PaymentReference,
+                                            WebPaymentPage:    station.WebPaymentURL,
+                                            HandOver:          handOverFrom);
 
             if (follow.EVSEId is String named && named != evse.EVSEId)
                 return ChargingStart.Refused(ChargingRefusal.Conflict, $"The live link is of {named}, not of {evse.EVSEId} at {location.Name}: it was handed over at the wrong charge point.");
@@ -163,13 +247,17 @@ namespace cloud.charging.open.Smartphone
                                    out var session, out var error, out var notSaved, EvidenceOf(station, evse), follow))
                 return ChargingStart.Refused(notSaved ? ChargingRefusal.NotSaved : ChargingRefusal.Conflict, error);
 
+            static String Bound(Boolean IsBound)
+                => IsBound ? ", the host of its web payment page" : "";
+
             Log.Notice($"'{Who}' handed over the live link of a session at {location.Name}, {evse.EVSEId}, which the web payment page of its operator started" +
+                       (follow.HandOverHost is String handOverAt ? $", in the hand-over of that page at {handOverAt}, the host its proof names" : "") +
                        (from is not null ? $", from {from}" : "") +
                        $", for {session.PricePerKWh:0.00##} {session.Currency} per kWh, as its checked proof says" +
-                       (follow.StopLinkHost is String stopAt ? $", with a stop link at {stopAt}" : ", with no stop link") +
-                       (follow.DisputeLinkHost is String disputeAt ? $", a dispute link at {disputeAt}" : ", no dispute link") +
+                       (follow.StopLinkHost is String stopAt ? $", with a stop link at {stopAt}{Bound(follow.StopLinkBound)}" : ", with no stop link") +
+                       (follow.DisputeLinkHost is String disputeAt ? $", a dispute link at {disputeAt}{Bound(follow.DisputeLinkBound)}" : ", no dispute link") +
                        (follow.PaymentReference is String reference ? $", the payment \"{reference}\" its signed values are to name" : ", no payment reference: that its signed values are of it is not proven") +
-                       (Limit is not null ? $" and the limit {Limit.InWords(session.Currency)}" : "") +
+                       (handOver.Limit is not null ? $" and the limit {handOver.Limit.InWords(session.Currency)}" : "") +
                        $". The session is {session.Id}.",
                        "charging", "web");
 
@@ -181,6 +269,90 @@ namespace cloud.charging.open.Smartphone
                 await KeepLatestProofAsync(session, "at the start", CancellationToken);
 
             return new ChargingStart(Sessions.Get(session.Id) ?? session, null, ChargingRefusal.None);
+
+        }
+
+        #endregion
+
+        #region (private) HandOverAsync(HandOver, Station, Where, CancellationToken)
+
+        /// <summary>
+        /// The hand-over the web payment page gave: itself, or fetched from its
+        /// URL - at the host of the web payment page the proof of the station
+        /// names alone -, and read as one. Or why not.
+        /// </summary>
+        private async Task<HandedOver> HandOverAsync(JToken             HandOver,
+                                                     StationCheck       Station,
+                                                     String             Where,
+                                                     CancellationToken  CancellationToken)
+        {
+
+            JObject? document  = HandOver as JObject;
+            String?  from      = null;
+
+            if (document is null)
+            {
+
+                var text = HandOver.Type == JTokenType.String ? HandOver.Value<String>()?.Trim() ?? "" : "";
+
+                if (text.StartsWith('{'))
+                {
+                    try
+                    {
+                        document = JObject.Parse(text, new JsonLoadSettings { DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error });
+                    }
+                    catch (JsonException e)
+                    {
+                        return new HandedOver(null, null, $"The hand-over is no JSON document: {e.Message}");
+                    }
+                }
+
+                else
+                {
+
+                    if (!TryLinkURL(text, out var uri))
+                        return new HandedOver(null, null, $"'{text}' is neither the https URL of a hand-over of the web payment page nor its document.");
+
+                    // Taken from the host of the web payment page the proof
+                    // names, and from no other: asked nowhere else.
+                    var page = Station.WebPaymentURL;
+
+                    if (page is null || !TryLinkURL(page, out var pageURI))
+                        return new HandedOver(null, null,
+                                              page is null
+                                                  ? $"The proof of {Where} names no web payment page, so a hand-over is taken from nowhere: hand over the live link the page gave, and its links."
+                                                  : $"The web payment page the proof of {Where} names, '{page}', is no https URL, so a hand-over is taken from nowhere: hand over the live link the page gave, and its links.",
+                                              ChargingRefusal.Conflict);
+
+                    if (!String.Equals(uri.Authority, pageURI.Authority, StringComparison.OrdinalIgnoreCase))
+                        return new HandedOver(null, null,
+                                              $"The hand-over is at {uri.Authority}, and the web payment page the proof of {Where} names is at {pageURI.Authority}: a hand-over is taken from that host alone.",
+                                              ChargingRefusal.Conflict);
+
+                    from = uri.ToString();
+
+                    var (body, problem, unreachable) = await FetchAsync(uri, "the hand-over", uri.Authority, CancellationToken);
+
+                    if (body is null)
+                        return new HandedOver(null, from, problem, unreachable ? ChargingRefusal.Unreachable : ChargingRefusal.Invalid);
+
+                    try
+                    {
+                        document = JObject.Parse(body, new JsonLoadSettings { DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error });
+                    }
+                    catch (JsonException e)
+                    {
+                        return new HandedOver(null, from, $"{uri.Authority} answered no JSON document: {e.Message}");
+                    }
+
+                }
+
+            }
+
+            if (!WebPaymentHandOver.TryParse(document, out var handOver, out var error))
+                return new HandedOver(null, from, $"{(from is not null ? $"What {WebPaymentHandOver.HostOf(from)} answered" : "What was handed over")} is no hand-over: {error}");
+
+            return new HandedOver(handOver, from, null);
 
         }
 
@@ -226,34 +398,18 @@ namespace cloud.charging.open.Smartphone
 
                     from = uri.ToString();
 
+                    var (body, problem, unreachable) = await FetchAsync(uri, "the live link", from, CancellationToken);
+
+                    if (body is null)
+                        return (null, from, problem, unreachable);
+
                     try
                     {
-
-                        await using var http = new HTTPClient(URL.Parse($"{uri.Scheme}://{uri.Authority}"), DNSClient: DNSClient);
-
-                        var response = await http.GET(HTTPPath.Parse(uri.AbsolutePath),
-                                                      QueryString:        uri.Query.Length > 1 ? QueryString.Parse(uri.Query[1..]) : null,
-                                                      Accept:             AcceptTypes.FromHTTPContentTypes(HTTPContentType.Application.JSON_UTF8),
-                                                      RequestTimeout:     LiveLinkFetchTimeout,
-                                                      CancellationToken:  CancellationToken);
-
-                        if (!response.HTTPStatusCode.IsSuccessful)
-                            return (null, from, $"{from} answered {response.HTTPStatusCode}, not the live link.", true);
-
-                        document = JObject.Parse(response.HTTPBodyAsUTF8String ?? "");
-
+                        document = JObject.Parse(body);
                     }
                     catch (JsonException e)
                     {
                         return (null, from, $"{from} answered no JSON document: {e.Message}", false);
-                    }
-                    catch (OperationCanceledException) when (CancellationToken.IsCancellationRequested)
-                    {
-                        throw;
-                    }
-                    catch (Exception e)
-                    {
-                        return (null, from, $"{from} could not be reached: {e.Message}", true);
                     }
 
                 }
@@ -272,18 +428,60 @@ namespace cloud.charging.open.Smartphone
 
         #endregion
 
+        #region (private) FetchAsync(URI, What, Shown, CancellationToken)
+
+        /// <summary>
+        /// What the web payment page answers at the given URL, asked for JSON -
+        /// or why not, and whether it could not be reached. Its URL is said as
+        /// given: in full, or by its host alone.
+        /// </summary>
+        private async Task<(String? Body, String? Problem, Boolean Unreachable)> FetchAsync(Uri                URI,
+                                                                                           String             What,
+                                                                                           String             Shown,
+                                                                                           CancellationToken  CancellationToken)
+        {
+
+            try
+            {
+
+                await using var http = new HTTPClient(URL.Parse($"{URI.Scheme}://{URI.Authority}"), DNSClient: DNSClient);
+
+                var response = await http.GET(HTTPPath.Parse(URI.AbsolutePath),
+                                              QueryString:        URI.Query.Length > 1 ? QueryString.Parse(URI.Query[1..]) : null,
+                                              Accept:             AcceptTypes.FromHTTPContentTypes(HTTPContentType.Application.JSON_UTF8),
+                                              RequestTimeout:     LiveLinkFetchTimeout,
+                                              CancellationToken:  CancellationToken);
+
+                if (!response.HTTPStatusCode.IsSuccessful)
+                    return (null, $"{Shown} answered {response.HTTPStatusCode}, not {What}.", true);
+
+                return (response.HTTPBodyAsUTF8String ?? "", null, false);
+
+            }
+            catch (OperationCanceledException) when (CancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception e)
+            {
+                return (null, $"{Shown} could not be reached: {e.Message}", true);
+            }
+
+        }
+
+        #endregion
+
         #region (private static) TryLinkURL(Text, out URI)
 
         /// <summary>
         /// Whether the given text is a link the web payment page may give - of
-        /// a live link, or to stop or dispute a session with: an https URL, or
-        /// an http URL on this machine's loopback.
+        /// a hand-over or a live link, or to stop or dispute a session with: an
+        /// https URL, or an http URL on this machine's loopback.
         /// </summary>
         private static Boolean TryLinkURL(String                         Text,
                                           [NotNullWhen(true)] out Uri?   URI)
 
-            => Uri.TryCreate(Text.Trim(), UriKind.Absolute, out URI) &&
-               (URI.Scheme == Uri.UriSchemeHttps || (URI.Scheme == Uri.UriSchemeHttp && URI.IsLoopback));
+            => WebPaymentHandOver.TryLinkURL(Text, out URI);
 
         #endregion
 
@@ -292,7 +490,7 @@ namespace cloud.charging.open.Smartphone
         /// <summary>
         /// How long a payment reference is at most.
         /// </summary>
-        public const Int32 MaxPaymentReferenceLength = 255;
+        public const Int32 MaxPaymentReferenceLength = WebPaymentHandOver.MaxPaymentReferenceLength;
 
         /// <summary>
         /// Whether the given text is a reference of a payment the web payment
@@ -301,8 +499,7 @@ namespace cloud.charging.open.Smartphone
         /// </summary>
         private static Boolean IsPaymentReference(String Text)
 
-            => Text.Length is > 0 and <= MaxPaymentReferenceLength &&
-               !Text.Any(Char.IsControl);
+            => WebPaymentHandOver.IsPaymentReference(Text);
 
         #endregion
 

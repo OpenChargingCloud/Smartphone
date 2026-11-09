@@ -480,6 +480,12 @@ export interface LiveLinkFollow {
     dispute:        LiveLinkDispute | null;
     /** The reference of the payment the page took, which every signed value is to name as what identified the charging ("ID"); null where the page gave none: that its values are of this session is not proven. */
     paymentReference: string | null;
+    /** Where the web payment page the proof of the station names is: its host; null where the proof named none. */
+    webPaymentHost:   string | null;
+    /** Where the hand-over the phone took came from - the host of that web payment page -; null where what the page gave was typed or pasted. */
+    handOver:         string | null;
+    /** What of what the page gave is bound to the operator of the station: links at the host of its web payment page, a payment reference of a hand-over from there. */
+    bound:            { stopLink: boolean; disputeLink: boolean; paymentReference: boolean };
 }
 
 /** What is handed over with a live link, where the web payment page gave it: its stop link, its dispute link, the reference of the payment it took, and the limit chosen there. */
@@ -720,6 +726,12 @@ export const api = {
                                                                                    ...(handOver.disputeLink      !== undefined ? { disputeLink:      handOver.disputeLink }      : {}),
                                                                                    ...(handOver.paymentReference !== undefined ? { paymentReference: handOver.paymentReference } : {}),
                                                                                    ...(handOver.limit            !== undefined ? { limit:            handOver.limit }            : {}) }),
+        /**
+         * Take over the session the web payment page of the operator started there through the hand-over it gave: the https URL of the document
+         * that names its live link, its links, the reference of the payment and the limit - taken from the host of that page alone -, or the document.
+         */
+        takeOver:     (locationId: string, evseUid: string, handOver: string) =>
+                          request<ChargingSession>('POST', '/charging/sessions', { locationId, evseUid, handOver }),
         /** Stop a session - of a live link through the stop link of the page: the one handed over, or the one given now. */
         stop:         (id: string, stopLink?: string)       => request<ChargingSession> ('POST', `${session(id)}/stop`, stopLink !== undefined ? { stopLink } : {}),
         /** Dispute a session of a live link through the dispute link of the page - the one handed over, or the one given now - for why the phone disputes it. */
