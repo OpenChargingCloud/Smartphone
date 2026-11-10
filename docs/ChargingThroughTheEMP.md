@@ -353,23 +353,29 @@ CDR yet; nor is a CDR without signed values, or with a wrong one, disputed.
   EVSE when the session started, of those kept with it: WWCP_POI's
   `SessionPriceEvidence`, its start document the start request as the EMP
   countersigned it. The app says whether it is the price it counted with.
-- **The cost:** where it is a price of energy alone, the signed energy at that
-  price, rounded to the cent, is compared with the CDR's `total_cost` with VAT.
+- **The cost:** what the tariff of that price makes of what the meter signed
+  when - energy, a flat fee, the time charging and the time parked, each where
+  its restrictions hold, in its step size, with its VAT, as for ad hoc charging
+  ([Step 6 there](AdHocChargingAtTheCPO.md#the-final-price)) -, rounded to the
+  cent, is compared with the CDR's `total_cost` with VAT. Where a part of it
+  depends on the current, which no meter value says, it is said to be not
+  exact.
 - All of it is checked again whenever the session's page is shown, under the
   identity keys trusted now: a key no longer trusted checks nothing of a
   session.
 
 What is **not proven**, and said so: that the meter's clock was right, that
 the version of the proof was the latest one, and that the CPO assigned the
-price to this very session - it is "unbound", as no CPO signs such an
-assignment yet.
+price to this very session - it is "unbound": nothing carries such an
+assignment to the app through an EMP.
 
 **Open:**
 
 - A CPO's signed assignment of the price to the session (WWCP_POI's
-  `SessionPriceAgreement`), which would make it bound.
-- Prices that are not of energy alone - time, parking, flat fees - are not
-  compared.
+  `SessionPriceAgreement`), which would make it bound. Ad hoc, the web payment
+  page gives one over its payment link
+  ([Step 6 there](AdHocChargingAtTheCPO.md#the-price-agreement-and-the-receipt));
+  through an EMP, neither the CDR nor the EMP's API carries one.
 - The EMP's price: the CPO's price is what the CDR says, not what the EMP
   bills its driver. What the EMP charges the account - its own tariff, its
   invoice - is not part of this, and the app compares nothing with it.
@@ -413,7 +419,7 @@ account the token was made for, and bills it. The CPO's CDR names no account.
 | Signed meter values while it charges, e.g. a live link through the EMP | [Step 6](#step-6---app-while-it-charges) |
 | The EMP pushing to the app rather than being asked | [Step 6](#step-6---app-while-it-charges) |
 | Status, error flags and order of the values of a CDR | [Step 8](#step-8---app-the-cdr-and-its-signed-meter-values) |
-| A price bound to the session; prices not of energy alone | [Step 9](#step-9---app-the-final-price) |
+| A price bound to the session | [Step 9](#step-9---app-the-final-price) |
 | Disputes, and the EMP's invoice compared | [Step 10](#step-10---billing-and-disputes) |
 | How many minutes `at` and `iat` may be off at the EMP and the CPO | [the draft](RemoteStartWithChargingTickets.md#open-points) |
 | Text or integer labels in the EMP's protected header | [the draft](RemoteStartWithChargingTickets.md#open-points) |

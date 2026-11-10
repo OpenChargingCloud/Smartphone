@@ -81,19 +81,20 @@ sequenceDiagram
     P-->>D: the URL of its hand-over
     D->>A: hands it over at the EVSE paid for
     A->>P: GET the hand-over, at the host of the signed webPaymentURL alone
-    P-->>A: live link, stop link, dispute link, payment reference, limit
+    P-->>A: live link, stop link, dispute link, payment reference, limit, payment link
     A->>N: proof of the station again
     loop while it charges
         S-->>A: signed meter values over the live link
         A->>A: check each value as it comes
         A->>N: proof again every 5 minutes
+        A->>P: GET the payment link: price agreement, receipt
     end
     D->>A: Stop charging
     A->>P: POST to the stop link
     C->>S: RequestStopTransaction
     S-->>A: signed end value
-    A->>A: energy, cost, end against the limit
-    opt a value does not hold
+    A->>A: energy, cost by the tariff, end against the limit, receipt against the cost
+    opt a value, the price agreement or the receipt does not hold
         A->>P: POST to the dispute link
     end
 ```
@@ -178,7 +179,9 @@ taken, and the price is **not known**.
 
 The price of a charge point is the price statement of its **EVSE**, else of
 its **station**, else of its **pool**, else its **tariff**. This is the price
-the app will count the session with.
+the app will count the session with - unless the CPO binds another one in
+force at the start to the session in a price agreement
+([Step 6](#the-price-agreement-and-the-receipt)).
 
 ### A4 - "What is signed about it"
 
@@ -257,7 +260,8 @@ the session in [Step 2](#step-2---handing-the-session-over-to-the-app).
 
 What the page, its CSMS and its stations have to do for the app - the live
 link endpoints, what the meter signs, the POSTs to the stop and the dispute
-link and their answers - is [WebPaymentPageInterface.md](WebPaymentPageInterface.md).
+link and their answers, the price agreement and the receipt at the payment
+link - is [WebPaymentPageInterface.md](WebPaymentPageInterface.md).
 
 1. The page shows the EVSE and the price. It should be the signed price of
    [A3](#a3---the-price): the app counts with that one, not with what the page
@@ -282,6 +286,7 @@ link and their answers - is [WebPaymentPageInterface.md](WebPaymentPageInterface
 | **dispute link** | an https URL of this session alone; a POST to it disputes the session | optional |
 | **payment reference** | the reference of the payment, as the station writes it into OCMF `ID` | optional, but without it the values are not proven to be of this session |
 | **limit** | the limit chosen, as OCPP 2.1 says it | optional |
+| **payment link** | an https URL of this session alone; a GET to it gives the price agreement of the CPO for the session and the receipt of what the page took | optional, but without it the price is not bound to the session, nor is what was taken compared with the cost |
 
 ```json
 {
@@ -290,12 +295,14 @@ link and their answers - is [WebPaymentPageInterface.md](WebPaymentPageInterface
   "stopLink":          "https://pay.gef.example/sessions/4711/stop?key=9f2c...",
   "disputeLink":       "https://pay.gef.example/sessions/4711/dispute?key=41ab...",
   "paymentReference":  "GEF-2026-11-09-0815",
-  "limit":             { "maxEnergy": 20000 }
+  "limit":             { "maxEnergy": 20000 },
+  "paymentLink":       "https://pay.gef.example/payments/4711?key=77d0..."
 }
 ```
 
-The stop link and the dispute link work for whoever has them, so they are
-secrets of the session - and so is the URL of the hand-over, which names them.
+The stop link, the dispute link and the payment link work for whoever has
+them, so they are secrets of the session - and so is the URL of the hand-over,
+which names them.
 What else a hand-over must and should be is
 [WebPaymentPageInterface.md, The hand-over](WebPaymentPageInterface.md#the-hand-over).
 
@@ -308,8 +315,8 @@ gave**. The app takes the hand-over from the **host of the web payment page**
 the proof of the station names - the signed `webPaymentURL` of
 [A5](#a5---opening-the-web-payment-page), port included - and asks no other
 host. Where the page gives no hand-over, the driver enters the live link, the
-stop link, the dispute link, the payment reference and the limit on their own
-instead. The app's API takes either:
+stop link, the dispute link, the payment reference, the limit and the payment
+link on their own instead. The app's API takes either:
 
 ```http
 POST /api/v1/charging/sessions
@@ -333,7 +340,8 @@ Content-Type: application/json
   "stopLink":         "https://pay.gef.example/sessions/4711/stop",
   "disputeLink":      "https://pay.gef.example/sessions/4711/dispute",
   "paymentReference": "PAY-2026-11-09-0815",
-  "limit":            { "maxEnergy": 20000, "maxCost": 15.00 }
+  "limit":            { "maxEnergy": 20000, "maxCost": 15.00 },
+  "paymentLink":      "https://pay.gef.example/payments/4711"
 }
 ```
 
@@ -356,25 +364,26 @@ The app takes it over only where
 - the live link names no other charge point than the one it is handed over at
   (its `chargingStation.EVSE["@id"]`; `409`: *handed over at the wrong charge
   point*);
-- the stop and dispute links are `https` URLs, the payment reference a text of
+- the stop, dispute and payment links are `https` URLs, the payment reference a text of
   at most 255 characters without control characters, and the limit uses
   OCPP 2.1's names and units (`400`).
 
 **What is the CPO's.** The host of the web payment page is in the station's
 proof, signed by a CPO key that may sign `payments`, and TLS proves who answers
 there. So the **payment reference** of a hand-over the app took from that host
-is the CPO's, and so is every **stop link and dispute link at that host**,
+is the CPO's, and so is every **stop, dispute and payment link at that host**,
 however it came. A link at another host, and a payment reference typed or
 pasted - a pasted hand-over among it - are the word of whoever gave them. The
 session's page says which is which. Nothing of the hand-over itself is signed.
 
 Then the session exists, `201`. It keeps, as **evidence**, the proof of its
-station checked before and the price statements that held - its price is fixed
-from now on - and the app asks for the proof once more right away, so that the
-first signed values are covered even where the first attestation runs out soon.
-The session is kept in `charging-sessions.json`; a restart of the phone follows
-it on. Of the hand-over, the stop link and the dispute link only the host is
-shown and logged.
+station checked before and the price statements that held - the prices in
+force at its start are fixed from now on - and the app asks for the proof once
+more right away, so that the first signed values are covered even where the
+first attestation runs out soon. Where the page gave a payment link, the app
+starts asking it ([Step 6](#the-price-agreement-and-the-receipt)). The session
+is kept in `charging-sessions.json`; a restart of the phone follows it on. Of
+the hand-over and the links only the host is shown and logged.
 
 
 ## Step 3 - Following the live link while it charges
@@ -396,8 +405,9 @@ shown and logged.
   start, the first after it, and the latest - so that there is a proof that
   covers the time of every meter value.
 - The session's page shows the energy (the latest register less the first that
-  counts), the cost (that energy at the price of [A3](#a3---the-price)), and
-  each part of the limit against what the signed values say.
+  counts), the cost (what its tariff makes of what was charged when, part by
+  part - see [Step 6](#the-final-price)), and each part of the limit against
+  what the signed values say.
 
 
 ## Step 4 - Checking every signed meter value as it comes
@@ -437,8 +447,8 @@ value where:
 Everything else in the table holds for it as for the meter's. A start value or
 an end value the operator signed is a **wrong** one. The page shows such a
 value as the operator's: it shows how the session goes, and **counts for
-nothing**. What was charged, the cost and the end against the limit are what
-the meter signed at the start and at the end.
+nothing**. What was charged, the cost and the end against the limit are worked
+out of what the meter signed alone.
 
 A value **holds**, is **wrong**, or is **not decided**: where the identity
 keys trusted here do not suffice, or no proof kept attests a key of the meter
@@ -489,13 +499,51 @@ nothing: of a wrong end value, the energy is up to the latest value that holds.
 
 ### The final price
 
-- **The price** is the price per kWh in force at the start, as the proof and
-  the price statements kept with the session say ([A3](#a3---the-price)).
-- **The cost** is the signed energy at that price, in the currency of the
-  tariff.
+- **The tariff** the session is charged by is the one its CPO agreed for it in
+  a price agreement that holds (below), else the first tariff of its EVSE the
+  proof names that prices anything, its elements as the price statement in
+  force at the start sets them ([A3](#a3---the-price)).
+- **The cost** is what that tariff makes of what the meter signed when, as
+  OCPI prices a session: energy per kWh, a flat fee, the time charging and the
+  time parked - between two signed values whose register did not grow -, each
+  where its restrictions hold (times of day, dates and days of the week in the
+  time zone of the station's pool; energy, duration and power so far), rounded
+  up in its step size, with its VAT, between the least and the most the tariff
+  says. The session's page shows it part by part. A restriction or a component
+  of current - which no meter value says - makes the cost **not exact**, and
+  the page says why. The rules are
+  [WebPaymentPageInterface.md, 7](WebPaymentPageInterface.md#7-the-price-and-the-cost).
 - All of it is checked again whenever the session's page is shown, **under the
   identity keys trusted now**: a key no longer trusted checks nothing of a
   session, whatever it attested at its start.
+
+### The price agreement and the receipt
+
+Where the page gave a **payment link**, the app asks it from the hand-over on -
+again and again, at pauses growing from 5 seconds to 10 minutes, until the
+receipt came, and no longer than 7 days after the end. **Ask its payment now**
+on the session's page (`POST /api/v1/charging/sessions/{id}/payment`) asks it
+at once. The page answers with:
+
+- the **price agreement** - WWCP_POI's `SessionPriceAgreement`, signed by the
+  CPO with a key the proof attests that may sign `priceStatements`: a tariff
+  and the price statement in force at the start, assigned to this very session,
+  named by its EVSE, its meter, when the start value says it began and the
+  SHA-256 of that start value as it came. The app checks it once the start
+  value held. Where it holds, the price is **bound** to the session, and the
+  session is charged by the tariff it agreed; where it does not, the session is
+  disputed.
+- the **receipt** of what the page took: its amount with VAT, its currency and
+  the payment reference - signed by the CPO with a key that may sign
+  `payments`, or not signed at all. The app checks it once the end value was
+  decided: of this EVSE and this payment, in the currency of the tariff, its
+  signature where it has one, and **not more than the cost** the app works
+  out. A receipt of more, or one that does not hold otherwise, disputes the
+  session. Where the cost is not exact, nothing is decided.
+
+What came first is kept: a later agreement or receipt replaces nothing. What
+both must be is
+[WebPaymentPageInterface.md, 6](WebPaymentPageInterface.md#6-the-payment-link).
 
 ### The end against the limit
 
@@ -515,8 +563,10 @@ the session ended against the limit chosen at the page:
 The session's page says so, rather than pretending:
 
 - that the **meter's clock** was right - the times are those the meter signed;
-- that the CPO **assigned this price to this very session** - it signed no
-  such assignment ("unbound");
+- where no price agreement came or held: that the CPO **assigned this price to
+  this very session** - it signed no such assignment;
+- where the receipt is not signed: **what the page took** - the receipt is the
+  page's word then;
 - without a payment reference: that the values are **of this very session** -
   the live link names the charge point alone;
 - that the version of the proof was the latest one.
@@ -527,11 +577,16 @@ The session's page says so, rather than pretending:
 The app disputes a session where
 
 - a value before the end was a wrong one (it stopped the session for it),
-- the signed end value is a wrong one, or
-- the station ended the stream of the live link and its meter signed no end.
+- the signed end value is a wrong one,
+- the station ended the stream of the live link and its meter signed no end,
+- the price agreement does not hold, or
+- the receipt does not hold - the page took more than the cost, or another
+  payment.
 
 It sends a POST to the **dispute link** with why, and the signed values it
-disputes as they came - the start value, and the wrong one or the last one:
+disputes as they came - the start value, and the wrong one, the last one, or
+the end value where the payment is disputed - with the price agreement or the
+receipt that does not hold, as it came:
 
 ```json
 {
@@ -558,7 +613,9 @@ dispute link, the driver is told to dispute the session at the page.
 | every meter value is the meter's | its signature, with the key the RNO attested for the meter at that time | a proof covering its time |
 | the values are of this payment | the payment reference in OCMF `ID`, signed by the meter | the page gives the reference, the station signs it |
 | the energy | signed end register − signed start register | both values hold |
-| the cost | signed energy × signed price in force at the start | the price is one of energy |
+| the price is this session's | the price agreement, signed by the CPO with a key the RNO attests for `priceStatements` | the page gives a payment link, and an agreement there |
+| the cost | what the signed tariff makes of what the meter signed when - every part, with its restrictions, step sizes and VAT | the values it is worked from hold; exact only where nothing of it depends on the current |
+| the page took no more than the cost | the receipt, compared with the cost | the page gives a receipt; signed by the CPO with a key for `payments`, else it is the page's word |
 | the session ended where it should | the end against the limit chosen | - |
 
 
@@ -576,18 +633,23 @@ dispute link, the driver is told to dispute the session at the page.
   the web payment page, and a payment reference typed or pasted, are the word
   of whoever gave them. Binding them would take the CPO signing the hand-over
   with a key the roaming network attests for `payments`.
-- **The hand-over, the stop link, the dispute link and the payment reference
-  are conventions** of this family - a hand-over of its own `@context`, a POST
-  of JSON taken with a `2xx` - and no standard. A Charge Transparency LiveLink
-  carries none of them yet.
-- **The amount actually taken** at the page is not compared with the cost the
-  app works out: the page gives no receipt, signed or not.
-- **The price is not bound to the session:** the CPO signs no assignment of the
-  price to this session (WWCP_POI's `SessionPriceAgreement`), the app does not
-  compare the price the page showed with the signed one, nor the tariff the
-  meter signs (OCMF `TT`) with it.
-- **Only prices of energy** are counted: a price per kWh. Time, parking and
-  flat fees of a tariff are not worked into the cost.
+- **The hand-over, the stop link, the dispute link, the payment link, the
+  receipt and the payment reference are conventions** of this family - a
+  hand-over, a payment and a receipt of their own `@context`, a POST of JSON
+  taken with a `2xx` - and no standard. A Charge Transparency LiveLink carries
+  none of them yet.
+- **The price agreement and the receipt are optional:** without a payment link
+  the price is not bound to the session and what the page took is not
+  compared; an unsigned receipt is the page's word. The first agreement and
+  receipt are kept: a page that corrects one replaces nothing.
+- **The price the page showed** is not compared with the signed one, nor is
+  the tariff the meter signs (OCMF `TT`).
+- **A flat fee** is not taken by WWCP_POI's simple profile of gross rates
+  (`chargy-gross-rates/v1`): a price agreement of it binds the price all the
+  same, of a profile WWCP_POI does not establish the rates of.
+- **A restriction or a component of current** is priced at nothing - no meter
+  value says the current -, and the cost is not exact then: a receipt is not
+  decided against it.
 - **Values signed by the operator** between the start and the end are taken
   with a key of the operator the proof attests for its charge transparency
   records (Step 4). WWCP_POI has no usage of its own for meter values: one key
@@ -597,7 +659,8 @@ dispute link, the driver is told to dispute the session at the page.
 - **The payment reference in OCMF `ID`** is up to the station and its CSMS;
   the app only checks that it is there.
 - **The CPO side** - the web payment page, the TOTP check, the start with its
-  limit, the hand-over, the live link, the stop and dispute links - exists in
+  limit, the hand-over, the live link, the stop, dispute and payment links, the
+  price agreement and the receipt - exists in
   this repository only as the stand-in of the tests
   ([`SmartphoneTests/TestCPO.cs`](../SmartphoneTests/TestCPO.cs)). What it has
   to do is [WebPaymentPageInterface.md](WebPaymentPageInterface.md).
@@ -614,5 +677,5 @@ dispute link, the driver is told to dispute the session at the page.
 | 3 | [`Smartphone/Charging/LiveLinkFollow.cs`](../Smartphone/Charging/LiveLinkFollow.cs), [`Smartphone/Smartphone.Evidence.cs`](../Smartphone/Smartphone.Evidence.cs), [`Charging/SessionEvidence.cs`](../Smartphone/Charging/SessionEvidence.cs) |
 | 4 | [`Smartphone/Charging/SessionCheck.cs`](../Smartphone/Charging/SessionCheck.cs) |
 | 5, 7 | [`Smartphone/Smartphone.LiveLinks.cs`](../Smartphone/Smartphone.LiveLinks.cs) |
-| 6 | [`Smartphone/Charging/LiveLinkEnding.cs`](../Smartphone/Charging/LiveLinkEnding.cs), [`TransactionLimit.cs`](../Smartphone/Charging/TransactionLimit.cs), [`ChargingSession.cs`](../Smartphone/Charging/ChargingSession.cs) |
-| Tests | [`SmartphoneTests/ChargingTests.cs`](../SmartphoneTests/ChargingTests.cs), [`RoamingNetworkTests.cs`](../SmartphoneTests/RoamingNetworkTests.cs), [`TestCPO.cs`](../SmartphoneTests/TestCPO.cs), [`TestRoamingNetwork.cs`](../SmartphoneTests/TestRoamingNetwork.cs) |
+| 6 | [`Smartphone/Charging/LiveLinkEnding.cs`](../Smartphone/Charging/LiveLinkEnding.cs), [`TransactionLimit.cs`](../Smartphone/Charging/TransactionLimit.cs), [`ChargingSession.cs`](../Smartphone/Charging/ChargingSession.cs), [`TariffCost.cs`](../Smartphone/Charging/TariffCost.cs); the payment link: [`Smartphone/Smartphone.Payments.cs`](../Smartphone/Smartphone.Payments.cs), [`Charging/WebPaymentReceipt.cs`](../Smartphone/Charging/WebPaymentReceipt.cs), [`SessionCheck.cs`](../Smartphone/Charging/SessionCheck.cs) |
+| Tests | [`SmartphoneTests/ChargingTests.cs`](../SmartphoneTests/ChargingTests.cs), [`RoamingNetworkTests.cs`](../SmartphoneTests/RoamingNetworkTests.cs), [`TariffCostTests.cs`](../SmartphoneTests/TariffCostTests.cs), [`TestCPO.cs`](../SmartphoneTests/TestCPO.cs), [`TestRoamingNetwork.cs`](../SmartphoneTests/TestRoamingNetwork.cs) |
