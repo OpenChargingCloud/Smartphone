@@ -455,7 +455,8 @@ bytes, and its signature then no longer holds. Payloads are deterministic CBOR
   document - `signed_data` or `plain_data`, as text or as Base64 - which the
   app takes either way. A CPO's signed assignment of a price to a session
   (WWCP_POI's `SessionPriceAgreement`), which would make its price bound.
-- **Offline.** A station that checks tickets itself, without its CSMS.
+- **Offline.** A station that checks tickets itself, without its CSMS: drafted
+  in [ChargingWithATicketAtTheStation.md](ChargingWithATicketAtTheStation.md).
 
 
 ## What exists today

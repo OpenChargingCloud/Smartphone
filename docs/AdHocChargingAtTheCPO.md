@@ -23,7 +23,9 @@ From the payment on, both paths are the same.
 (November 2026), and what it expects of the CPO. Steps that happen at the CPO
 and not in the app are marked **[CPO]**. What is not covered yet is collected
 under [Gaps and open points](#gaps-and-open-points). The same with an
-e-mobility provider is [ChargingThroughTheEMP.md](ChargingThroughTheEMP.md).
+e-mobility provider is [ChargingThroughTheEMP.md](ChargingThroughTheEMP.md),
+and with a ticket of it shown at the station
+[ChargingWithATicketAtTheStation.md](ChargingWithATicketAtTheStation.md).
 
 
 ## The parties and what each one is trusted for
@@ -644,9 +646,6 @@ dispute link, the driver is told to dispute the session at the page.
   receipt are kept: a page that corrects one replaces nothing.
 - **The price the page showed** is not compared with the signed one, nor is
   the tariff the meter signs (OCMF `TT`).
-- **A flat fee** is not taken by WWCP_POI's simple profile of gross rates
-  (`chargy-gross-rates/v1`): a price agreement of it binds the price all the
-  same, of a profile WWCP_POI does not establish the rates of.
 - **A restriction or a component of current** is priced at nothing - no meter
   value says the current -, and the cost is not exact then: a receipt is not
   decided against it.

@@ -15,7 +15,9 @@ This is the walk through it, step by step. How the ticket, the start request
 and the stop request are built - their CBOR, their COSE signatures - is the
 draft [RemoteStartWithChargingTickets.md](RemoteStartWithChargingTickets.md);
 the same session paid ad hoc at the CPO is
-[AdHocChargingAtTheCPO.md](AdHocChargingAtTheCPO.md).
+[AdHocChargingAtTheCPO.md](AdHocChargingAtTheCPO.md), and with a ticket the app
+shows to the station itself, over NFC or BLE,
+[ChargingWithATicketAtTheStation.md](ChargingWithATicketAtTheStation.md).
 
 **Status: a draft, with gaps.** The app's side and the EMP's side exist; the
 CPO's side and a roaming hub in between do not yet. Steps are marked by who
@@ -262,7 +264,9 @@ meter value (OCMF `ID`), and nothing of the account.
 - **How the CPO trusts the EMP's ticket issuer:** its certificate per OCPI
   peering, or its keys as a party of the roaming network in WWCP_POI - then a
   CPO trusts every EMP of the network by the same trust anchor the app uses.
-- **Offline:** a station that checks tickets itself, without its CSMS.
+- **Offline:** a station that checks tickets itself, without its CSMS - a
+  ticket shown to it over NFC or BLE, drafted in
+  [ChargingWithATicketAtTheStation.md](ChargingWithATicketAtTheStation.md).
 
 
 ## Step 6 - [App] While it charges
