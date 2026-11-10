@@ -682,13 +682,14 @@ export interface SessionCheck {
     checkedAt:  string;
     /** Why nothing of it was checked. */
     error:      string | null;
-    /** Its price, where it was started through an e-mobility provider. */
+    /** Its price, where it was started through an e-mobility provider or by the web payment page of its operator. */
     price?: {
         error:                   string | null;
         /** Whether the price statements are the operator's: "valid", "invalid", "missing". */
         signatures:              string | null;
-        /** "unbound": in force for the EVSE at the start, not assigned to the session by the operator; "bound"; "missing"; "ambiguous"; "invalid". */
+        /** "unbound": in force for the EVSE at the start, not assigned to the session by the operator; "bound"; "unsupported": assigned, of terms not established; "missing"; "ambiguous"; "invalid". */
         applicability:           string | null;
+        /** The price agreement of the operator: "valid", "invalid" - also one of another charging mode than the session's -, "missing". */
         agreement:               string | null;
         publication:             string | null;
         publicationBeforeStart:  string | null;

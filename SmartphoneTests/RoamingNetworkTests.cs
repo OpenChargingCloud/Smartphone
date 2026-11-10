@@ -257,15 +257,24 @@ namespace cloud.charging.open.Smartphone.Tests
         /// <summary>
         /// A session started through the stand-in e-mobility provider at the
         /// DC EVSE of the roaming network, its station checked before: the
-        /// administrator, the driver, the session and the token of its start.
+        /// administrator, the driver, the session and the token of its start -
+        /// started in a second after the one its price was stated in, where
+        /// asked to: the provider countersigns to the second, and a price
+        /// agreement names that second as its start.
         /// </summary>
-        private async Task<(HttpClient Admin, HttpClient Driver, JObject Session, String Token)> ChargingThroughTheProvider()
+        private async Task<(HttpClient Admin, HttpClient Driver, JObject Session, String Token)> ChargingThroughTheProvider(Boolean ASecondAfterItsPrice = false)
         {
 
             emsp = await TestEMSP.Start();
 
             var admin   = await WithTheRoamingNetwork();
             var driver  = await SignedInAs("driver1", "driver");
+
+            if (ASecondAfterItsPrice)
+            {
+                var now = DateTimeOffset.UtcNow;
+                await Task.Delay(TimeSpan.FromSeconds(1) - TimeSpan.FromTicks(now.Ticks % TimeSpan.TicksPerSecond) + TimeSpan.FromMilliseconds(20));
+            }
 
             var (status, signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp.URL, username = "phone1", email = "phone1@example.org" });
 
@@ -2291,6 +2300,147 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(read["check"]?["meterValues"]?["verified"]?.Value<Boolean>(), Is.True,    read.ToString());
                 Assert.That(read["check"]?["price"]?["signatures"]?.Value<String>(),      Is.EqualTo("valid"));
             }
+
+        }
+
+        #endregion
+
+        #region APriceAgreementThroughTheProviderBindsThePriceTheOperatorChargesIt()
+
+        /// <summary>
+        /// The price agreement the operator signs for a session started through
+        /// the provider, which the provider passes on with what became of the
+        /// start, binds the price of the session: of the start request as the
+        /// provider countersigned it and of when it did, of the charging mode
+        /// "contract" and the profile of contracts - the price the operator
+        /// charges the provider. A later one does not replace it, and it is kept
+        /// with the session; the price of the record is compared with it.
+        /// </summary>
+        [Test]
+        public async Task APriceAgreementThroughTheProviderBindsThePriceTheOperatorChargesIt()
+        {
+
+            var (admin, driver, session, token) = await ChargingThroughTheProvider(ASecondAfterItsPrice: true);
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            // What the provider passes on is asked for whenever the page is shown.
+            smartphone!.ProviderReportInterval = TimeSpan.Zero;
+
+            var id       = session["id"]!.Value<String>()!;
+            var unbound  = await SessionWhen(driver, id, json => json["check"]?["price"]?["selected"] is JObject);
+            var digest   = unbound["check"]!["price"]!["selected"]!["digest"]!.Value<String>()!;
+
+            Assert.That(unbound["check"]!["price"]!["applicability"]!.Value<String>(), Is.EqualTo("unbound"), "no agreement yet");
+
+            emsp!.OperatorPriceAgreement(token, ProviderAgreement(session, digest, SessionPriceAgreement.Contract, SessionPriceAgreement.ContractGrossPriceProfile));
+
+            var bound = await SessionWhen(driver, id, json => json["check"]?["price"]?["agreement"]?.Value<String>() is "valid" or "invalid");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(bound["check"]!["price"]!["agreement"]!.Value<String>(),            Is.EqualTo("valid"), bound["check"]!.ToString());
+                Assert.That(bound["check"]!["price"]!["applicability"]!.Value<String>(),        Is.EqualTo("bound"), "of the profile of contracts");
+                Assert.That(bound["check"]!["price"]!["selected"]!["tariffId"]!.Value<String>(), Is.EqualTo(TestRoamingNetwork.DCTariff));
+            }
+
+            // One of a session paid ad hoc, passed on later, replaces nothing.
+            emsp.OperatorPriceAgreement(token, ProviderAgreement(session, digest, SessionPriceAgreement.AdHoc, SessionPriceAgreement.SimpleGrossPriceProfile));
+
+            var (status, stopped) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{id}/stop");
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), stopped.ToString());
+
+            var begin  = StartedAt(session);
+            var end    = DateTimeOffset.UtcNow;
+
+            emsp.OperatorCDR(token, 12.5m, 8.13m, end, SignedValues(
+                ("Start",  TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, token, (begin, "B", 1000.000m))),
+                ("End",    TestRoamingNetwork.OCMF(network.DCMeter,  TestRoamingNetwork.DCMeterSerial, token, (end,   "E", 1012.500m)))
+            ));
+
+            var finished  = await SessionWhen(driver, id, json => json["check"]?["meterValues"]?["costMatches"] is JValue { Type: JTokenType.Boolean });
+            var kept      = JArray.Parse(File.ReadAllText(Path.Combine(directory, ChargingSessions.DefaultFileName))).Single()["report"]?["priceAgreement"];
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(finished["check"]!["price"]!["applicability"]!.Value<String>(),      Is.EqualTo("bound"), "the first agreement is kept");
+                Assert.That(finished["check"]!["meterValues"]!["expectedCost"]!.Value<Decimal>(), Is.EqualTo(8.13m),  "12.5 kWh at 0.65 per kWh, as agreed");
+                Assert.That(finished["check"]!["meterValues"]!["costMatches"]!.Value<Boolean>(),  Is.True);
+                Assert.That(kept?["chargingMode"]?.Value<String>(),                              Is.EqualTo(SessionPriceAgreement.Contract), "the agreement is not kept with the session");
+            }
+
+        }
+
+        #endregion
+
+        #region APriceAgreementOfASessionPaidAdHocBindsNothingThroughTheProvider()
+
+        /// <summary>
+        /// A price agreement of the charging mode "adhoc" binds nothing of a
+        /// session started through the provider, whatever else it names: it is
+        /// of another session, and no price is taken of it.
+        /// </summary>
+        [Test]
+        public async Task APriceAgreementOfASessionPaidAdHocBindsNothingThroughTheProvider()
+        {
+
+            var (admin, driver, session, token) = await ChargingThroughTheProvider(ASecondAfterItsPrice: true);
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            // What the provider passes on is asked for whenever the page is shown.
+            smartphone!.ProviderReportInterval = TimeSpan.Zero;
+
+            var id       = session["id"]!.Value<String>()!;
+            var unbound  = await SessionWhen(driver, id, json => json["check"]?["price"]?["selected"] is JObject);
+            var digest   = unbound["check"]!["price"]!["selected"]!["digest"]!.Value<String>()!;
+
+            emsp!.OperatorPriceAgreement(token, ProviderAgreement(session, digest, SessionPriceAgreement.AdHoc, SessionPriceAgreement.SimpleGrossPriceProfile));
+
+            var refused = await SessionWhen(driver, id, json => json["check"]?["price"]?["agreement"]?.Value<String>() is "valid" or "invalid");
+            var price   = refused["check"]!["price"]!;
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(price["agreement"]!.Value<String>(),       Is.EqualTo("invalid"), price.ToString());
+                Assert.That(price["applicability"]!.Value<String>(),   Is.EqualTo("invalid"));
+                Assert.That(price["selected"]!.Type,                   Is.EqualTo(JTokenType.Null));
+                Assert.That(price["diagnostics"]![0]!.Value<String>(), Is.EqualTo("Its price agreement is of a session paid ad hoc, and it was started through an e-mobility provider."));
+            }
+
+        }
+
+        #endregion
+
+        #region (private) ProviderAgreement(Session, PriceStatementDigest, ChargingMode, PricingProfile)
+
+        /// <summary>
+        /// The price agreement the operator of the DC EVSE signs for the given
+        /// session started through the provider: of its start request as the
+        /// provider countersigned it, and of when it did.
+        /// </summary>
+        private JObject ProviderAgreement(JObject Session, String PriceStatementDigest, String ChargingMode, String PricingProfile)
+        {
+
+            var countersignedAt = new DateTimeOffset(Session["start"]!["countersignedAt"]!.Value<DateTime>().ToUniversalTime(), TimeSpan.Zero);
+
+            return SessionPriceAgreement.Create(network!.OperatorSigning,
+                                                POIPublicKey.From(network.OperatorSigning).Id,
+                                                COSEAlgorithm.ES256,
+                                                TestRoamingNetwork.NetworkId,
+                                                TestRoamingNetwork.DCEVSE,
+                                                TestRoamingNetwork.DCMeterSerial,
+                                                countersignedAt,
+                                                Session["start"]!["requestDigest"]!.Value<String>()!,
+                                                TestRoamingNetwork.DCTariff,
+                                                PriceStatementDigest,
+                                                TestRoamingNetwork.GEF,
+                                                ChargingMode,
+                                                PricingProfile:  PricingProfile,
+                                                SignedAt:        countersignedAt).JSON;
 
         }
 

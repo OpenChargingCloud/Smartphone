@@ -357,6 +357,19 @@ CDR yet; nor is a CDR without signed values, or with a wrong one, disputed.
   EVSE when the session started, of those kept with it: WWCP_POI's
   `SessionPriceEvidence`, its start document the start request as the EMP
   countersigned it. The app says whether it is the price it counted with.
+- **Bound to the session** it is where the CPO signed a price agreement for it
+  (WWCP_POI's `SessionPriceAgreement`) and the EMP passed it on with what
+  became of the start (`priceAgreement`,
+  [section 9 of the draft](RemoteStartWithChargingTickets.md#9-after-the-start-what-the-app-learns-of-it)):
+  of the start request as the EMP countersigned it and of its `iat`, to the
+  second - the price in force then -, of the
+  charging mode `contract` and of the profile of contracts
+  (`chargy-contract-gross-rates/v1`), which WWCP_POI establishes the rates of.
+  The app keeps the first one that came; a later one replaces nothing. One of
+  the charging mode `adhoc` is of a session paid at the station, not of this
+  one: it binds nothing, and no price is taken of it. A price so bound is the
+  one **the CPO charges the EMP** for the session, which its CDR bills - not
+  the one the EMP charges the driver.
 - **The cost:** what the tariff of that price makes of what the meter signed
   when - energy, a flat fee, the time charging and the time parked, each where
   its restrictions hold, in its step size, with its VAT, as for ad hoc charging
@@ -369,20 +382,20 @@ CDR yet; nor is a CDR without signed values, or with a wrong one, disputed.
   session.
 
 What is **not proven**, and said so: that the meter's clock was right, that
-the version of the proof was the latest one, and that the CPO assigned the
-price to this very session - it is "unbound": nothing carries such an
-assignment to the app through an EMP.
+the version of the proof was the latest one, and - where no agreement came -
+that the CPO assigned the price to this very session: it is "unbound" then.
 
 **Open:**
 
-- A CPO's signed assignment of the price to the session (WWCP_POI's
-  `SessionPriceAgreement`), which would make it bound. Ad hoc, the web payment
-  page gives one over its payment link
-  ([Step 6 there](AdHocChargingAtTheCPO.md#the-price-agreement-and-the-receipt));
-  through an EMP, neither the CDR nor the EMP's API carries one.
+- How the CPO gives the EMP its price agreement: OCPI carries none, neither in
+  the session nor in the CDR, and no roaming hub passes one on. The EMP's API
+  has its place (`priceAgreement`); the EMP
+  ([EMSP](https://github.com/OpenChargingCloud/EMSP)) does not fill it yet,
+  and only the stand-in of the app's tests does.
 - The EMP's price: the CPO's price is what the CDR says, not what the EMP
   bills its driver. What the EMP charges the account - its own tariff, its
-  invoice - is not part of this, and the app compares nothing with it.
+  invoice - is not part of this, no agreement of the CPO binds it, and the app
+  compares nothing with it.
 
 
 ## Step 10 - Billing and disputes
@@ -423,7 +436,7 @@ account the token was made for, and bills it. The CPO's CDR names no account.
 | Signed meter values while it charges, e.g. a live link through the EMP | [Step 6](#step-6---app-while-it-charges) |
 | The EMP pushing to the app rather than being asked | [Step 6](#step-6---app-while-it-charges) |
 | Status, error flags and order of the values of a CDR | [Step 8](#step-8---app-the-cdr-and-its-signed-meter-values) |
-| A price bound to the session | [Step 9](#step-9---app-the-final-price) |
+| The CPO's price agreement of a session carried to the EMP, in OCPI and through a roaming hub | [Step 9](#step-9---app-the-final-price) |
 | Disputes, and the EMP's invoice compared | [Step 10](#step-10---billing-and-disputes) |
 | How many minutes `at` and `iat` may be off at the EMP and the CPO | [the draft](RemoteStartWithChargingTickets.md#open-points) |
 | Text or integer labels in the EMP's protected header | [the draft](RemoteStartWithChargingTickets.md#open-points) |
@@ -433,7 +446,7 @@ account the token was made for, and bills it. The CPO's CDR names no account.
 
 | | |
 |---|---|
-| **App** (Smartphone) | the station's proof and prices checked; an account at an EMP with an account key; a ticket per start; start and stop requests, signed and their countersignature checked; what became of a start asked of the EMP and taken only where it is of that start; the signed values of a CDR and its price checked |
+| **App** (Smartphone) | the station's proof and prices checked; an account at an EMP with an account key; a ticket per start; start and stop requests, signed and their countersignature checked; what became of a start asked of the EMP and taken only where it is of that start; the signed values of a CDR and its price checked, bound by the CPO's price agreement where the EMP passes one on |
 | **EMP** ([EMSP](https://github.com/OpenChargingCloud/EMSP)) | accounts, account keys, tickets; start and stop requests checked, countersigned and sent on as OCPI `START_SESSION` / `STOP_SESSION` on 2.2.1 and 2.3.0; the token of a start `ALLOWED` only for it; what became of a start, told to the app |
 | **CPO** ([CSMS](https://github.com/OpenChargingCloud/CSMSCLI)) | missing: starting and stopping on the commands, checking tickets, limits, the token in OCMF `ID` |
 | **Roaming hub** ([RoamingHub](https://github.com/OpenChargingCloud/RoamingHubCLI)) | missing: passing on commands, their results, sessions and CDRs between peers |
@@ -456,4 +469,4 @@ started.
 | 2 | [`Smartphone/Provider/ChargingTickets.cs`](../Smartphone/Provider/ChargingTickets.cs) |
 | 3, 7 | [`Smartphone/Provider/StartRequests.cs`](../Smartphone/Provider/StartRequests.cs) |
 | 6 | [`Smartphone/Provider/ProviderReport.cs`](../Smartphone/Provider/ProviderReport.cs), [`Smartphone/Smartphone.Evidence.cs`](../Smartphone/Smartphone.Evidence.cs) |
-| 8, 9 | [`Smartphone/Charging/SessionCheck.cs`](../Smartphone/Charging/SessionCheck.cs), [`SessionEvidence.cs`](../Smartphone/Charging/SessionEvidence.cs) |
+| 8, 9 | [`Smartphone/Charging/SessionCheck.cs`](../Smartphone/Charging/SessionCheck.cs), [`SessionEvidence.cs`](../Smartphone/Charging/SessionEvidence.cs); the price agreement: [`Smartphone/Provider/ProviderReport.cs`](../Smartphone/Provider/ProviderReport.cs) |

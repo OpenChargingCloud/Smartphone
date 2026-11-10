@@ -29,14 +29,23 @@ namespace cloud.charging.open.Smartphone.Provider
     /// <summary>
     /// What the e-mobility provider said of a start through it, the last time
     /// the phone asked (<c>GET /api/v1/tickets/{id}</c>): its own state of the
-    /// start, what the charge point operator answered the commands, and the
+    /// start, what the charge point operator answered the commands, the
     /// session and the charge detail record the operator pushed for it - each
-    /// as far as the operator sent it, and only where it is of this start.
+    /// as far as the operator sent it, and only where it is of this start -,
+    /// and the price agreement the operator signed for it, where it gave one.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The session and the CDR are kept as OCPI writes them and as they came,
     /// so that the signed meter values of a CDR are there to be checked once
     /// the phone checks them. Times in them stay text, with their offsets.
+    /// </para>
+    /// <para>
+    /// The price agreement is WWCP_POI's SessionPriceAgreement, as the
+    /// operator signed it and the provider passed it on: the provider's word
+    /// is nothing of it, the operator's signature all. It is checked with the
+    /// price of the session.
+    /// </para>
     /// </remarks>
     /// <param name="ReceivedAt">When the phone took it.</param>
     /// <param name="State">The provider's state of the start: "sent", "started", "refused", "failed", "stopped", "ended" or "expired".</param>
@@ -45,13 +54,15 @@ namespace cloud.charging.open.Smartphone.Provider
     /// <param name="StopResult">OCPI's CommandResult of STOP_SESSION, as the operator sent it, or null until it did.</param>
     /// <param name="Session">The OCPI session the operator pushed for the start, or null until it did.</param>
     /// <param name="CDR">The OCPI charge detail record the operator pushed for the start, or null until it did.</param>
+    /// <param name="PriceAgreement">The price agreement the operator signed for the start, or null until it gave one.</param>
     public sealed record ProviderReport(DateTimeOffset   ReceivedAt,
                                         String           State,
                                         DateTimeOffset?  EndedAt,
                                         JObject?         Result,
                                         JObject?         StopResult,
                                         JObject?         Session,
-                                        JObject?         CDR)
+                                        JObject?         CDR,
+                                        JObject?         PriceAgreement  = null)
     {
 
         #region Properties
@@ -158,10 +169,11 @@ namespace cloud.charging.open.Smartphone.Provider
             return new ProviderReport(Now,
                                       state,
                                       Time(start["endedAt"]),
-                                      start["result"]     as JObject,
-                                      start["stopResult"] as JObject,
+                                      start["result"]         as JObject,
+                                      start["stopResult"]     as JObject,
                                       session,
-                                      cdr);
+                                      cdr,
+                                      start["priceAgreement"] as JObject);
 
         }
 
@@ -235,8 +247,9 @@ namespace cloud.charging.open.Smartphone.Provider
 
             if (Result     is not null) json.Add(new JProperty("result",      Result));
             if (StopResult is not null) json.Add(new JProperty("stopResult",  StopResult));
-            if (Session    is not null) json.Add(new JProperty("session",     Session));
-            if (CDR        is not null) json.Add(new JProperty("cdr",         CDR));
+            if (Session        is not null) json.Add(new JProperty("session",         Session));
+            if (CDR            is not null) json.Add(new JProperty("cdr",             CDR));
+            if (PriceAgreement is not null) json.Add(new JProperty("priceAgreement",  PriceAgreement));
 
             return json;
 
@@ -258,8 +271,9 @@ namespace cloud.charging.open.Smartphone.Provider
                                       Time(json["endedAt"]),
                                       json["result"]     as JObject,
                                       json["stopResult"] as JObject,
-                                      json["session"]    as JObject,
-                                      json["cdr"]        as JObject);
+                                      json["session"]         as JObject,
+                                      json["cdr"]             as JObject,
+                                      json["priceAgreement"]  as JObject);
 
         }
 

@@ -139,8 +139,12 @@ export const sessionPage: Page = {
                                               </div>
                                               <p class="small muted">
                                                   ${price.applicability === 'bound'
-                                                        ? 'In force when it started, and assigned to this session by the operator.'
-                                                        : 'In force for this charge point when it started. The operator signed no assignment of it to this session.'}
+                                                        ? session.start !== undefined
+                                                              ? 'In force when it started, and assigned to this session by the operator: the price it charges the e-mobility provider for it, not the one the provider charges you.'
+                                                              : 'In force when it started, and assigned to this session by the operator.'
+                                                        : price.agreement === 'valid'
+                                                              ? `In force when it started, and assigned to this session by the operator, of terms this phone does not establish: ${price.diagnostics[0] ?? 'of no profile it knows.'}`
+                                                              : 'In force for this charge point when it started. The operator signed no assignment of it to this session.'}
                                               </p>`
                                         : html`<p class="small muted price-none">
                                                    ${price.signatures === 'missing'

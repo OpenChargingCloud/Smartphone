@@ -531,7 +531,10 @@ at once. The page answers with:
   CPO with a key the proof attests that may sign `priceStatements`: a tariff
   and the price statement in force at the start, assigned to this very session,
   named by its EVSE, its meter, when the start value says it began and the
-  SHA-256 of that start value as it came. The app checks it once the start
+  SHA-256 of that start value as it came, of the charging mode `adhoc` - one
+  of `contract` is of a session through an e-mobility provider
+  ([Step 9 there](ChargingThroughTheEMP.md#step-9---app-the-final-price)) and
+  does not hold. The app checks it once the start
   value held. Where it holds, the price is **bound** to the session, and the
   session is charged by the tariff it agreed; where it does not, the session is
   disputed.

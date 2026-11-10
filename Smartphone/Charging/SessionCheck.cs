@@ -348,10 +348,20 @@ namespace cloud.charging.open.Smartphone.Charging
             if (AuthorityOf(Configuration, evidence, Now, out var authorityError) is not IRoamingNetworkTrustAuthority authority)
                 return new SessionCheck(Now, authorityError, null, Session.PricePerKWh, null, null, cdrEnergy, cdrCost);
 
+            // Started through an e-mobility provider, a session is bound to its
+            // price by an agreement of when its start request says the provider
+            // countersigned it - to the second -, which the operator it went to
+            // knows as well; without one, its price is the one in force when the
+            // phone started it.
             var price              = Session.Start is not null
-                                         ? PriceOf(authority, evidence, Session.StartedAt, Session.Start.RequestDigest, null)
+                                         ? PriceOf(authority,
+                                                   evidence,
+                                                   Session.Report?.PriceAgreement is not null ? Session.Start.CountersignedAt : Session.StartedAt,
+                                                   Session.Start.RequestDigest,
+                                                   Session.Report?.PriceAgreement,
+                                                   SessionPriceAgreement.Contract)
                                          : LiveLinkStartOf(Session) is (DateTimeOffset started, String digest)
-                                               ? PriceOf(authority, evidence, started, digest, Session.LiveLink!.Payment?.Agreement)
+                                               ? PriceOf(authority, evidence, started, digest, Session.LiveLink!.Payment?.Agreement, SessionPriceAgreement.AdHoc)
                                                : null;
 
             var (values, problem)  = MeterValuesOf(authority, evidence, Session);
@@ -623,20 +633,23 @@ namespace cloud.charging.open.Smartphone.Charging
 
         #endregion
 
-        #region (private static) PriceOf(Authority, Evidence, Session)
+        #region (private static) PriceOf(Authority, Evidence, Started, StartDocumentSHA256, Agreement, ChargingMode)
 
         /// <summary>
         /// The price of the session as the price statements kept with it say,
         /// in force when it started - its start document the start as the
         /// provider countersigned it, or the signed start value of its live
         /// link - and bound to it by the price agreement of its operator, where
-        /// one is given.
+        /// one is given: one of the charging mode of the session, "contract"
+        /// where it was started through an e-mobility provider, "adhoc" where
+        /// the web payment page of the operator started it.
         /// </summary>
         private static SessionPriceCheck PriceOf(IRoamingNetworkTrustAuthority  Authority,
                                                  SessionEvidence                Evidence,
                                                  DateTimeOffset                 Started,
                                                  String                         StartDocumentSHA256,
-                                                 JToken?                        Agreement)
+                                                 JToken?                        Agreement,
+                                                 String                         ChargingMode)
         {
 
             if (!Evidence.PriceEvidenceWith(Agreement).TryVerify(Authority,
@@ -648,6 +661,21 @@ namespace cloud.charging.open.Smartphone.Charging
                                                                  out var error))
                 return new SessionPriceCheck(null, error, null);
 
+            // Of another charging mode, an agreement is of another session than
+            // this one, whatever else it names, as WWCP_POI holds one that does
+            // not match the session: one of a session paid ad hoc binds nothing
+            // of one started through an e-mobility provider, nor the reverse.
+            if (verification.Agreement == "valid" &&
+                Agreement?["chargingMode"]?.Value<String>() is String mode && mode != ChargingMode)
+            {
+                verification = verification with {
+                                   Applicability  = "invalid",
+                                   Agreement      = "invalid",
+                                   Selected       = null,
+                                   Diagnostics    = [ $"Its price agreement is of a session {ChargingModeInWords(mode)}, and it was {ChargingModeInWords(ChargingMode)}.", .. verification.Diagnostics ]
+                               };
+            }
+
             return new SessionPriceCheck(verification,
                                          null,
                                          verification.Selected is SelectedSessionPrice selected
@@ -655,6 +683,17 @@ namespace cloud.charging.open.Smartphone.Charging
                                              : null);
 
         }
+
+        /// <summary>
+        /// How a session of the given charging mode is paid, in words.
+        /// </summary>
+        private static String ChargingModeInWords(String ChargingMode)
+
+            => ChargingMode switch {
+                   SessionPriceAgreement.AdHoc     => "paid ad hoc",
+                   SessionPriceAgreement.Contract  => "started through an e-mobility provider",
+                   _                               => $"of the charging mode \"{ChargingMode}\""
+               };
 
         #endregion
 
@@ -706,7 +745,7 @@ namespace cloud.charging.open.Smartphone.Charging
             if (AuthorityOf(Configuration, evidence, Now, out var authorityError) is not IRoamingNetworkTrustAuthority authority)
                 return (null, authorityError, null);
 
-            var price = PriceOf(authority, evidence, started, digest, agreement);
+            var price = PriceOf(authority, evidence, started, digest, agreement, SessionPriceAgreement.AdHoc);
 
             if (price.Verification is not SessionPriceVerification verification)
                 return (null, price.Error, null);
@@ -758,7 +797,7 @@ namespace cloud.charging.open.Smartphone.Charging
                     return Check(null, "Its signature can not be checked now: nothing of the session is.");
 
                 if (LiveLinkStartOf(Session) is not (DateTimeOffset started, String digest) ||
-                    PriceOf(authority, evidence, started, digest, null).Verification is not SessionPriceVerification verification)
+                    PriceOf(authority, evidence, started, digest, null, SessionPriceAgreement.AdHoc).Verification is not SessionPriceVerification verification)
                     return Check(null, "Its signature can not be checked: no signed start value of the session held, which the station is checked of.");
 
                 if (!receipt.TryVerify(verification.Station, out var signatureError))

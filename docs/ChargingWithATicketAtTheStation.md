@@ -336,7 +336,11 @@ was offline at the station checks now what it could not then: the station's
 answer to its challenge, with the key its proof of that time attests.
 
 **Open:** the CDR as OCPI has it carries neither the ticket nor the start
-request; as for `START_SESSION`, fields of their own.
+request; as for `START_SESSION`, fields of their own. And the CPO's price
+agreement, which binds the price through the EMP (charging mode `contract`):
+there it names when the EMP countersigned the start request, which no EMP
+countersigns here - whether it names the request's `at` or the begin the
+meter signed.
 
 
 ## Who carries the risk

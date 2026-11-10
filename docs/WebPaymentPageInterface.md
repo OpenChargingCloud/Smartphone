@@ -335,6 +335,7 @@ session.
 | `roamingNetworkId`, `EVSEId`, `meterSerialNumber` | of this session, as the station's proof says |
 | `chargingStarted` | the time `TM` of the reading `TX` = `B` of the start value, to the second it says |
 | `startDocumentSHA256` | the SHA-256, as lowercase hex, of the start value exactly as it came over the live link - `OCMF\|{payload}\|{signature}` -, in UTF-8 |
+| `chargingMode`, `pricingProfile` | `adhoc`, of the simple profile `chargy-gross-rates/v1` for WWCP_POI to establish its rates: one of `contract` is of a session started through an e-mobility provider, not of this one, and does not hold |
 | `chargingTariffId`, `priceStatementDigest` | a tariff of the EVSE and the price statement of its operator in force at the start, of those the phone kept |
 | `signer`, `keyId`, `value` | the CPO, signing with a key the proof attests and that may sign `priceStatements`, valid when it signed and at the start |
 | `signedAt` | not after now: one signed after the phone's now is checked again later |

@@ -514,6 +514,33 @@ describe('a charging session', () => {
 
     });
 
+    it('says a price the operator assigned to a session through the provider is the one it charges the provider', async () => {
+
+        const checked = sessionCheck();
+
+        current = reportedSession({ status: 'finished', energyKWh: 12.5, endedAt: '2026-10-10T09:30:00Z',
+                                    provider: { state: 'ended', receivedAt: '2026-10-10T09:31:00Z', cdr: true },
+                                    check: { ...checked, price: { ...checked.price!, applicability: 'bound', agreement: 'valid' } } });
+
+        const bound = (await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                                  smartphone, root => root.querySelector('.session-price') !== null)).querySelector('.session-price')!.textContent!;
+
+        assert.match(bound, /assigned to this session by the operator: the price it charges the e-mobility provider for it, not the one the provider charges you/);
+        assert.doesNotMatch(bound, /signed no assignment/);
+
+        current = reportedSession({ status: 'finished', energyKWh: 12.5, endedAt: '2026-10-10T09:30:00Z',
+                                    provider: { state: 'ended', receivedAt: '2026-10-10T09:31:00Z', cdr: true },
+                                    check: { ...checked, price: { ...checked.price!, applicability: 'unsupported', agreement: 'valid',
+                                                                  diagnostics: [ 'EMP/contract terms, variable binding, unknown price profile or conditional elements are not established by this profile' ] } } });
+
+        const unsupported = (await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                                        smartphone, root => root.querySelector('.session-price') !== null)).querySelector('.session-price')!.textContent!;
+
+        assert.match(unsupported, /assigned to this session by the operator, of terms this phone does not establish: EMP\/contract terms/);
+        assert.doesNotMatch(unsupported, /signed no assignment/);
+
+    });
+
     it("says which meter value is not the meter's, and why, and where the phone counted with another price", async () => {
 
         const checked = sessionCheck();

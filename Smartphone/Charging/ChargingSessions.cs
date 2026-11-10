@@ -290,7 +290,9 @@ namespace cloud.charging.open.Smartphone.Charging
 
         /// <summary>
         /// What the e-mobility provider reported of a session started through
-        /// it, kept with the session in place of what it reported before.
+        /// it, kept with the session in place of what it reported before - but
+        /// the first price agreement of the operator it passed on, which a later
+        /// one does not replace, as a web payment page's does not.
         /// </summary>
         public Boolean TryReport(String                                     Id,
                                  ProviderReport                             Report,
@@ -312,7 +314,7 @@ namespace cloud.charging.open.Smartphone.Charging
                 }
 
                 var before    = sessions[index];
-                var reported  = before with { Report = Report };
+                var reported  = before with { Report = Report with { PriceAgreement = before.Report?.PriceAgreement ?? Report.PriceAgreement } };
 
                 sessions[index] = reported;
 

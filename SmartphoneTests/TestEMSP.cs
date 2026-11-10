@@ -217,7 +217,7 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
-        #region OperatorResult(Token, Result) / OperatorSession(Token, Status, KWh, Cost) / OperatorCDR(Token, KWh, Cost, End)
+        #region OperatorResult(Token, Result) / OperatorSession(Token, Status, KWh, Cost) / OperatorCDR(Token, KWh, Cost, End) / OperatorPriceAgreement(Token, Agreement)
 
         /// <summary>
         /// The charge point operator's CommandResult of the start of the given
@@ -325,6 +325,15 @@ namespace cloud.charging.open.Smartphone.Tests
                         );
 
         }
+
+        /// <summary>
+        /// The price agreement the charge point operator signed for the start
+        /// of the given token, passed on as it came (WWCP_POI's
+        /// SessionPriceAgreement) - in place of one before.
+        /// </summary>
+        public void OperatorPriceAgreement(String Token, JObject Agreement)
+
+            => reported[Token].PriceAgreement = Agreement;
 
         /// <summary>
         /// The meter value its charge detail records carry, as an OCMF text.
@@ -1045,6 +1054,7 @@ namespace cloud.charging.open.Smartphone.Tests
         public JObject?         Result      { get; set; }
         public JObject?         Session     { get; set; }
         public JObject?         CDR         { get; set; }
+        public JObject?         PriceAgreement  { get; set; }
 
         /// <summary>
         /// The start as GET /api/v1/tickets/{id} tells it - with another token,
@@ -1080,6 +1090,9 @@ namespace cloud.charging.open.Smartphone.Tests
 
             if (CDR is not null)
                 json["cdr"] = CDR.DeepClone();
+
+            if (PriceAgreement is not null)
+                json["priceAgreement"] = PriceAgreement.DeepClone();
 
             return json;
 
