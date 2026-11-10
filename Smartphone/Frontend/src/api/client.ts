@@ -411,8 +411,8 @@ export interface ChargingSession {
     energyKWh:        number;
     targetEnergyKWh?: number;
     progressPercent?: number;
-    /** What it costs: as the operator reported it, where it did ("reported"), else charged times the price. */
-    cost:             { amount: number; pricePerKWh: number; currency: string; reported?: boolean };
+    /** What it costs: as the operator reported it, where it did ("reported"), else what its tariff makes of what it charged when ("worked") - or charged times the price, at a demo station. */
+    cost:             SessionCost;
     stoppedBy?:       string;
     /** Why this phone stopped it: of a live link, one of its signed values is a wrong one. */
     stoppedBecause?:  string;
@@ -425,6 +425,54 @@ export interface ChargingSession {
     check?:           SessionCheck;
     /** Of a session the web payment page of its operator started: its live link, and what came over it. */
     liveLink?:        LiveLinkFollow;
+}
+
+/** What a session costs, and how it was worked out. */
+export interface SessionCost {
+    amount:       number;
+    pricePerKWh:  number;
+    currency:     string;
+    reported?:    boolean;
+    /** The tariff it is charged by, where it is charged by one. */
+    tariffId?:    string | null;
+    /** Whether it is charged by the tariff the operator agreed for it. */
+    agreed?:      boolean;
+    /** What its tariff makes of what it charged when, part by part. */
+    worked?:      TariffCost;
+}
+
+/** The cost of a session as its tariff makes it: each part, whether everything could be decided, and why not. */
+export interface TariffCost {
+    currency:    string;
+    amount:      number;
+    components:  CostComponent[];
+    exact:       boolean;
+    notes:       string[];
+    /** Whether every part stated its VAT: else its price is taken as it is. */
+    vatStated:   boolean;
+    /** "minimum" or "maximum", where the least or the most the tariff says made the amount. */
+    limit:       'minimum' | 'maximum' | null;
+}
+
+/** One part of the cost of a session: of which element of its tariff, what, how much, at which price. */
+export interface CostComponent {
+    element:    number;
+    dimension:  'energy' | 'flat' | 'time' | 'parking';
+    quantity:   number;
+    unit:       string;
+    price:      number;
+    vat:        number | null;
+    amount:     number;
+}
+
+/** The payment of a session as its payment link says it: the price agreement of the operator for it, and the receipt of what the page took. */
+export interface LiveLinkPayment {
+    askedAt:    string | null;
+    problem:    string | null;
+    agreement:  { cameAt: string | null; holds: boolean | null; error: string | null; tariffId: string | null; priceStatementDigest: string | null;
+                  signer: string | null; signedAt: string | null; keyId: string | null } | null;
+    receipt:    { cameAt: string | null; holds: boolean | null; error: string | null; amount?: number; currency?: string; capturedAt?: string;
+                  cost?: number | null; signed?: boolean; keyId?: string | null; paymentReference?: string | null } | null;
 }
 
 /** The live link of a session the web payment page of its operator started: what came over it, as its signed documents say, and how each signed value held against the proof of the station. */
@@ -485,11 +533,16 @@ export interface LiveLinkFollow {
     /** Where the hand-over the phone took came from - the host of that web payment page -; null where what the page gave was typed or pasted. */
     handOver:         string | null;
     /** What of what the page gave is bound to the operator of the station: links at the host of its web payment page, a payment reference of a hand-over from there. */
-    bound:            { stopLink: boolean; disputeLink: boolean; paymentReference: boolean };
+    bound:            { stopLink: boolean; disputeLink: boolean; paymentReference: boolean; paymentLink: boolean };
+    /** Where the payment link the page gave goes: its host; null where it gave none. */
+    paymentLink:      string | null;
+    /** What its payment link said so far; null while it was not asked. */
+    payment:          LiveLinkPayment | null;
 }
 
 /** What is handed over with a live link, where the web payment page gave it: its stop link, its dispute link, the reference of the payment it took, and the limit chosen there. */
 export interface LiveLinkHandOver {
+    paymentLink?:       string;
     stopLink?:          string;
     disputeLink?:       string;
     paymentReference?:  string;
@@ -725,7 +778,8 @@ export const api = {
                                                                                    ...(handOver.stopLink         !== undefined ? { stopLink:         handOver.stopLink }         : {}),
                                                                                    ...(handOver.disputeLink      !== undefined ? { disputeLink:      handOver.disputeLink }      : {}),
                                                                                    ...(handOver.paymentReference !== undefined ? { paymentReference: handOver.paymentReference } : {}),
-                                                                                   ...(handOver.limit            !== undefined ? { limit:            handOver.limit }            : {}) }),
+                                                                                   ...(handOver.limit            !== undefined ? { limit:            handOver.limit }            : {}),
+                                                                                   ...(handOver.paymentLink      !== undefined ? { paymentLink:      handOver.paymentLink }      : {}) }),
         /**
          * Take over the session the web payment page of the operator started there through the hand-over it gave: the https URL of the document
          * that names its live link, its links, the reference of the payment and the limit - taken from the host of that page alone -, or the document.
@@ -734,6 +788,8 @@ export const api = {
                           request<ChargingSession>('POST', '/charging/sessions', { locationId, evseUid, handOver }),
         /** Stop a session - of a live link through the stop link of the page: the one handed over, or the one given now. */
         stop:         (id: string, stopLink?: string)       => request<ChargingSession> ('POST', `${session(id)}/stop`, stopLink !== undefined ? { stopLink } : {}),
+        /** Ask the payment link of a session of a live link now: its price agreement and its receipt. */
+        payment:      (id: string)                          => request<ChargingSession> ('POST', `${session(id)}/payment`, {}),
         /** Dispute a session of a live link through the dispute link of the page - the one handed over, or the one given now - for why the phone disputes it. */
         dispute:      (id: string, disputeLink?: string)    => request<ChargingSession> ('POST', `${session(id)}/dispute`, disputeLink !== undefined ? { disputeLink } : {})
     }

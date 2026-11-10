@@ -30,8 +30,8 @@ namespace cloud.charging.open.Smartphone.Charging
     /// What the web payment page of the operator of a station gives the driver
     /// for the session it started there, in one document the phone reads: the
     /// live link of the session, its stop link and its dispute link, the
-    /// reference of the payment it took and the limit the driver chose - all
-    /// of it at once, not each typed or pasted on its own.
+    /// reference of the payment it took, the limit the driver chose and its
+    /// payment link - all of it at once, not each typed or pasted on its own.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -53,11 +53,13 @@ namespace cloud.charging.open.Smartphone.Charging
     /// <param name="DisputeLink">The https URL of this session alone a POST disputes it at, where the page gives one.</param>
     /// <param name="PaymentReference">The reference of the payment the page took, which the station writes into the identification ("ID") of every signed value of the session, where the page gives one.</param>
     /// <param name="Limit">The limit the driver chose at the page, as OCPP 2.1 says it to the station, where the driver chose one.</param>
+    /// <param name="PaymentLink">The https URL of this session alone that says its payment - the price agreement of the operator for it, and the receipt of what the page took -, where the page gives one.</param>
     public sealed record WebPaymentHandOver(JToken             LiveLink,
                                             String?            StopLink          = null,
                                             String?            DisputeLink       = null,
                                             String?            PaymentReference  = null,
-                                            TransactionLimit?  Limit             = null)
+                                            TransactionLimit?  Limit             = null,
+                                            String?            PaymentLink       = null)
     {
 
         #region Data
@@ -92,6 +94,7 @@ namespace cloud.charging.open.Smartphone.Charging
             if (DisputeLink      is not null)  json.Add(new JProperty("disputeLink",       DisputeLink));
             if (PaymentReference is not null)  json.Add(new JProperty("paymentReference",  PaymentReference));
             if (Limit            is not null)  json.Add(new JProperty("limit",             Limit.ToJSON()));
+            if (PaymentLink      is not null)  json.Add(new JProperty("paymentLink",       PaymentLink));
 
             return json;
 
@@ -129,7 +132,8 @@ namespace cloud.charging.open.Smartphone.Charging
 
             if (!TryText(JSON, "stopLink",         out var stopLink,         out Error) ||
                 !TryText(JSON, "disputeLink",      out var disputeLink,      out Error) ||
-                !TryText(JSON, "paymentReference", out var paymentReference, out Error))
+                !TryText(JSON, "paymentReference", out var paymentReference, out Error) ||
+                !TryText(JSON, "paymentLink",      out var paymentLink,      out Error))
             {
                 return false;
             }
@@ -146,6 +150,12 @@ namespace cloud.charging.open.Smartphone.Charging
                 return false;
             }
 
+            if (paymentLink is not null && !TryLinkURL(paymentLink, out _))
+            {
+                Error = $"Its 'paymentLink' '{paymentLink}' is no https URL to ask the payment of the session at.";
+                return false;
+            }
+
             if (paymentReference is not null && !IsPaymentReference(paymentReference))
             {
                 Error = $"Its 'paymentReference' '{paymentReference}' is no payment reference: a text of at most {MaxPaymentReferenceLength} characters, none of them a control character.";
@@ -158,7 +168,7 @@ namespace cloud.charging.open.Smartphone.Charging
                 return false;
             }
 
-            HandOver = new WebPaymentHandOver(liveLink.DeepClone(), stopLink, disputeLink, paymentReference, limit);
+            HandOver = new WebPaymentHandOver(liveLink.DeepClone(), stopLink, disputeLink, paymentReference, limit, paymentLink);
             return true;
 
         }

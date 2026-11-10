@@ -124,6 +124,13 @@ namespace cloud.charging.open.Smartphone.Tests
         /// </summary>
         public ECPrivateKeyParameters     OperatorPrices    { get; }
 
+        /// <summary>
+        /// The private key of the signing key of DE*GEF that names no usage,
+        /// and so may sign anything: its price statements, a price agreement,
+        /// a receipt of a payment.
+        /// </summary>
+        public ECPrivateKeyParameters     OperatorSigning   { get; }
+
         public String                     URL
             => TrustAnchor.URLs[0].ToString();
 
@@ -139,7 +146,8 @@ namespace cloud.charging.open.Smartphone.Tests
                                    String                     DCMeterKey,
                                    ECPrivateKeyParameters     DCMeter,
                                    ECPrivateKeyParameters     OperatorRecords,
-                                   ECPrivateKeyParameters     OperatorPrices)
+                                   ECPrivateKeyParameters     OperatorPrices,
+                                   ECPrivateKeyParameters     OperatorSigning)
         {
             this.HTTPServer       = HTTPServer;
             this.API              = API;
@@ -150,20 +158,24 @@ namespace cloud.charging.open.Smartphone.Tests
             this.DCMeter          = DCMeter;
             this.OperatorRecords  = OperatorRecords;
             this.OperatorPrices   = OperatorPrices;
+            this.OperatorSigning  = OperatorSigning;
         }
 
         #endregion
 
 
-        #region (static) Start(Now = null, DCWebPayment = null)
+        #region (static) Start(Now = null, DCWebPayment = null, DCPrice = null)
 
         /// <summary>
         /// The network, attested now, served on a free port of the loopback -
         /// the web payment page of its DC station where a test gives one, as
-        /// a test CPO serves it, else <see cref="DCWebPaymentURL"/>.
+        /// a test CPO serves it, else <see cref="DCWebPaymentURL"/>, and the
+        /// elements its ad hoc price statement sets for the DC EVSE, where a
+        /// test gives them, else 0.65 a kWh.
         /// </summary>
         public static async Task<TestRoamingNetwork> Start(DateTimeOffset?  Now           = null,
-                                                           String?          DCWebPayment  = null)
+                                                           String?          DCWebPayment  = null,
+                                                           JArray?          DCPrice       = null)
         {
 
             var now          = Now ?? DateTimeOffset.UtcNow;
@@ -258,7 +270,7 @@ namespace cloud.charging.open.Smartphone.Tests
             // than its tariff.
             var prices = new JObject(new JProperty("prices", new JArray(new JObject(
                              new JProperty("chargingTariffId",  DCTariff),
-                             new JProperty("elements",          new JArray(Element(0.65m)))
+                             new JProperty("elements",          DCPrice ?? new JArray(Element(0.65m)))
                          )))).ToString(Newtonsoft.Json.Formatting.None);
 
             var result = history.RuntimeStatus.TryUpdate(POIRuntimeStatusKind.PriceStatus, nameof(EVSE), DCEVSE, prices, now.AddSeconds(-1), out _, out error);
@@ -275,7 +287,7 @@ namespace cloud.charging.open.Smartphone.Tests
                                                             [ org.GraphDefined.Vanaheimr.Hermod.HTTP.URL.Parse($"http://127.0.0.1:{httpServer.TCPPort}/RNs/{NetworkId}") ],
                                                             [ rnoIdentityKey.Id ]);
 
-            return new TestRoamingNetwork(httpServer, api, history, anchor, acMeterKey, dcMeterKey, dcMeter, gefRecords, gefPrices);
+            return new TestRoamingNetwork(httpServer, api, history, anchor, acMeterKey, dcMeterKey, dcMeter, gefRecords, gefPrices, gefSigning);
 
         }
 

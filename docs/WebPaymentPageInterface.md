@@ -28,6 +28,9 @@ The only implementation of the CPO's side is the stand-in of the phone's tests,
 | **dispute link** | the page | the phone | the hand-over, or the driver | no - without it, the driver disputes the session at the page |
 | **payment reference** | the page | the phone, and the meter | the hand-over, or the driver; the CSMS and the station | no - without it, the values are not proven to be of this session |
 | **limit** | the page | the phone, and the station | the hand-over, or the driver; OCPP 2.1 | no - without it, nothing is compared at the end |
+| **payment link** | the page | the phone | the hand-over, or the driver | no - without it, the price is not bound to the session, and what the page took is not compared |
+| **price agreement** | the CPO | the phone | the payment link | no - without it, the price is the one in force, not proven to be this session's |
+| **receipt** | the page | the phone | the payment link | no - without it, what the page took is not compared with the cost |
 | **stop** | the phone | the page | a POST to the stop link | - |
 | **dispute** | the phone | the page | a POST to the dispute link | - |
 
@@ -35,6 +38,10 @@ The driver hands over what the page gave in the popup of the station in the
 phone, at the charge point paid for: the URL of the hand-over, which names all
 the rest - or, where the page gives none, the live link, the links, the
 reference and the limit, each typed or pasted.
+
+What the phone says a session costs is what the tariff of the station makes of
+what its meter signed when - every part of it, see
+[7](#7-the-price-and-the-cost).
 
 
 ## 1. What the page gives the driver
@@ -52,14 +59,15 @@ over one thing, not five:
   "stopLink":          "https://pay.gef.example/sessions/4711/stop?key=9f2c...",
   "disputeLink":       "https://pay.gef.example/sessions/4711/dispute?key=41ab...",
   "paymentReference":  "GEF-2026-11-09-0815",
-  "limit":             { "maxEnergy": 20000 }
+  "limit":             { "maxEnergy": 20000 },
+  "paymentLink":       "https://pay.gef.example/payments/4711?key=77d0..."
 }
 ```
 
 - It must name its `@context` and its `liveLink`: the URL of the live link, or
   the live link document itself. `stopLink`, `disputeLink`,
-  `paymentReference` and `limit` are each as below, and may be left out; what
-  else it says, the phone passes over.
+  `paymentReference`, `limit` and `paymentLink` are each as below, and may be
+  left out; what else it says, the phone passes over.
 - Its URL must be at the **host of the web payment page** the proof of the
   station names - the `webPaymentURL` of the station, else of its pool, else
   of its operator, as a CPO key that may sign `payments` signed it -, port
@@ -105,14 +113,15 @@ document, or the URL of one.
 }
 ```
 
-### The stop link and the dispute link
+### The stop link, the dispute link and the payment link
 
 Each an `https` URL of this session alone, query included. Whoever has one
-can stop or dispute the session: they are secrets of it (see
-[Security](#security)). The phone keeps them whole and shows and logs their
+can stop or dispute the session, or read what it was paid: they are secrets of
+it (see [Security](#security)). The phone keeps them whole and shows and logs their
 host only. Each should be at the host of the web payment page the proof of
 the station names: there it is the CPO's, and the session page says so;
-elsewhere it says that it is not proven to be.
+elsewhere it says that it is not proven to be. What the payment link answers is
+[6](#6-the-payment-link).
 
 ### The payment reference
 
@@ -191,7 +200,7 @@ the CPO or the live link names. What the station has its meter sign:
 
 - The **start value** is the first document with a reading `TX` = `B`.
 - `IS` and `IT` are not read: they should say what the station's
-  authorization says - see [6](#6-ocpp-21-on-the-side-of-the-station).
+  authorization says - see [8](#8-ocpp-21-on-the-side-of-the-station).
 - **Values between, signed by the operator.** A station may have its meter
   sign the start and the end value only, and sign the values between with a
   key of the operator - as ChargyCore's LiveLink allows. That key is a signing
@@ -257,6 +266,8 @@ The phone disputes a session where
 | a signed value after the start is a wrong one | `A signed meter value after its start is a wrong one:` |
 | its signed end value is a wrong one | `Its signed end meter value is a wrong one:` |
 | the station ended the stream, and no end was signed | `The station ended the stream of its live link, and its meter signed no end of the transaction:` |
+| the price agreement does not hold | `The price agreement of its web payment page does not hold:` |
+| the receipt does not hold - the page took more than the cost, or another payment | `The receipt of its web payment page does not hold:` |
 
 ```http
 POST /sessions/4711/dispute HTTP/1.1
@@ -272,15 +283,19 @@ Accept: application/json
 
 - **`signedValues`** are the documents exactly as they came: the start
   value, and the one disputed - the wrong one, or the last that came where
-  none signed the end. One alone where the start value is the one disputed.
-  The page can check them itself: they are its own meter's.
+  none signed the end, or the end value where the payment is disputed. One
+  alone where the start value is the one disputed. The page can check them
+  itself: they are its own meter's.
+- **`priceAgreement`** or **`receipt`**: where the payment is disputed, what of
+  it does not hold, as it came.
 - **`reason`** is a sentence for people. Its beginning names the case; what
   follows may change, and should not be parsed.
 - **`2xx` means taken**, and everything else not, as at the stop link. The
   phone shows the answer the same way.
 - **When:** as soon as the phone knows - for a wrong value before the end once
-  it stopped the station, for the end once the session ended - and after a
-  restart where it was not sent yet. The driver may send it again where the page
+  it stopped the station, for the end once the session ended, for the payment
+  once its agreement or its receipt was checked - and after a restart where it
+  was not sent yet. The driver may send it again where the page
   did not take it. So the link must work after the session ended - at least
   until the payment is settled -, and the page must take a dispute it took
   before again, as the same one.
@@ -289,7 +304,111 @@ Accept: application/json
   the capture of a pre-authorization until it is decided.
 
 
-## 6. OCPP 2.1 on the side of the station
+## 6. The payment link
+
+An `https` URL of this session alone, which the phone asks with a `GET`,
+`Accept: application/json`, 30 seconds at most - from the hand-over on, again
+and again, after 5 seconds at first and at doubling pauses up to 10 minutes,
+until the receipt came, and no longer than 7 days after the end. The driver can
+have it asked at once. It answers `404`, or `2xx` with nothing, until it has
+something, then:
+
+```json
+{
+  "@context":        "https://open.charging.cloud/contexts/wwcp/webPayment/payment/v1",
+  "priceAgreement":  { ...the SessionPriceAgreement of WWCP_POI... },
+  "receipt":         { ...the receipt... }
+}
+```
+
+What came first is kept: a later agreement or receipt replaces nothing.
+
+### The price agreement
+
+The `SessionPriceAgreement` of
+[WWCP_POI](https://github.com/OpenChargingCloud/WWCP_POI) (experimental), once
+the meter signed the start value: the CPO assigns the price to this very
+session.
+
+| Field | Must be |
+|---|---|
+| `roamingNetworkId`, `EVSEId`, `meterSerialNumber` | of this session, as the station's proof says |
+| `chargingStarted` | the time `TM` of the reading `TX` = `B` of the start value, to the second it says |
+| `startDocumentSHA256` | the SHA-256, as lowercase hex, of the start value exactly as it came over the live link - `OCMF\|{payload}\|{signature}` -, in UTF-8 |
+| `chargingTariffId`, `priceStatementDigest` | a tariff of the EVSE and the price statement of its operator in force at the start, of those the phone kept |
+| `signer`, `keyId`, `value` | the CPO, signing with a key the proof attests and that may sign `priceStatements`, valid when it signed and at the start |
+| `signedAt` | not after now: one signed after the phone's now is checked again later |
+
+The phone checks it once its start value held, with WWCP_POI's
+`SessionPriceEvidence`. Where it holds, the session is charged by the tariff it
+agreed, and the session page shows its price as bound. Where it does not, the
+session is disputed. Mind that WWCP_POI's simple profile of gross rates
+(`chargy-gross-rates/v1`) takes no flat fee: the price is bound all the same,
+of a profile WWCP_POI does not establish the rates of.
+
+### The receipt
+
+What the page took, once it took it:
+
+```json
+{
+  "@context":          "https://open.charging.cloud/contexts/wwcp/webPayment/receipt/v1",
+  "EVSEId":            "DE*GEF*E2*1",
+  "paymentReference":  "GEF-2026-11-09-0815",
+  "amount":            "14.00",
+  "currency":          "EUR",
+  "capturedAt":        "2026-11-09T11:02:00.000Z",
+  "role":              "chargingStationOperator",
+  "signer":            "DE*GEF",
+  "signedAt":          "2026-11-09T11:02:00.000Z",
+  "algorithm":         "ES256",
+  "keyId":             "...",
+  "value":             "..."
+}
+```
+
+- **`amount`** with VAT, as a decimal in a text: a JSON number is written one
+  way as a decimal and another as a double, so what is signed would not be one.
+- **The signature** is optional, all of `role` to `value` or none. Where given,
+  it is over the canonical JSON of the receipt but its `value`, as WWCP_POI
+  signs a `SessionPriceAgreement`, by the CPO with a key the proof attests and
+  that may sign `payments`. Then the receipt is evidence of what was taken;
+  unsigned, it is the page's word.
+- **The phone checks it** once the session ended and its end value was decided:
+  of this EVSE, of the payment reference handed over where both name one, in
+  the currency of the tariff, signed by the CPO where signed - and its amount
+  not more than the cost the phone works out (see [7](#7-the-price-and-the-cost)).
+  A receipt of more, or one that does not hold otherwise, disputes the session.
+  Where the cost could not be worked out exactly, nothing is decided.
+
+
+## 7. The price and the cost
+
+What a session costs, the phone works out of the tariff it is charged by - the
+one agreed for it, else the first of the EVSE the proof names, with its
+elements as the price statement in force at the start sets them - and of what
+its meter signed when, as OCPI prices a session:
+
+- **Every part:** `ENERGY` per kWh, `FLAT` once, `TIME` per hour charging,
+  `PARKING_TIME` per hour not charging - between two signed values whose
+  register did not grow. For each, at every time, the first element whose
+  restrictions hold then that prices it; a flat fee of the first that holds
+  at the start.
+- **Restrictions:** times of day, dates and days of the week of the time zone
+  of the pool of the station (`timeZone`: an IANA or Windows id, or an offset
+  as `UTC+01:00`); energy and duration of the session so far; power between two
+  signed values. A restriction of current - and a component of current - no
+  meter value says: an element with it is taken as one that does not hold, and
+  the cost is said to be not exact. An element of a reservation prices none.
+- **Step sizes** round each part up; **VAT** is added where a component states
+  it - else its price is taken as it is -, and the **least and the most** the
+  tariff says hold the whole.
+
+The limit of the driver's cost, the receipt and the cost a charge detail record
+says are compared with that.
+
+
+## 8. OCPP 2.1 on the side of the station
 
 What the phone checks asks this of the CSMS and the station. How they do it is
 theirs; this is the way OCPP 2.1 offers. Whether the CSMS and the charging
@@ -315,8 +434,13 @@ station of this family do it is not checked here.
 ## Security
 
 - **The links are keys.** A stop link stops the session, a dispute link
-  disputes it, for anybody: each should hold at least 128 random bits, be of
-  one session alone, be `https`, and stop working once the payment is settled.
+  disputes it, a payment link tells what was paid, for anybody: each should
+  hold at least 128 random bits, be of one session alone, be `https`, and stop
+  working once the payment is settled - the dispute link and the payment link
+  not before.
+- **The price agreement and a signed receipt are signed by the CPO**, with keys
+  the roaming network attests: they bind the price to the session and what was
+  taken to the CPO, wherever they came from.
 - **The host of the web payment page binds the hand-over to the CPO.** That
   host is in the station's proof, signed by a CPO key that may sign
   `payments`, and TLS proves who answers there: a hand-over is taken from that
@@ -344,10 +468,13 @@ the smallest page the phone works with:
 | `GET /sessions/{session}/live` | the latest signed value, `text/plain`; `404` before the first |
 | `POST /sessions/{session}/stop` | `200` `{ "message": "The station stops." }`, or what a test sets |
 | `POST /sessions/{session}/dispute` | `200` `{ "message": "The dispute is taken." }`, or what a test sets |
-| `GET /handOvers/{session}` | the hand-over: the live link, the stop and dispute links above, the payment reference `payment-{session}` and a limit of 20 kWh, `application/json` |
+| `GET /handOvers/{session}` | the hand-over: the live link, the stop and dispute links above, the payment reference `payment-{session}`, a limit of 20 kWh and the payment link below, `application/json` |
+| `GET /payments/{session}` | the payment: the price agreement and the receipt a test sets, `application/json`; `404` before |
 
 The tests give the DC station the stand-in's own URL as its web payment page,
-so that its hand-over is taken from there. The stand-in serves `http` on the
+so that its hand-over is taken from there, and a test may price its EVSE as it
+likes - a flat fee and energy, say - and sign a price agreement and a receipt
+as DE*GEF. The stand-in serves `http` on the
 loopback, which the phone allows there alone.
 
 A real page can be tried the same way: on a phone that trusts the roaming
@@ -376,5 +503,12 @@ stopped, what was disputed and what the page answered.
   of the CPO for `chargeTransparencyRecords` - WWCP_POI has no usage for meter
   values alone, so that key signs the CPO's whole documents as well - and of
   P-256 only.
-- **The amount the page took** is not compared with the cost the phone works
-  out: the page gives no receipt.
+- **A session disputed for a wrong value** is not disputed again for its
+  payment: its dispute stands, and the page has the values it disputes.
+- **The first price agreement and receipt are kept:** a page that corrects one
+  replaces nothing; the session is disputed for the first.
+- **A flat fee** is not taken by WWCP_POI's simple profile of gross rates,
+  which asks every component for a step size a flat fee has none of: a price
+  agreement of it binds the price, of a profile it does not establish.
+- **A component or a restriction of current** is priced at nothing: no meter
+  value says the current.

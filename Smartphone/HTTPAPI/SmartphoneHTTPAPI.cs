@@ -51,6 +51,8 @@ namespace cloud.charging.open.Smartphone
     /// | <c>POST v1/charging/sessions</c> | <c>{ "locationId", "evseUid" }</c>: start one, 201 and the session; with a <c>"liveLink"</c> as well - the https URL of the live link the web payment page of the operator gave, or its document - the session that page started there, followed over its live link; or with the <c>"handOver"</c> the page gave in place of it - the https URL of the document that names its live link, its links, the reference of the payment and the limit, taken from the host of the web payment page the proof of the station names alone |
     /// | <c>GET v1/charging/sessions/{id}</c> | one session, as it is now - at a station of a roaming network with its <c>"check"</c>: its signed meter values and its price |
     /// | <c>POST v1/charging/sessions/{id}/stop</c> | stop one that is still charging |
+    /// | <c>POST v1/charging/sessions/{id}/dispute</c> | dispute one the web payment page started, through its dispute link |
+    /// | <c>POST v1/charging/sessions/{id}/payment</c> | ask the payment link of one the web payment page started now: its price agreement and its receipt |
     /// | <c>GET v1/provider</c> | the account at the e-mobility provider, without its password and key |
     /// | <c>POST v1/provider/signup</c> | <c>{ "url", "username", "email" }</c>: an account made there, with a password the phone keeps, and an account key |
     /// | <c>POST v1/provider/signin</c> | <c>{ "url", "username", "password" }</c>: an account the driver has there, taken, and an account key |
@@ -134,6 +136,7 @@ namespace cloud.charging.open.Smartphone
             AddHandler(HTTPPath.Root + "v1/charging/sessions/{id}",           GetChargingSession,        HTTPMethod.GET);
             AddHandler(HTTPPath.Root + "v1/charging/sessions/{id}/stop",      PostStopChargingSession,   HTTPMethod.POST);
             AddHandler(HTTPPath.Root + "v1/charging/sessions/{id}/dispute",   PostDisputeChargingSession, HTTPMethod.POST);
+            AddHandler(HTTPPath.Root + "v1/charging/sessions/{id}/payment",   PostPaymentChargingSession, HTTPMethod.POST);
 
             AddHandler(HTTPPath.Root + "v1/provider",                         GetProvider,               HTTPMethod.GET);
             AddHandler(HTTPPath.Root + "v1/provider/signup",                  PostProviderSignUp,        HTTPMethod.POST);

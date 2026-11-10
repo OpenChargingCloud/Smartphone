@@ -1,4 +1,4 @@
-import { api, type ChargingSession, type LiveLinkEndCheck, type LiveLinkEnding, type LiveLinkFollow, type LiveLinkStartCheck, type LiveLinkValueCheck, type LiveLinkWrongValue, type MeterValueCheck, type SessionCheck } from '../api/client';
+import { api, type ChargingSession, type LiveLinkEndCheck, type LiveLinkEnding, type LiveLinkFollow, type LiveLinkPayment, type LiveLinkStartCheck, type LiveLinkValueCheck, type LiveLinkWrongValue, type MeterValueCheck, type SessionCheck, type SessionCost } from '../api/client';
 import { auth } from '../auth';
 import { dayAndTime, disputeInWords, duration, isRunning, limitFigure, money, reportedInWords, sessionStatusClass, sessionStatusWord, stationStopInWords, withUnit } from '../charging/words';
 import { standardWord } from '../map/stations';
@@ -46,6 +46,8 @@ export const sessionPage: Page = {
         let cancelled      = false;
         let stopping       = false;
         let disputing      = false;
+        let asking         = false;
+        let askFailed:     string | null = null;
         let failed:        string | null = null;
         let disputeFailed: string | null = null;
         let timer:     ReturnType<typeof setTimeout> | undefined;
@@ -156,6 +158,81 @@ export const sessionPage: Page = {
         }
 
 
+        /** What the tariff of a session makes of what it charged when, part by part - and why not exactly, where it could not decide. */
+        function costView(cost: SessionCost): TemplateResult {
+
+            const worked = cost.worked!;
+
+            const dimension = { energy: 'energy', flat: 'flat fee', time: 'time charging', parking: 'time parked' } as const;
+
+            return html`
+                <ul class="cost-parts">
+                    ${worked.components.map(part => html`
+                        <li>
+                            <span>${dimension[part.dimension]}</span>
+                            <span class="muted">${part.dimension === 'flat'
+                                                      ? money(part.price, worked.currency)
+                                                      : `${withUnit(part.quantity, part.unit, 3)} at ${money(part.price, worked.currency)} per ${part.unit}`}${part.vat !== null ? `, ${part.vat} % VAT` : ''}</span>
+                            <span>${money(part.amount, worked.currency)}</span>
+                        </li>
+                    `)}
+                    ${worked.limit !== null ? html`<li class="muted">held at the ${worked.limit} its tariff says</li>` : nothing}
+                </ul>
+                ${!worked.vatStated && worked.components.length > 0
+                      ? html`<div class="small muted">Its tariff states no VAT: its prices are taken as they are.</div>`
+                      : nothing}
+                ${!worked.exact
+                      ? html`<div class="small form-error cost-not-exact">Not exact: ${worked.notes.join(' ')}</div>`
+                      : nothing}
+            `;
+
+        }
+
+
+        /** The payment of a session as its payment link says it: the price agreement of its operator, and the receipt of what the page took against its cost. */
+        function paymentView(link: LiveLinkFollow, payment: LiveLinkPayment | null): TemplateResult {
+
+            const agreement = payment?.agreement ?? null;
+            const receipt   = payment?.receipt   ?? null;
+
+            return html`
+                ${kv('Price agreement', agreement === null
+                                            ? 'none came yet: the price of the proof of its station is not bound to this session'
+                                            : agreement.holds === true
+                                                  ? html`<span class="chip ok"><i class="fa-solid fa-check"></i> holds</span> the tariff <span class="mono">${agreement.tariffId}</span>, signed by its operator ${agreement.signer} for this session`
+                                                  : agreement.holds === false
+                                                        ? html`<span class="chip bad"><i class="fa-solid fa-xmark"></i> does not hold</span> ${agreement.error}`
+                                                        : html`<span class="muted">not checked yet: ${agreement.error}</span>`)}
+                ${kv('Receipt',         receipt === null
+                                            ? 'none came yet'
+                                            : receipt.amount === undefined
+                                                  ? html`<span class="muted">${receipt.error}</span>`
+                                                  : html`${receipt.holds === true
+                                                               ? html`<span class="chip ok"><i class="fa-solid fa-check"></i> holds</span>`
+                                                               : receipt.holds === false
+                                                                     ? html`<span class="chip bad"><i class="fa-solid fa-xmark"></i> does not hold</span>`
+                                                                     : html`<span class="chip">not decided</span>`}
+                                                         the page took ${money(receipt.amount, receipt.currency ?? '')}${receipt.cost !== null && receipt.cost !== undefined
+                                                                                                                              ? `, and it costs ${money(receipt.cost, receipt.currency ?? '')} as this phone works it out`
+                                                                                                                              : ''}
+                                                         - ${receipt.signed === true ? 'signed by its operator' : 'not signed: the page\'s word'}
+                                                         ${receipt.error !== null ? html`<div class="small">${receipt.error}</div>` : nothing}`)}
+                ${payment?.problem !== null && payment?.problem !== undefined && (agreement === null || receipt === null)
+                      ? kv('Asked last', html`${payment.askedAt !== null ? dayAndTime(payment.askedAt) : ''}: <span class="muted">${payment.problem}</span>`)
+                      : nothing}
+                ${mayStop && (receipt === null || agreement?.holds === null) ? html`
+                    <div class="form-actions">
+                        <button type="button" class="btn ask-payment" ?disabled=${asking} @click=${() => void askPayment()}>
+                            <i class="fa-solid fa-receipt"></i> ${asking ? 'Asking ...' : 'Ask its payment now'}
+                        </button>
+                        ${askFailed !== null ? html`<span class="form-error" role="alert">${askFailed}</span>` : nothing}
+                    </div>
+                ` : nothing}
+            `;
+
+        }
+
+
         /** Whether a link the web payment page gave is bound to the operator of the station: at the host of the web payment page its proof names. */
         function boundWords(bound: boolean, link: LiveLinkFollow): string {
             return bound
@@ -196,6 +273,8 @@ export const sessionPage: Page = {
                         ${link.stop !== null ? kv('Stop asked', html`${dayAndTime(link.stop.requestedAt)} by ${link.stop.requestedBy}:
                                                                      <span class="${link.stop.accepted ? 'stop-taken' : 'form-error'}">${link.stop.accepted ? 'taken' : 'not taken'} - ${link.stop.answer}</span>`) : nothing}
                         ${kv('Dispute link',      link.disputeLink !== null ? html`at <span class="mono">${link.disputeLink}</span>${boundWords(link.bound.disputeLink, link)}` : 'none given: it is disputed at the page')}
+                        ${kv('Payment link',      link.paymentLink !== null ? html`at <span class="mono">${link.paymentLink}</span>${boundWords(link.bound.paymentLink, link)}` : 'none given: its price is not bound to it, and what the page took is not compared')}
+                        ${link.paymentLink !== null ? paymentView(link, link.payment) : nothing}
                         ${link.dispute !== null ? kv('Dispute sent', html`${dayAndTime(link.dispute.requestedAt)} by ${link.dispute.requestedBy}:
                                                                           <span class="${link.dispute.accepted ? 'stop-taken' : 'form-error'}">${link.dispute.accepted ? 'taken' : 'not taken'} - ${link.dispute.answer}</span>`) : nothing}
                     </div>
@@ -450,11 +529,15 @@ export const sessionPage: Page = {
                             ${kv('Cost',       html`${money(session.cost.amount, session.cost.currency)}
                                                     <span class="muted">${session.cost.reported === true
                                                                               ? '(as the operator reports it)'
-                                                                              : `(${money(session.cost.pricePerKWh, session.cost.currency)} per kWh)`}</span>`)}
+                                                                              : session.cost.worked !== undefined
+                                                                                    ? `(at its tariff${session.cost.tariffId ? ` ${session.cost.tariffId}` : ''}${session.cost.agreed === true ? ', as its operator agreed it' : ''})`
+                                                                                    : `(${money(session.cost.pricePerKWh, session.cost.currency)} per kWh)`}</span>`)}
                             ${session.progressPercent !== undefined && session.targetEnergyKWh !== undefined
                                   ? kv('Progress', html`${withUnit(session.progressPercent, '%')} of ${withUnit(session.targetEnergyKWh, 'kWh')}`)
                                   : nothing}
                         </div>
+
+                        ${session.cost.reported !== true && session.cost.worked !== undefined ? costView(session.cost) : nothing}
 
                         ${charging && session.progressPercent !== undefined ? html`
                             <progress class="session-progress" max="100" .value=${session.progressPercent}
@@ -600,6 +683,31 @@ export const sessionPage: Page = {
 
             if (!cancelled)
                 await load();
+
+        }
+
+
+        async function askPayment(): Promise<void> {
+
+            asking     = true;
+            askFailed  = null;
+
+            try
+            {
+                const asked = await api.charging.payment(id);
+
+                if (!cancelled)
+                    draw(asked);
+            }
+            catch (error)
+            {
+                if (!cancelled)
+                    askFailed = errorMessage(error);
+            }
+            finally
+            {
+                asking = false;
+            }
 
         }
 

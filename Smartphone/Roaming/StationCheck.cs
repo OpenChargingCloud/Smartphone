@@ -258,12 +258,15 @@ namespace cloud.charging.open.Smartphone.Roaming
         #region TariffOf(EVSEId)
 
         /// <summary>
-        /// What charging at the given EVSE of the station costs per kWh, as the
-        /// checked proof and the price statements in force say it: the first
-        /// energy price of the first charging tariff the EVSE takes, as a
-        /// statement of the EVSE, its station or its pool sets it - in this
-        /// order - or as the tariff has it. Null where the proof does not hold,
-        /// names no energy price, or where its statements contradict each other.
+        /// What charging at the given EVSE of the station costs, as the checked
+        /// proof and the price statements in force say it: the first charging
+        /// tariff the EVSE takes that prices anything, with its elements as a
+        /// statement of the EVSE, its station or its pool sets them - in this
+        /// order - or as the tariff has them, the least and the most it says a
+        /// session costs, the time zone of the pool of the station, and its
+        /// first energy price, for the pages - nothing, where it prices no
+        /// energy. Null where the proof does not hold, its tariffs price
+        /// nothing, or where its statements contradict each other.
         /// </summary>
         public SmartphoneTariff? TariffOf(String EVSEId)
         {
@@ -271,23 +274,42 @@ namespace cloud.charging.open.Smartphone.Roaming
             if (Station is null || PriceConflict is not null || !Station.Tariffs.TryGetValue(EVSEId, out var tariffs))
                 return null;
 
+            var timeZone = Station.ChargingPool["timeZone"]?.Type == JTokenType.String
+                               ? Station.ChargingPool["timeZone"]!.Value<String>()
+                               : null;
+
             foreach (var tariff in tariffs)
             {
 
                 var tariffId  = IdOf(tariff) ?? "";
                 var currency  = tariff["currency"]?.Value<String>() ?? "";
 
-                if (StatedElements(tariffId, EVSEId) is JArray stated && EnergyPrice(stated) is Decimal statedPrice)
-                    return new SmartphoneTariff(statedPrice, currency, tariffId);
-
-                if (EnergyPrice(tariff["elements"] as JArray) is Decimal price)
-                    return new SmartphoneTariff(price, currency, tariffId);
+                foreach (var elements in new[] { StatedElements(tariffId, EVSEId), tariff["elements"] as JArray })
+                    if (elements is not null && PricesAnything(elements))
+                        return new SmartphoneTariff(EnergyPrice(elements) ?? 0m,
+                                                    currency,
+                                                    tariffId,
+                                                    (JArray) elements.DeepClone(),
+                                                    tariff["minPrice"] as JObject,
+                                                    tariff["maxPrice"] as JObject,
+                                                    timeZone);
 
             }
 
             return null;
 
         }
+
+        /// <summary>
+        /// Whether the given tariff elements price anything a session charges:
+        /// energy, a flat fee, the time charging or the time not charging.
+        /// </summary>
+        private static Boolean PricesAnything(JArray Elements)
+
+            => Elements.OfType<JObject>().
+                        SelectMany(element => (element["priceComponents"] as JArray ?? []).OfType<JObject>()).
+                        Any(component => component["type"]?.Value<String>() is "ENERGY" or "FLAT" or "TIME" or "PARKING_TIME" &&
+                                         RoamingNetworkClient.TryDecimal(component["price"], out _));
 
         #endregion
 

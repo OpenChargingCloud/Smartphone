@@ -302,6 +302,7 @@ describe('the map of a roaming network', () => {
             typeInto(handOver.querySelector<HTMLInputElement>('input[name="stopLink"]')!,   'https://pay.gef.example/sessions/S1/stop');
             typeInto(handOver.querySelector<HTMLInputElement>('input[name="disputeLink"]')!, 'https://pay.gef.example/sessions/S1/dispute');
             typeInto(handOver.querySelector<HTMLInputElement>('input[name="paymentReference"]')!, 'web-payment-S1');
+            typeInto(handOver.querySelector<HTMLInputElement>('input[name="paymentLink"]')!,      'https://pay.gef.example/payments/S1');
             typeInto(handOver.querySelector<HTMLInputElement>('input[name="limitValue"]')!, '22.5');
             handOver.querySelector<HTMLSelectElement>('select[name="limitKind"]')!.value = 'maxEnergy';
             handOver.querySelector<HTMLButtonElement>('button')!.click();
@@ -311,7 +312,7 @@ describe('the map of a roaming network', () => {
             assert.deepEqual(asked.filter(one => one.method === 'POST').pop()!.body,
                              { locationId: 'DE*GEF*P1', evseUid: 'DE*GEF*E1*1', liveLink: 'https://pay.gef.example/liveLinks/S1',
                                stopLink: 'https://pay.gef.example/sessions/S1/stop', disputeLink: 'https://pay.gef.example/sessions/S1/dispute',
-                               paymentReference: 'web-payment-S1', limit: { maxEnergy: 22500 } });
+                               paymentReference: 'web-payment-S1', limit: { maxEnergy: 22500 }, paymentLink: 'https://pay.gef.example/payments/S1' });
 
         }
         finally

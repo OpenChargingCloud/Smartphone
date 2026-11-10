@@ -114,7 +114,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                          ChargingStartReference?   Start     = null,
                                          ProviderReport?           Report    = null,
                                          SessionEvidence?          Evidence  = null,
-                                         LiveLinkFollow?           LiveLink  = null)
+                                         LiveLinkFollow?           LiveLink  = null,
+                                         SessionTariff?            Tariff    = null)
     {
 
         #region Data
@@ -158,6 +159,15 @@ namespace cloud.charging.open.Smartphone.Charging
         public Boolean IsSimulated
             => Report is null && LiveLink is null;
 
+        /// <summary>
+        /// The tariff it is charged by: the one the operator of its station
+        /// agreed for it, where it agreed one that holds, else the one of the
+        /// proof of its station at the start - or null, at a demo station,
+        /// which says one price per kWh alone.
+        /// </summary>
+        public SessionTariff? ChargedBy
+            => LiveLink?.Payment?.AgreedTariff ?? Tariff;
+
         #endregion
 
 
@@ -200,7 +210,15 @@ namespace cloud.charging.open.Smartphone.Charging
                     Ticket:    Ticket,
                     Start:     Start,
                     Evidence:  Evidence,
-                    LiveLink:  LiveLink);
+                    LiveLink:  LiveLink,
+                    Tariff:    Location.Tariff.Elements is JArray elements
+                                   ? new SessionTariff(Location.Tariff.Currency,
+                                                       elements,
+                                                       Location.Tariff.TariffId,
+                                                       Location.Tariff.MinPrice,
+                                                       Location.Tariff.MaxPrice,
+                                                       Location.Tariff.TimeZone)
+                                   : null);
 
         #endregion
 
@@ -328,6 +346,85 @@ namespace cloud.charging.open.Smartphone.Charging
 
         #endregion
 
+        #region ProfileAt(Now) / CostAt(Now)
+
+        /// <summary>
+        /// What it charged when, by the given time: of a live link, what its
+        /// signed values that count say, from the first; as the provider
+        /// reported it, from when the operator said charging began to when it
+        /// ended, or now; simulated, evenly until it was full, and parked after.
+        /// </summary>
+        public ChargingProfile ProfileAt(DateTimeOffset Now)
+        {
+
+            if (LiveLink is LiveLinkFollow liveLink)
+            {
+
+                var counted = liveLink.Counted.Where(reading => reading.EnergyKWh is not null).ToArray();
+
+                return counted.Length > 0
+                           ? new ChargingProfile([ .. counted.Select(reading => (reading.MeasuredAt, reading.EnergyKWh!.Value - counted[0].EnergyKWh!.Value)) ])
+                           : new ChargingProfile([]);
+
+            }
+
+            if (Report is ProviderReport report)
+                return StatusAt(Now) == ChargingSessionStatus.Starting || report.ChargingSince is not DateTimeOffset since
+                           ? new ChargingProfile([])
+                           : new ChargingProfile([ (since, 0m), (EndedAt(Now) ?? Now, EnergyAt(Now)) ]);
+
+            var until  = EndedAt(Now) ?? Now;
+            var full   = FullAt < until ? FullAt : until;
+
+            return new ChargingProfile([ (StartedAt, 0m), (full, EnergyAt(full)) ], until);
+
+        }
+
+        /// <summary>
+        /// What it costs by the given time, as the tariff it is charged by makes
+        /// it of what it charged when - or null, where it is charged by none:
+        /// at a demo station, which says one price per kWh alone.
+        /// </summary>
+        public TariffCost? CostAt(DateTimeOffset Now)
+
+            => ChargedBy is SessionTariff tariff
+                   ? TariffCost.Of(tariff, ProfileAt(Now))
+                   : null;
+
+        /// <summary>
+        /// Its cost as the pages show it: what the tariff it is charged by makes
+        /// of what it charged - with each part, whether it is exact and why not
+        /// -, or the price per kWh of a demo station times its energy; what the
+        /// provider reported, where it reported a cost.
+        /// </summary>
+        private JObject CostJSON(Decimal          Energy,
+                                 DateTimeOffset   Now,
+                                 ProviderReport?  Report  = null)
+        {
+
+            var cost  = CostAt(Now);
+            var json  = new JObject(
+                            new JProperty("amount",       Report?.Cost ?? cost?.Amount ?? Math.Round(Energy * PricePerKWh, 2)),
+                            new JProperty("pricePerKWh",  PricePerKWh),
+                            new JProperty("currency",     Report?.Cost is not null ? Report.Currency ?? Currency : cost?.Currency ?? Currency)
+                        );
+
+            if (Report is not null)
+                json.Add(new JProperty("reported", Report.Cost is not null));
+
+            if (cost is not null)
+            {
+                json.Add(new JProperty("tariffId",  ChargedBy?.TariffId));
+                json.Add(new JProperty("agreed",    LiveLink?.Payment?.AgreedTariff is not null));
+                json.Add(new JProperty("worked",    cost.ToJSON()));
+            }
+
+            return json;
+
+        }
+
+        #endregion
+
 
         #region ToJSON(Now)
 
@@ -377,11 +474,7 @@ namespace cloud.charging.open.Smartphone.Charging
                            new JProperty("energyKWh",          energy),
                            new JProperty("targetEnergyKWh",    TargetEnergyKWh),
                            new JProperty("progressPercent",    Math.Round(100m * energy / TargetEnergyKWh, 1)),
-                           new JProperty("cost",               new JObject(
-                               new JProperty("amount",       Math.Round(energy * PricePerKWh, 2)),
-                               new JProperty("pricePerKWh",  PricePerKWh),
-                               new JProperty("currency",     Currency)
-                           ))
+                           new JProperty("cost",               CostJSON(energy, Now))
                        );
 
             if (status == ChargingSessionStatus.Stopped)
@@ -438,12 +531,7 @@ namespace cloud.charging.open.Smartphone.Charging
                            new JProperty("endedAt",            ended?.ToString("o")),
                            new JProperty("durationSeconds",    (Int64) Math.Max(0, duration.TotalSeconds)),
                            new JProperty("energyKWh",          energy),
-                           new JProperty("cost",               new JObject(
-                               new JProperty("amount",       Report.Cost ?? Math.Round(energy * PricePerKWh, 2)),
-                               new JProperty("pricePerKWh",  PricePerKWh),
-                               new JProperty("currency",     Report.Cost is not null ? Report.Currency ?? Currency : Currency),
-                               new JProperty("reported",     Report.Cost is not null)
-                           )),
+                           new JProperty("cost",               CostJSON(energy, Now, Report)),
                            new JProperty("provider",           Report.ToJSON())
                        );
 
@@ -505,11 +593,7 @@ namespace cloud.charging.open.Smartphone.Charging
                            new JProperty("endedAt",            ended?.ToString("o")),
                            new JProperty("durationSeconds",    (Int64) Math.Max(0, duration.TotalSeconds)),
                            new JProperty("energyKWh",          energy),
-                           new JProperty("cost",               new JObject(
-                               new JProperty("amount",       Math.Round(energy * PricePerKWh, 2)),
-                               new JProperty("pricePerKWh",  PricePerKWh),
-                               new JProperty("currency",     Currency)
-                           )),
+                           new JProperty("cost",               CostJSON(energy, Now)),
                            new JProperty("liveLink",           LiveLink.ToJSON())
                        );
 
@@ -582,6 +666,9 @@ namespace cloud.charging.open.Smartphone.Charging
             if (LiveLink is not null)
                 json.Add(new JProperty("liveLink", LiveLink.ToStorageJSON()));
 
+            if (Tariff is not null)
+                json.Add(new JProperty("tariff", Tariff.ToJSON()));
+
             return json;
 
         }
@@ -627,7 +714,8 @@ namespace cloud.charging.open.Smartphone.Charging
                               ChargingStartReference. TryParse(JSON["start"]),
                               ProviderReport.         TryParseStorage(JSON["report"]),
                               SessionEvidence.        TryParse(JSON["evidence"]),
-                              LiveLinkFollow.         TryParse(JSON["liveLink"])
+                              LiveLinkFollow.         TryParse(JSON["liveLink"]),
+                              SessionTariff.          TryParse(JSON["tariff"])
                           );
 
                 if (Session.MaxPowerKW <= 0 || Session.TargetEnergyKWh <= 0)

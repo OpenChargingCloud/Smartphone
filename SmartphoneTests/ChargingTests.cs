@@ -715,6 +715,113 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
+        #region APaymentAndATariffAreKeptAndAReceiptOfMoreIsDisputed()
+
+        /// <summary>
+        /// The payment of a session - its price agreement, how it held and the
+        /// tariff it agreed, its receipt and how it held - is kept with it, and
+        /// so is the tariff it is charged by. A session is charged by the tariff
+        /// agreed, where one holds. A receipt that does not hold disputes the
+        /// session, with its start and its end value.
+        /// </summary>
+        [Test]
+        public void APaymentAndATariffAreKeptAndAReceiptOfMoreIsDisputed()
+        {
+
+            var at        = new DateTimeOffset(2026, 11, 9, 8, 10, 0, TimeSpan.Zero);
+            var meter     = TestRoamingNetwork.NewMeterKey();
+            var begin     = TestRoamingNetwork.OCMF(meter, TestRoamingNetwork.DCMeterSerial, "payment-S1", (at.AddMinutes(-10), "B", 1000m));
+            var end       = TestRoamingNetwork.OCMF(meter, TestRoamingNetwork.DCMeterSerial, "payment-S1", (at,                 "E", 1020m));
+            var link      = new JObject(new JProperty("@context", "https://open.charging.cloud/contexts/chargeTransparency/live/link/1.0"));
+            var holds     = new LiveLinkValueCheck(at, true, null);
+            var ofProof   = new SessionTariff("EUR", new JArray(new JObject(new JProperty("priceComponents", new JArray(
+                                new JObject(new JProperty("type", "ENERGY"), new JProperty("price", 0.65m)))))), "DE*GEF*T_DC");
+            var agreed    = ofProof with { Elements = new JArray(new JObject(new JProperty("priceComponents", new JArray(
+                                new JObject(new JProperty("type", "FLAT"),   new JProperty("price", 1.00m)),
+                                new JObject(new JProperty("type", "ENERGY"), new JProperty("price", 0.65m)))))) };
+            var receipt   = WebPaymentReceipt.Create(TestRoamingNetwork.DCEVSE, "payment-S1", 15.50m, "EUR", at.AddMinutes(5));
+            var more      = new LiveLinkReceiptCheck(at.AddMinutes(6), false, "1.50 EUR more.", 15.50m, "EUR", at.AddMinutes(5), 14.00m, false, null, "payment-S1");
+
+            var payment   = new LiveLinkPayment(at.AddMinutes(6), null,
+                                                new JObject(new JProperty("chargingTariffId", "DE*GEF*T_DC")), at.AddMinutes(-9), true, null, agreed,
+                                                receipt.JSON, at.AddMinutes(6), more);
+
+            var follow    = new LiveLinkFollow(link, null, at.AddMinutes(-11), PaymentReference: "payment-S1", PaymentLink: "https://pay.example/payments/S1", Payment: payment).
+                                WithUpdate(at.AddMinutes(-10), "https", "https://pay.example/live", "OCMF", [ begin ]).
+                                WithUpdate(at,                 "https", "https://pay.example/live", "OCMF", [ end ]).
+                                WithChecks([ (begin, holds), (end, holds) ]);
+
+            var session   = new ChargingSession("S1", "pool-1", "Jena", "Holzmarkt 1", "Jena", "GraphDefined", "dc-1", TestRoamingNetwork.DCEVSE, "CCS", "DC",
+                                                150m, 0.65m, "EUR", ChargingSession.DefaultTargetEnergyKWh, at.AddMinutes(-11), "driver1",
+                                                LiveLink: follow, Tariff: ofProof);
+
+            Assert.That(ChargingSession.TryParseStorage(session.ToStorageJSON(), out var read, out var error), Is.True, error);
+
+            Assert.Multiple(() => {
+
+                Assert.That(follow.DisputeBecause,                          Is.EqualTo("The receipt of its web payment page does not hold: 1.50 EUR more."));
+                Assert.That(follow.Disputed,                                Is.EqualTo(new[] { begin, end }), "its start and its end value");
+                Assert.That(follow.DisputePending,                          Is.False, "no dispute link was given");
+
+                Assert.That(session.ChargedBy,                              Is.SameAs(agreed), "charged by the tariff agreed");
+                Assert.That(session.CostAt(at)!.Amount,                     Is.EqualTo(14.00m), "1.00 and 20 kWh at 0.65");
+                Assert.That((session with { LiveLink = follow with { Payment = null } }).CostAt(at)!.Amount, Is.EqualTo(13.00m), "of the proof, where none was agreed");
+
+                Assert.That(read!.Tariff?.TariffId,                         Is.EqualTo("DE*GEF*T_DC"));
+                Assert.That(JToken.DeepEquals(read.Tariff!.Elements, ofProof.Elements), Is.True);
+                Assert.That(read.LiveLink!.PaymentLink,                     Is.EqualTo("https://pay.example/payments/S1"));
+                Assert.That(read.LiveLink.Payment!.AgreementHolds,          Is.True);
+                Assert.That(JToken.DeepEquals(read.LiveLink.Payment.AgreedTariff!.Elements, agreed.Elements), Is.True);
+                Assert.That(read.LiveLink.Payment.ReceiptCheck,             Is.EqualTo(more));
+                Assert.That(JToken.DeepEquals(read.LiveLink.Payment.Receipt, receipt.JSON), Is.True);
+                Assert.That(read.LiveLink.ToJSON()["paymentLink"]!.Value<String>(),     Is.EqualTo("pay.example"), "the payment link itself is shown");
+                Assert.That(read.LiveLink.ToJSON()["payment"]!["receipt"]!["holds"]!.Value<Boolean?>(), Is.False);
+
+            });
+
+        }
+
+        #endregion
+
+        #region AReceiptNamesWhatThePageTookAsText()
+
+        /// <summary>
+        /// A receipt names its EVSE, its currency, when it was taken and its
+        /// amount - a decimal as text -, and is signed whole or not at all.
+        /// </summary>
+        [Test]
+        public void AReceiptNamesWhatThePageTookAsText()
+        {
+
+            var receipt = WebPaymentReceipt.Create(TestRoamingNetwork.DCEVSE, null, 14.00m, "EUR", new DateTimeOffset(2026, 11, 9, 9, 0, 0, TimeSpan.Zero));
+
+            String? ErrorOf(Action<JObject> Change)
+            {
+                var json = (JObject) receipt.JSON.DeepClone();
+                Change(json);
+                return WebPaymentReceipt.TryParse(json, out _, out var error) ? null : error;
+            }
+
+            Assert.Multiple(() => {
+
+                Assert.That(receipt.JSON["amount"]!.Value<String>(),  Is.EqualTo("14.00"));
+                Assert.That(receipt.Amount,                           Is.EqualTo(14.00m));
+                Assert.That(receipt.Signed,                           Is.False);
+                Assert.That(receipt.PaymentReference,                 Is.Null);
+
+                Assert.That(ErrorOf(json => json["amount"]   = 14.00m),            Does.Contain("'amount' as a decimal in a text"));
+                Assert.That(ErrorOf(json => json["amount"]   = "-1"),              Does.Contain("'amount'"));
+                Assert.That(ErrorOf(json => json.Remove("currency")),              Does.Contain("'currency'"));
+                Assert.That(ErrorOf(json => json["@context"] = "https://other"),   Does.StartWith("It is no receipt of a web payment page"));
+                Assert.That(ErrorOf(json => json["keyId"]    = "key-1"),           Does.StartWith("A signed receipt names all of"));
+                Assert.That(ErrorOf(json => json["capturedAt"] = "yesterday"),     Does.Contain("'capturedAt'"));
+
+            });
+
+        }
+
+        #endregion
+
     }
 
 }

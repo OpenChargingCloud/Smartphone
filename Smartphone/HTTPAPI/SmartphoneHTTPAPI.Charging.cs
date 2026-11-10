@@ -302,9 +302,11 @@ namespace cloud.charging.open.Smartphone
         /// "disputeLink" - the https URL a POST disputes it at -, its
         /// "paymentReference" - the reference of the payment it took, which
         /// every signed value of the session is to name as its identification
-        /// ("ID") - and the "limit" the driver chose there, as OCPP 2.1 says it
+        /// ("ID") - the "limit" the driver chose there, as OCPP 2.1 says it
         /// to the station: { "maxEnergy" in Wh, "maxCost", "maxTime" in
-        /// seconds, "maxSoC" in percent }; 400 where one is none. Or, in place
+        /// seconds, "maxSoC" in percent } - and its "paymentLink" - the https
+        /// URL that says the price agreement and the receipt of the session;
+        /// 400 where one is none. Or, in place
         /// of all of these, the "handOver" the page gave - the https URL of
         /// the document that names them, taken from the host of the web
         /// payment page the proof of the station names alone, or the document
@@ -364,10 +366,13 @@ namespace cloud.charging.open.Smartphone
                 if (!TryText(json, "paymentReference", PaymentReferenceIs, out var paymentReference, out var paymentReferenceError))
                     return ErrorJSON(Request, HTTPStatusCode.BadRequest, paymentReferenceError);
 
+                if (!TryText(json, "paymentLink", PaymentLinkIs, out var paymentLink, out var paymentLinkError))
+                    return ErrorJSON(Request, HTTPStatusCode.BadRequest, paymentLinkError);
+
                 if (!TransactionLimit.TryParse(json["limit"], out var limit, out var limitError))
                     return ErrorJSON(Request, HTTPStatusCode.BadRequest, limitError);
 
-                var followed = await Smartphone.FollowLiveLinkAsync(locationId, evseUid, liveLink, user.Id.ToString(), stopLink, limit, disputeLink, paymentReference);
+                var followed = await Smartphone.FollowLiveLinkAsync(locationId, evseUid, liveLink, user.Id.ToString(), stopLink, limit, disputeLink, paymentReference, paymentLink);
 
                 if (followed.Session is null)
                     return Refused(Request, followed.Refusal, followed.Error ?? "No live link is followed.");
@@ -466,17 +471,45 @@ namespace cloud.charging.open.Smartphone
 
         #endregion
 
+        #region (private) PostPaymentChargingSession(Request)
+
+        /// <summary>
+        /// POST /api/v1/charging/sessions/{id}/payment: ask the payment link the
+        /// web payment page of the operator of its station gave for a session
+        /// now - its price agreement and its receipt, where they did not come
+        /// yet -, each checked as it can be, and the session disputed where one
+        /// does not hold. This phone asks it itself until both came: asked
+        /// here, it asks at once. 409 where the page gave no payment link.
+        /// </summary>
+        private async Task<HTTPResponse> PostPaymentChargingSession(HTTPRequest Request)
+        {
+
+            if (!TryAuthorize(Request, Permission.Run(SmartphoneAccess.Charging), true, out var user, out var refused))
+                return refused;
+
+            var asked = await Smartphone.AskPaymentNowAsync(IdOf(Request), user.Id.ToString());
+
+            if (asked.Session is null)
+                return Refused(Request, asked.Refusal, asked.Error ?? "Nothing was asked.");
+
+            return JSONResponse(Request, HTTPStatusCode.OK, Smartphone.SessionJSON(asked.Session, Smartphone.TimeProvider.GetUtcNow()));
+
+        }
+
+        #endregion
+
 
         #region (private static) TryText(JSON, Name, What, out Text, out Error)
 
         private const String StopLinkIs          = "the https URL the web payment page of the operator gave to stop the session with";
         private const String DisputeLinkIs       = "the https URL the web payment page of the operator gave to dispute the session with";
         private const String PaymentReferenceIs  = "the reference of the payment the web payment page of the operator took, as the station writes it into the identification (\"ID\") of the signed meter values of the session";
+        private const String PaymentLinkIs       = "the https URL the web payment page of the operator gave to ask the payment of the session at";
 
         /// <summary>
         /// What a hand-over names, and is not handed over beside it.
         /// </summary>
-        private static readonly String[] HandedOverAlone = [ "liveLink", "stopLink", "disputeLink", "paymentReference", "limit" ];
+        private static readonly String[] HandedOverAlone = [ "liveLink", "stopLink", "disputeLink", "paymentReference", "limit", "paymentLink" ];
 
         /// <summary>
         /// What of a request the web payment page gave, where it names it -

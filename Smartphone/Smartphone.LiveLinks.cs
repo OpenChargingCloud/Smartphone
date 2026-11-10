@@ -106,6 +106,7 @@ namespace cloud.charging.open.Smartphone
         /// <param name="Limit">The limit the driver chose at the page, as OCPP 2.1 says it to the station.</param>
         /// <param name="DisputeLink">The dispute link the page gave: an https URL of this session alone, which a POST disputes it at.</param>
         /// <param name="PaymentReference">The reference of the payment the page took, which the station writes into the identification ("ID") of every signed value of the session.</param>
+        /// <param name="PaymentLink">The payment link the page gave: an https URL of this session alone that says its price agreement and its receipt.</param>
         /// <param name="CancellationToken">To stop fetching its document.</param>
         public async Task<ChargingStart> FollowLiveLinkAsync(String             LocationId,
                                                              String             EVSEUid,
@@ -115,8 +116,12 @@ namespace cloud.charging.open.Smartphone
                                                              TransactionLimit?  Limit              = null,
                                                              String?            DisputeLink        = null,
                                                              String?            PaymentReference   = null,
+                                                             String?            PaymentLink        = null,
                                                              CancellationToken  CancellationToken  = default)
         {
+
+            if (PaymentLink is not null && !TryLinkURL(PaymentLink, out _))
+                return ChargingStart.Refused(ChargingRefusal.Invalid, $"'{PaymentLink}' is no payment link: it is the https URL the web payment page gave to ask the payment of the session at.");
 
             if (StopLink is not null && !TryLinkURL(StopLink, out _))
                 return ChargingStart.Refused(ChargingRefusal.Invalid, $"'{StopLink}' is no stop link: it is the https URL the web payment page gave to stop the session with.");
@@ -127,7 +132,7 @@ namespace cloud.charging.open.Smartphone
             if (PaymentReference is not null && !IsPaymentReference(PaymentReference.Trim()))
                 return ChargingStart.Refused(ChargingRefusal.Invalid, $"'{PaymentReference}' is no payment reference: it is the reference of the payment the web payment page took, as the station writes it into the identification (\"ID\") of the signed meter values - a text of at most {MaxPaymentReferenceLength} characters, none of them a control character.");
 
-            var handOver = new WebPaymentHandOver(LiveLink, StopLink?.Trim(), DisputeLink?.Trim(), PaymentReference?.Trim(), Limit);
+            var handOver = new WebPaymentHandOver(LiveLink, StopLink?.Trim(), DisputeLink?.Trim(), PaymentReference?.Trim(), Limit, PaymentLink?.Trim());
 
             return await FollowAsync(LocationId,
                                      EVSEUid,
@@ -238,7 +243,8 @@ namespace cloud.charging.open.Smartphone
                                             DisputeLink:       handOver.DisputeLink,
                                             PaymentReference:  handOver.PaymentReference,
                                             WebPaymentPage:    station.WebPaymentURL,
-                                            HandOver:          handOverFrom);
+                                            HandOver:          handOverFrom,
+                                            PaymentLink:       handOver.PaymentLink);
 
             if (follow.EVSEId is String named && named != evse.EVSEId)
                 return ChargingStart.Refused(ChargingRefusal.Conflict, $"The live link is of {named}, not of {evse.EVSEId} at {location.Name}: it was handed over at the wrong charge point.");
@@ -256,12 +262,14 @@ namespace cloud.charging.open.Smartphone
                        $", for {session.PricePerKWh:0.00##} {session.Currency} per kWh, as its checked proof says" +
                        (follow.StopLinkHost is String stopAt ? $", with a stop link at {stopAt}{Bound(follow.StopLinkBound)}" : ", with no stop link") +
                        (follow.DisputeLinkHost is String disputeAt ? $", a dispute link at {disputeAt}{Bound(follow.DisputeLinkBound)}" : ", no dispute link") +
+                       (follow.PaymentLinkHost is String paymentAt ? $", a payment link at {paymentAt}{Bound(follow.PaymentLinkBound)}" : ", no payment link") +
                        (follow.PaymentReference is String reference ? $", the payment \"{reference}\" its signed values are to name" : ", no payment reference: that its signed values are of it is not proven") +
                        (handOver.Limit is not null ? $" and the limit {handOver.Limit.InWords(session.Currency)}" : "") +
                        $". The session is {session.Id}.",
                        "charging", "web");
 
             StartFollowing(session);
+            StartPaying(session);
 
             // The proof checked before may run out before the meter signs the
             // first value: one asked for now covers the start of the session.
@@ -722,10 +730,21 @@ namespace cloud.charging.open.Smartphone
             var now     = TimeProvider.GetUtcNow();
             var reason  = Follow.DisputeBecause ?? "";
 
+            var body    = new JObject(new JProperty("reason",        reason),
+                                      new JProperty("signedValues",  new JArray(Follow.Disputed)));
+
+            // Disputed for its payment: with what of it does not hold.
+            if (Follow.Payment is LiveLinkPayment payment && reason == payment.DisputeBecause)
+            {
+                if (payment.AgreementHolds == false && payment.Agreement is not null)
+                    body.Add(new JProperty("priceAgreement", payment.Agreement.DeepClone()));
+                else if (payment.Receipt is not null)
+                    body.Add(new JProperty("receipt", payment.Receipt.DeepClone()));
+            }
+
             var (accepted, answer) = await PostLinkAsync(DisputeLink,
                                                          "dispute link",
-                                                         new JObject(new JProperty("reason",        reason),
-                                                                     new JProperty("signedValues",  new JArray(Follow.Disputed))),
+                                                         body,
                                                          CancellationToken);
 
             return new LiveLinkDispute(now, Who, reason, accepted, answer);
@@ -947,6 +966,11 @@ namespace cloud.charging.open.Smartphone
                                                                                       update.Result.GetType().Name,
                                                                                       SignedTextsOf(update.Result)));
 
+                            // A price agreement that came before the start
+                            // value: checked once it holds.
+                            if (followed?.LiveLink?.Payment is { Agreement: not null, AgreementHolds: null } && followed.LiveLink.Start?.Holds == true)
+                                followed = CheckPayment(Id) ?? followed;
+
                             if (followed?.LiveLink?.Refused == true)
                             {
                                 await StopRefusedAsync   (followed, CancellationToken);
@@ -1040,6 +1064,9 @@ namespace cloud.charging.open.Smartphone
             }
 
             LogEnded(session);
+
+            // A receipt that came before the end: checked now.
+            session = CheckPayment(session.Id) ?? session;
 
             await DisputePendingAsync(session, true, CancellationToken);
 
@@ -1229,6 +1256,8 @@ namespace cloud.charging.open.Smartphone
                                                                      follow.DisputePending)))
                 StartFollowing(session);
 
+            StartPayingAll();
+
         }
 
         private async Task StopFollowingLiveLinksAsync()
@@ -1255,6 +1284,8 @@ namespace cloud.charging.open.Smartphone
             }
 
             await Task.WhenAll(followers.Select(follower => follower.Following));
+
+            await StopPayingAsync();
 
         }
 

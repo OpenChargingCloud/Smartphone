@@ -36,6 +36,15 @@ function smartphone({ method, path }: Asked): unknown {
         return current;
     }
 
+    if (method === 'POST' && path === `/charging/sessions/${current.id}/payment` && current.liveLink?.payment) {
+        current = { ...current, liveLink: { ...current.liveLink, payment: { ...current.liveLink.payment, problem: null,
+                                                                            receipt: { cameAt: '2026-10-10T08:30:00Z', holds: false, amount: 15.5, currency: 'EUR',
+                                                                                       capturedAt: '2026-10-10T08:25:00Z', cost: 14, signed: true, keyId: 'k1',
+                                                                                       paymentReference: 'web-payment-S1',
+                                                                                       error: 'It says the page took 15.5 EUR, and the session costs 14 EUR: 1.5 EUR more.' } } } };
+        return current;
+    }
+
     if (method === 'GET' && path.startsWith('/charging/sessions/'))
         return refused(404, `There is no charging session '${path.split('/').pop()}' on this phone.`);
 
@@ -264,7 +273,7 @@ describe('a charging session', () => {
         const link = liveLinkSession().liveLink!;
 
         current = liveLinkSession({ liveLink: { ...link, stopLink: 'pay.gef.example', disputeLink: 'other.example',
-                                                bound: { stopLink: true, disputeLink: false, paymentReference: true } } });
+                                                bound: { stopLink: true, disputeLink: false, paymentReference: true, paymentLink: false } } });
 
         let root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
                               smartphone, root => root.querySelector('.session-live-link') !== null);
@@ -277,7 +286,7 @@ describe('a charging session', () => {
         assert.match(text, /Dispute link\s*at other\.example, not pay\.gef\.example, the host of the web payment page its proof names: not proven to be its operator's/);
 
         current = liveLinkSession({ liveLink: { ...link, handOver: null, webPaymentHost: null, stopLink: 'pay.gef.example',
-                                                bound: { stopLink: false, disputeLink: false, paymentReference: false } } });
+                                                bound: { stopLink: false, disputeLink: false, paymentReference: false, paymentLink: false } } });
 
         root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
                           smartphone, root => root.querySelector('.session-live-link') !== null);
@@ -287,6 +296,50 @@ describe('a charging session', () => {
         assert.match(text, /Hand-over\s*none taken: what its page gave was typed or pasted/);
         assert.match(text, /web-payment-S1: every signed value is to name it -\s*typed or pasted, not proven to be that of its page/);
         assert.match(text, /Stop link\s*at pay\.gef\.example: not proven to be its operator's, as its proof names no web payment page/);
+
+    });
+
+    it('says what its tariff makes of what it charged, its price agreement and its receipt against its cost, and asks its payment', async () => {
+
+        const link = liveLinkSession().liveLink!;
+
+        current = liveLinkSession({
+                      cost:      { amount: 14, pricePerKWh: 0.65, currency: 'EUR', tariffId: 'DE*GEF*T_DC', agreed: true,
+                                   worked: { currency: 'EUR', amount: 14, exact: false, vatStated: false, limit: null,
+                                             notes: [ 'Its element 2 applies at a current no meter value says: it is taken as one that does not.' ],
+                                             components: [ { element: 1, dimension: 'flat',   quantity: 1,  unit: '',    price: 1,    vat: null, amount: 1 },
+                                                           { element: 1, dimension: 'energy', quantity: 20, unit: 'kWh', price: 0.65, vat: null, amount: 13 } ] } },
+                      liveLink:  { ...link, paymentLink: 'pay.gef.example', bound: { ...link.bound, paymentLink: true },
+                                   payment: { askedAt: '2026-10-10T08:20:00Z', problem: 'pay.gef.example answered 404 Not Found, not the payment of the session.',
+                                              agreement: { cameAt: '2026-10-10T08:01:00Z', holds: true, error: null, tariffId: 'DE*GEF*T_DC', priceStatementDigest: 'ab12',
+                                                           signer: 'DE*GEF', signedAt: '2026-10-10T08:00:30Z', keyId: 'k1' },
+                                              receipt: null } } });
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.cost-parts') !== null && root.querySelector('.btn.ask-payment') !== null);
+
+        const text = root.textContent!;
+
+        assert.match(text, /Cost[^]*at its tariff DE\*GEF\*T_DC, as its operator agreed it/);
+        assert.match(root.querySelector('.cost-parts')!.textContent!, /flat fee[^]*energy[^]*kWh at/);
+        assert.match(text, /Its tariff states no VAT/);
+        assert.match(root.querySelector('.cost-not-exact')!.textContent!, /Not exact: Its element 2 applies at a current/);
+
+        const live = root.querySelector('.session-live-link')!.textContent!;
+
+        assert.match(live, /Payment link\s*at pay\.gef\.example, the host of the web payment page its proof names/);
+        assert.match(live, /Price agreement\s*holds the tariff DE\*GEF\*T_DC, signed by its operator DE\*GEF for this session/);
+        assert.match(live, /Receipt\s*none came yet/);
+        assert.match(live, /Asked last[^]*answered 404 Not Found/);
+
+        root.querySelector<HTMLButtonElement>('.btn.ask-payment')!.click();
+
+        await until(() => asked.some(one => one.method === 'POST' && one.path === `/charging/sessions/${current.id}/payment`),
+                    'Ask its payment now did not ask the smartphone');
+        await until(() => /Receipt\s*does not hold/.test(root.querySelector('.session-live-link')!.textContent!), 'the receipt is not shown');
+
+        assert.match(root.querySelector('.session-live-link')!.textContent!, /does not hold\s*the page took[^]*and it costs[^]*as this phone works it out\s*- signed by its operator[^]*1\.5 EUR more/);
+        assert.equal(root.querySelector('.btn.ask-payment'), null, 'Ask its payment now, where its receipt came');
 
     });
 

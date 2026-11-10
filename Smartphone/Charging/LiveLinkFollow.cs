@@ -181,6 +181,208 @@ namespace cloud.charging.open.Smartphone.Charging
 
 
     /// <summary>
+    /// How the receipt of the web payment page held against the session: of
+    /// its EVSE and its payment, signed by the operator of its station where
+    /// it is signed, and not more than the cost this phone works out of its
+    /// signed values at its tariff - or why not, or why that was not decided.
+    /// </summary>
+    /// <param name="CheckedAt">When it was checked.</param>
+    /// <param name="Holds">Whether it holds; null where it was not decided.</param>
+    /// <param name="Error">Why it does not, or why it was not decided.</param>
+    /// <param name="Amount">What the page took, with VAT, as the receipt says.</param>
+    /// <param name="Currency">Its currency.</param>
+    /// <param name="CapturedAt">When it was taken, as the receipt says.</param>
+    /// <param name="Cost">What this phone works out the session costs, where it could.</param>
+    /// <param name="Signed">Whether the receipt is signed - and its signature the operator's, where it holds.</param>
+    /// <param name="KeyId">The key it is signed with.</param>
+    /// <param name="PaymentReference">The payment it names.</param>
+    public sealed record LiveLinkReceiptCheck(DateTimeOffset   CheckedAt,
+                                              Boolean?         Holds,
+                                              String?          Error,
+                                              Decimal          Amount,
+                                              String           Currency,
+                                              DateTimeOffset   CapturedAt,
+                                              Decimal?         Cost,
+                                              Boolean          Signed,
+                                              String?          KeyId             = null,
+                                              String?          PaymentReference  = null)
+    {
+
+        public JObject ToJSON()
+
+            => new (new JProperty("checkedAt",         CheckedAt.ToString("o")),
+                    new JProperty("holds",             Holds),
+                    new JProperty("error",             Error),
+                    new JProperty("amount",            Amount),
+                    new JProperty("currency",          Currency),
+                    new JProperty("capturedAt",        CapturedAt.ToString("o")),
+                    new JProperty("cost",              Cost),
+                    new JProperty("signed",            Signed),
+                    new JProperty("keyId",             KeyId),
+                    new JProperty("paymentReference",  PaymentReference));
+
+        /// <summary>
+        /// A check as the store kept it, or null where it kept none.
+        /// </summary>
+        public static LiveLinkReceiptCheck? TryParse(JToken? JSON)
+
+            => JSON is JObject json                                                                                                   &&
+               DateTimeOffset.TryParse(json.Value<String>("checkedAt"),  CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)       &&
+               DateTimeOffset.TryParse(json.Value<String>("capturedAt"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var captured) &&
+               json["amount"] is JValue { Type: JTokenType.Integer or JTokenType.Float } amount
+                   ? new LiveLinkReceiptCheck(at,
+                                              json["holds"]?.Type == JTokenType.Boolean ? json.Value<Boolean>("holds") : null,
+                                              json.Value<String>("error"),
+                                              amount.Value<Decimal>(),
+                                              json.Value<String>("currency") ?? "",
+                                              captured,
+                                              json["cost"] is JValue { Type: JTokenType.Integer or JTokenType.Float } cost ? cost.Value<Decimal>() : null,
+                                              json.Value<Boolean?>("signed") == true,
+                                              json.Value<String>("keyId"),
+                                              json.Value<String>("paymentReference"))
+                   : null;
+
+    }
+
+
+    /// <summary>
+    /// The payment of a session, as the web payment page says it over the
+    /// payment link it gave: when this phone asked last, and why nothing came,
+    /// where nothing did. The price agreement of the operator of the station -
+    /// the SessionPriceAgreement of WWCP_POI it signed for the session -, as it
+    /// came, whether it holds - of this session, its start value and a price
+    /// in force at its start, signed by the operator with a key that may sign
+    /// prices - and the tariff it agreed, which the session is charged by
+    /// where it holds. And the receipt of what the page took, as it came, and
+    /// how it held against the cost this phone works out.
+    /// </summary>
+    /// <param name="AskedAt">When this phone asked the page last.</param>
+    /// <param name="Problem">Why nothing came, where nothing did.</param>
+    /// <param name="Agreement">The price agreement, as it came.</param>
+    /// <param name="AgreementAt">When it came.</param>
+    /// <param name="AgreementHolds">Whether it holds; null while it was not checked.</param>
+    /// <param name="AgreementError">Why it does not, or why it was not checked yet.</param>
+    /// <param name="AgreedTariff">The tariff it agreed, where it holds.</param>
+    /// <param name="Receipt">The receipt, as it came.</param>
+    /// <param name="ReceiptAt">When it came.</param>
+    /// <param name="ReceiptCheck">How it held, once it was checked.</param>
+    public sealed record LiveLinkPayment(DateTimeOffset?        AskedAt         = null,
+                                         String?                Problem         = null,
+                                         JObject?               Agreement       = null,
+                                         DateTimeOffset?        AgreementAt     = null,
+                                         Boolean?               AgreementHolds  = null,
+                                         String?                AgreementError  = null,
+                                         SessionTariff?         AgreedTariff    = null,
+                                         JObject?               Receipt         = null,
+                                         DateTimeOffset?        ReceiptAt       = null,
+                                         LiveLinkReceiptCheck?  ReceiptCheck    = null)
+    {
+
+        /// <summary>
+        /// Why this phone disputes the session for its payment: its price
+        /// agreement does not hold, or its receipt does not - the page took
+        /// more than the cost, or another payment's. Null where neither is so.
+        /// </summary>
+        public String? DisputeBecause
+            => AgreementHolds == false
+                   ? $"The price agreement of its web payment page does not hold: {AgreementError}"
+                   : ReceiptCheck?.Holds == false
+                         ? $"The receipt of its web payment page does not hold: {ReceiptCheck.Error}"
+                         : null;
+
+        /// <summary>
+        /// The payment as the pages show it.
+        /// </summary>
+        public JObject ToJSON()
+
+            => new (new JProperty("askedAt",    AskedAt?.ToString("o")),
+                    new JProperty("problem",    Problem),
+                    new JProperty("agreement",  Agreement is null
+                                                    ? null
+                                                    : new JObject(
+                                                          new JProperty("cameAt",                AgreementAt?.ToString("o")),
+                                                          new JProperty("holds",                 AgreementHolds),
+                                                          new JProperty("error",                 AgreementError),
+                                                          new JProperty("tariffId",              Agreement.Value<String>("chargingTariffId")),
+                                                          new JProperty("priceStatementDigest",  Agreement.Value<String>("priceStatementDigest")),
+                                                          new JProperty("signer",                Agreement.Value<String>("signer")),
+                                                          new JProperty("signedAt",              Agreement.Value<String>("signedAt")),
+                                                          new JProperty("keyId",                 Agreement.Value<String>("keyId"))
+                                                      )),
+                    new JProperty("receipt",    ReceiptJSON()));
+
+        private JObject? ReceiptJSON()
+        {
+
+            if (Receipt is null)
+                return null;
+
+            var json = ReceiptCheck?.ToJSON() ?? new JObject(
+                                                     new JProperty("holds",  JValue.CreateNull()),
+                                                     new JProperty("error",  "It is checked once the session ended and its end value was decided.")
+                                                 );
+
+            json.AddFirst(new JProperty("cameAt", ReceiptAt?.ToString("o")));
+
+            return json;
+
+        }
+
+        /// <summary>
+        /// What the store keeps of it: all of it, its agreement and its receipt
+        /// as they came.
+        /// </summary>
+        public JObject ToStorageJSON()
+        {
+
+            var json = new JObject();
+
+            if (AskedAt        is not null)  json.Add(new JProperty("askedAt",         AskedAt.Value.ToString("o")));
+            if (Problem        is not null)  json.Add(new JProperty("problem",         Problem));
+            if (Agreement      is not null)  json.Add(new JProperty("agreement",       Agreement.DeepClone()));
+            if (AgreementAt    is not null)  json.Add(new JProperty("agreementAt",     AgreementAt.Value.ToString("o")));
+            if (AgreementHolds is not null)  json.Add(new JProperty("agreementHolds",  AgreementHolds.Value));
+            if (AgreementError is not null)  json.Add(new JProperty("agreementError",  AgreementError));
+            if (AgreedTariff   is not null)  json.Add(new JProperty("agreedTariff",    AgreedTariff.ToJSON()));
+            if (Receipt        is not null)  json.Add(new JProperty("receipt",         Receipt.DeepClone()));
+            if (ReceiptAt      is not null)  json.Add(new JProperty("receiptAt",       ReceiptAt.Value.ToString("o")));
+            if (ReceiptCheck   is not null)  json.Add(new JProperty("receiptCheck",    ReceiptCheck.ToJSON()));
+
+            return json;
+
+        }
+
+        /// <summary>
+        /// A payment as the store kept it, or null where it kept none.
+        /// </summary>
+        public static LiveLinkPayment? TryParse(JToken? JSON)
+        {
+
+            if (JSON is not JObject json)
+                return null;
+
+            static DateTimeOffset? Time(JToken? Token)
+                => Token?.Type == JTokenType.String && DateTimeOffset.TryParse(Token.Value<String>(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var time)
+                       ? time
+                       : null;
+
+            return new LiveLinkPayment(Time(json["askedAt"]),
+                                       json.Value<String>("problem"),
+                                       json["agreement"] as JObject,
+                                       Time(json["agreementAt"]),
+                                       json["agreementHolds"]?.Type == JTokenType.Boolean ? json.Value<Boolean>("agreementHolds") : null,
+                                       json.Value<String>("agreementError"),
+                                       SessionTariff.TryParse(json["agreedTariff"]),
+                                       json["receipt"] as JObject,
+                                       Time(json["receiptAt"]),
+                                       LiveLinkReceiptCheck.TryParse(json["receiptCheck"]));
+
+        }
+
+    }
+
+
+    /// <summary>
     /// One signed document a live link brought, as it came: an OCMF document
     /// "OCMF|{payload}|{signature}", when it came, and over which transport
     /// from where - and how it held, once it was checked.
@@ -332,6 +534,15 @@ namespace cloud.charging.open.Smartphone.Charging
     /// (<see cref="HandOver"/>, <see cref="PaymentReferenceBound"/>). What was
     /// typed or pasted, or is at another host, is the word of whoever gave it.
     /// </para>
+    /// <para>
+    /// The page may give a payment link as well (<see cref="PaymentLink"/>),
+    /// which says the payment of the session (<see cref="Payment"/>): the price
+    /// agreement of the operator of the station for it, once its start value
+    /// is signed - the session is charged by the tariff it agreed, where it
+    /// holds -, and the receipt of what the page took, once it took it, which
+    /// is compared with the cost this phone works out. Where either does not
+    /// hold, the session is disputed for it.
+    /// </para>
     /// </remarks>
     /// <param name="Link">The live link, its JSON document as it was handed over or fetched.</param>
     /// <param name="From">The URL it was fetched from, or null where the document itself was handed over.</param>
@@ -353,6 +564,8 @@ namespace cloud.charging.open.Smartphone.Charging
     /// <param name="PaymentReference">The reference of the payment the page took, which every signed value of the session names as its identification, where the page gave one.</param>
     /// <param name="WebPaymentPage">The web payment page the proof of the station named when the live link was handed over, where it named one.</param>
     /// <param name="HandOver">The URL of the hand-over the page gave, at the host of that page, where the phone took it from there - null where what the page gave was typed or pasted.</param>
+    /// <param name="PaymentLink">The payment link the web payment page gave for the session, where it gave one.</param>
+    /// <param name="Payment">What its payment link said so far.</param>
     public sealed record LiveLinkFollow(JObject                           Link,
                                         String?                           From,
                                         DateTimeOffset                    HandedOverAt,
@@ -372,7 +585,9 @@ namespace cloud.charging.open.Smartphone.Charging
                                         LiveLinkDispute?                  Dispute           = null,
                                         String?                           PaymentReference  = null,
                                         String?                           WebPaymentPage    = null,
-                                        String?                           HandOver          = null)
+                                        String?                           HandOver          = null,
+                                        String?                           PaymentLink       = null,
+                                        LiveLinkPayment?                  Payment           = null)
     {
 
         #region Data
@@ -496,6 +711,20 @@ namespace cloud.charging.open.Smartphone.Charging
         public Boolean PaymentReferenceBound
             => PaymentReference is not null && IsBound(HandOverHost);
 
+        /// <summary>
+        /// Where its payment link goes, for the pages and the log: its host.
+        /// </summary>
+        public String? PaymentLinkHost
+            => WebPaymentHandOver.HostOf(PaymentLink);
+
+        /// <summary>
+        /// Whether its payment link is bound to the operator of the station: it
+        /// is at the host of the web payment page the proof of the station
+        /// names.
+        /// </summary>
+        public Boolean PaymentLinkBound
+            => IsBound(PaymentLinkHost);
+
         private Boolean IsBound(String? Host)
             => Host is not null && WebPaymentHost is String webPayment && String.Equals(Host, webPayment, StringComparison.OrdinalIgnoreCase);
 
@@ -565,7 +794,7 @@ namespace cloud.charging.open.Smartphone.Charging
                     ? $"Its signed end meter value is a wrong one: {wrongEnd.Check!.Error}"
                     : EndedAt is not null && EndReading is null
                           ? "The station ended the stream of its live link, and its meter signed no end of the transaction: no signed end value says what was charged."
-                          : null);
+                          : Payment?.DisputeBecause);
 
         /// <summary>
         /// The signed documents a dispute is sent with, as they came: the one
@@ -575,7 +804,7 @@ namespace cloud.charging.open.Smartphone.Charging
         public IReadOnlyList<String> Disputed
             => [.. new[] {
                        StartDocument?.Document,
-                       Wrong ?? WrongEnd ?? (EndedAt is not null && EndReading is null ? Signed.LastOrDefault() : null)
+                       Wrong ?? WrongEnd ?? (EndedAt is not null && EndReading is null ? Signed.LastOrDefault() : Payment?.DisputeBecause is not null ? EndDocument : null)
                    }.OfType<LiveLinkDocument>().
                      Select  (document => document.Text).
                      Distinct()];
@@ -851,8 +1080,11 @@ namespace cloud.charging.open.Smartphone.Charging
                         new JProperty("bound",            new JObject(
                                                               new JProperty("stopLink",          StopLinkBound),
                                                               new JProperty("disputeLink",       DisputeLinkBound),
-                                                              new JProperty("paymentReference",  PaymentReferenceBound)
-                                                          )));
+                                                              new JProperty("paymentReference",  PaymentReferenceBound),
+                                                              new JProperty("paymentLink",       PaymentLinkBound)
+                                                          )),
+                        new JProperty("paymentLink",      PaymentLinkHost),
+                        new JProperty("payment",          Payment?.ToJSON()));
 
         }
 
@@ -892,6 +1124,8 @@ namespace cloud.charging.open.Smartphone.Charging
             if (PaymentReference is not null) json.Add(new JProperty("paymentReference", PaymentReference));
             if (WebPaymentPage   is not null) json.Add(new JProperty("webPaymentPage",   WebPaymentPage));
             if (HandOver         is not null) json.Add(new JProperty("handOver",         HandOver));
+            if (PaymentLink      is not null) json.Add(new JProperty("paymentLink",      PaymentLink));
+            if (Payment          is not null) json.Add(new JProperty("payment",          Payment.ToStorageJSON()));
 
             return json;
 
@@ -944,7 +1178,9 @@ namespace cloud.charging.open.Smartphone.Charging
                                       LiveLinkDispute.TryParse(json["dispute"]),
                                       json.Value<String>("paymentReference"),
                                       json.Value<String>("webPaymentPage"),
-                                      json.Value<String>("handOver"));
+                                      json.Value<String>("handOver"),
+                                      json.Value<String>("paymentLink"),
+                                      LiveLinkPayment.TryParse(json["payment"]));
 
         }
 

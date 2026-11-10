@@ -152,7 +152,8 @@ export function liveLinkSession(more: Partial<ChargingSession> = {}): ChargingSe
                           wrong: null, refused: false, end: null, stopLink: null, limit: null, stop: null, limits: [], ending: null,
                           disputeBecause: null, disputeLink: null, dispute: null, paymentReference: 'web-payment-S1',
                           webPaymentHost: 'pay.gef.example', handOver: 'pay.gef.example',
-                          bound: { stopLink: false, disputeLink: false, paymentReference: true } }
+                          bound: { stopLink: false, disputeLink: false, paymentReference: true, paymentLink: false },
+                          paymentLink: null, payment: null }
     };
 
     delete followed.fullAt;

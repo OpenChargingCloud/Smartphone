@@ -40,7 +40,9 @@ namespace cloud.charging.open.Smartphone.Tests
     /// what the test sets, 200 at first. So does its dispute link, at
     /// /sessions/{session}/dispute. And its hand-over, at
     /// /handOvers/{session}: all of these in one document, with the payment
-    /// reference "payment-{session}" and a limit of 20 kWh.
+    /// reference "payment-{session}", a limit of 20 kWh and its payment link,
+    /// at /payments/{session}, which answers what the test sets - its price
+    /// agreement and its receipt -, 404 before.
     /// </summary>
     public sealed class TestCPO : IAsyncDisposable
     {
@@ -51,6 +53,7 @@ namespace cloud.charging.open.Smartphone.Tests
         private volatile String?                                      live;
         private          Int32                                        liveRequests;
         private          Int32                                        handOverRequests;
+        private readonly ConcurrentDictionary<String, JObject>        payments  = new();
         private readonly ConcurrentQueue<(String Session, String Body)>  stops     = new();
         private readonly ConcurrentQueue<(String Session, String Body)>  disputes  = new();
 
@@ -126,6 +129,7 @@ namespace cloud.charging.open.Smartphone.Tests
             api.AddHandler(HTTPPath.Parse("/sessions/{session}/stop"),  request => Task.FromResult(cpo.PostStop(request)),     HTTPMethod.POST);
             api.AddHandler(HTTPPath.Parse("/sessions/{session}/dispute"), request => Task.FromResult(cpo.PostDispute(request)), HTTPMethod.POST);
             api.AddHandler(HTTPPath.Parse("/handOvers/{session}"),      request => Task.FromResult(cpo.GetHandOver(request)),  HTTPMethod.GET);
+            api.AddHandler(HTTPPath.Parse("/payments/{session}"),       request => Task.FromResult(cpo.GetPayment(request)),   HTTPMethod.GET);
 
             await server.Start();
 
@@ -206,7 +210,37 @@ namespace cloud.charging.open.Smartphone.Tests
                                                StopLinkURL(Session),
                                                DisputeLinkURL(Session),
                                                PaymentReferenceOf(Session),
-                                               new Charging.TransactionLimit(MaxEnergy: 20000m)).ToJSON();
+                                               new Charging.TransactionLimit(MaxEnergy: 20000m),
+                                               PaymentLinkURL(Session)).ToJSON();
+
+        /// <summary>
+        /// Where the payment link of the given session is.
+        /// </summary>
+        public String PaymentLinkURL(String Session)
+            => $"{URL}/payments/{Session}";
+
+        /// <summary>
+        /// What the payment link of the given session answers from now on: its
+        /// price agreement and its receipt, where given - nothing at all, 404,
+        /// where neither is.
+        /// </summary>
+        public void SetPayment(String Session, JObject? PriceAgreement = null, JObject? Receipt = null)
+        {
+
+            if (PriceAgreement is null && Receipt is null)
+            {
+                payments.TryRemove(Session, out _);
+                return;
+            }
+
+            var payment = new JObject(new JProperty("@context", Smartphone.PaymentJSONLDContext));
+
+            if (PriceAgreement is not null)  payment.Add(new JProperty("priceAgreement",  PriceAgreement));
+            if (Receipt        is not null)  payment.Add(new JProperty("receipt",         Receipt));
+
+            payments[Session] = payment;
+
+        }
 
         /// <summary>
         /// The reference of the payment of the given session, as its hand-over
@@ -247,6 +281,12 @@ namespace cloud.charging.open.Smartphone.Tests
                             HandOver(Request.ParsedURLParameters[0]).ToString());
 
         }
+
+        private HTTPResponse GetPayment(HTTPRequest Request)
+
+            => payments.TryGetValue(Request.ParsedURLParameters[0], out var payment)
+                   ? Response(Request, HTTPStatusCode.OK,       HTTPContentType.Application.JSON_UTF8, payment.ToString())
+                   : Response(Request, HTTPStatusCode.NotFound, HTTPContentType.Text.PLAIN,            "No payment yet.");
 
         private HTTPResponse GetLive(HTTPRequest Request)
         {

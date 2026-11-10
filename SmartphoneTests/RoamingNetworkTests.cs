@@ -2806,6 +2806,215 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
+        #region APaymentLinkBindsThePriceAndItsReceiptIsComparedWithTheCost()
+
+        /// <summary>
+        /// The DC EVSE is priced at a flat fee of 1.00 and 0.65 a kWh: a
+        /// session costs both, as its signed values say. Its payment link
+        /// answers nothing until the start value is signed, then the price
+        /// agreement of DE*GEF for this session and its start value, which
+        /// binds the price - and after the end the receipt of what the page
+        /// took, signed by DE*GEF with a key that may sign payments, which
+        /// holds where it is not more than the cost. A receipt of more, and a
+        /// price agreement of another start value, dispute the session through
+        /// its dispute link, with what does not hold.
+        /// </summary>
+        [Test]
+        public async Task APaymentLinkBindsThePriceAndItsReceiptIsComparedWithTheCost()
+        {
+
+            var flatAndEnergy = new JArray(new JObject(new JProperty("priceComponents", new JArray(
+                                    new JObject(new JProperty("type", "FLAT"),   new JProperty("price", 1.00m)),
+                                    new JObject(new JProperty("type", "ENERGY"), new JProperty("price", 0.65m), new JProperty("stepSize", 1))
+                                ))));
+
+            cpo     = await TestCPO.Start();
+            network = await TestRoamingNetwork.Start(DCWebPayment: $"{cpo.URL}/pay", DCPrice: flatAndEnergy);
+
+            await WithTheRoamingNetwork();
+
+            using var driver = await SignedInAs("driver1", "driver");
+
+            await Send(driver, HttpMethod.Get, "api/v1/map");
+            await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            var pool     = TestRoamingNetwork.PoolId;
+            var dc       = TestRoamingNetwork.DCEVSE;
+            var meter    = network.DCMeter;
+            var serial   = TestRoamingNetwork.DCMeterSerial;
+            var keyId    = POIPublicKey.From(network.OperatorSigning).Id;
+
+            var (status, refused) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                               new { locationId = pool, evseUid = dc, liveLink = cpo.LiveLinkURL("P0"), paymentLink = "ftp://cpo.example/payments/P0" });
+
+            Assert.That(status,                             Is.EqualTo(HttpStatusCode.BadRequest), refused.ToString());
+            Assert.That(refused["error"]!.Value<String>(),  Does.Contain("is no payment link"));
+
+            // The start value, signed at a whole second - as the agreement
+            // names when charging started -: the next one, once it passed,
+            // so that the proof attested before covers it.
+            static async Task<DateTimeOffset> NextSecond()
+            {
+                var now   = DateTimeOffset.UtcNow;
+                var next  = DateTimeOffset.FromUnixTimeSeconds(now.ToUnixTimeSeconds() + 1);
+                await Task.Delay(next - now + TimeSpan.FromMilliseconds(20));
+                return next;
+            }
+
+            async Task<(String Id, String Begin, DateTimeOffset BeganAt)> Started(String Session)
+            {
+
+                var beganAt  = await NextSecond();
+                var begin    = TestRoamingNetwork.OCMF(meter, serial, TestCPO.PaymentReferenceOf(Session), (beganAt, "B", 1000.000m));
+
+                cpo.Send(begin);
+
+                var (startStatus, started) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                                         new { locationId = pool, evseUid = dc, handOver = cpo.HandOverURL(Session) });
+
+                Assert.That(startStatus, Is.EqualTo(HttpStatusCode.Created), started.ToString());
+
+                var id = started["id"]!.Value<String>()!;
+
+                await SessionWhen(driver, id, json => json["liveLink"]?["start"] is JObject start && start["holds"]?.Value<Boolean?>() == true && json["check"]?["price"] is JObject);
+
+                return (id, begin, beganAt);
+
+            }
+
+            JObject Agreement(String Begin, DateTimeOffset BeganAt, String PriceStatementDigest)
+
+                => SessionPriceAgreement.Create(network.OperatorSigning,
+                                                keyId,
+                                                COSEAlgorithm.ES256,
+                                                TestRoamingNetwork.NetworkId,
+                                                dc,
+                                                serial,
+                                                BeganAt,
+                                                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(Begin))),
+                                                TestRoamingNetwork.DCTariff,
+                                                PriceStatementDigest,
+                                                TestRoamingNetwork.GEF,
+                                                SignedAt: BeganAt).JSON;
+
+            JObject Receipt(String Session, Decimal Amount)
+
+                => WebPaymentReceipt.Create(dc, TestCPO.PaymentReferenceOf(Session), Amount, "EUR", DateTimeOffset.UtcNow,
+                                            TestRoamingNetwork.GEF.ToString(), network.OperatorSigning, keyId).JSON;
+
+            async Task<JObject> Asked(String Id)
+            {
+                var (askedStatus, asked) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{Id}/payment");
+                Assert.That(askedStatus, Is.EqualTo(HttpStatusCode.OK), asked.ToString());
+                return asked;
+            }
+
+            // P1: its price agreed, its receipt of what it costs.
+            var (p1, begin1, beganAt1) = await Started("P1");
+
+            var asked1  = await Asked(p1);
+            var digest  = asked1["check"]!["price"]!["selected"]!["digest"]!.Value<String>()!;
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(asked1["liveLink"]!["paymentLink"]!.Value<String>(),             Is.EqualTo(new Uri(cpo.URL).Authority));
+                Assert.That(asked1["liveLink"]!["bound"]!["paymentLink"]!.Value<Boolean>(),  Is.True);
+                Assert.That(asked1["liveLink"]!["payment"]!["problem"]!.Value<String>(),     Does.Contain("404"), "nothing of the payment yet");
+                Assert.That(asked1["check"]!["price"]!["applicability"]!.Value<String>(),    Is.EqualTo("unbound"), "no agreement yet");
+                Assert.That(asked1["cost"]!["worked"]!["amount"]!.Value<Decimal>(),          Is.EqualTo(1.00m), "the flat fee, of the start");
+            }
+
+            cpo.SetPayment("P1", Agreement(begin1, beganAt1, digest));
+
+            var agreed = await Asked(p1);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(agreed["liveLink"]!["payment"]!["agreement"]!["holds"]!.Value<Boolean?>(), Is.True, agreed["liveLink"]!["payment"]!.ToString());
+                Assert.That(agreed["liveLink"]!["payment"]!["agreement"]!["tariffId"]!.Value<String>(), Is.EqualTo(TestRoamingNetwork.DCTariff));
+                Assert.That(agreed["check"]!["price"]!["agreement"]!.Value<String>(),        Is.EqualTo("valid"));
+                // WWCP_POI's simple profile of gross rates takes a component
+                // only with a step size, and a flat fee has none: bound, of a
+                // profile it does not establish the rates of.
+                Assert.That(agreed["check"]!["price"]!["applicability"]!.Value<String>(),    Is.EqualTo("unsupported"));
+                Assert.That(agreed["cost"]!["agreed"]!.Value<Boolean>(),                     Is.True, "charged by the tariff agreed");
+            }
+
+            cpo.Send(TestRoamingNetwork.OCMF(meter, serial, TestCPO.PaymentReferenceOf("P1"), (DateTimeOffset.UtcNow, "E", 1020.000m)));
+
+            var finished = await SessionWhen(driver, p1, json => json["status"]?.Value<String>() == "finished");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(finished["cost"]!["amount"]!.Value<Decimal>(),                   Is.EqualTo(14.00m), "1.00 and 20 kWh at 0.65");
+                Assert.That(finished["cost"]!["worked"]!["components"]!.Count(),             Is.EqualTo(2));
+                Assert.That(finished["cost"]!["worked"]!["exact"]!.Value<Boolean>(),         Is.True);
+            }
+
+            cpo.SetPayment("P1", Agreement(begin1, beganAt1, digest), Receipt("P1", 14.00m));
+
+            var paid = await Asked(p1);
+            var receipt = paid["liveLink"]!["payment"]!["receipt"]!;
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(receipt["holds"]!.Value<Boolean?>(),                             Is.True, receipt.ToString());
+                Assert.That(receipt["amount"]!.Value<Decimal>(),                             Is.EqualTo(14.00m));
+                Assert.That(receipt["cost"]!.Value<Decimal>(),                               Is.EqualTo(14.00m));
+                Assert.That(receipt["signed"]!.Value<Boolean>(),                             Is.True);
+                Assert.That(paid["liveLink"]!["disputeBecause"]!.Type,                       Is.EqualTo(JTokenType.Null));
+                Assert.That(cpo.Disputes,                                                    Is.Empty);
+            }
+
+            // P2: a receipt of more than it costs.
+            var (p2, _, _) = await Started("P2");
+
+            cpo.Send(TestRoamingNetwork.OCMF(meter, serial, TestCPO.PaymentReferenceOf("P2"), (DateTimeOffset.UtcNow, "E", 1020.000m)));
+
+            await SessionWhen(driver, p2, json => json["status"]?.Value<String>() == "finished");
+
+            cpo.SetPayment("P2", Receipt: Receipt("P2", 15.50m));
+
+            var overcharged = await Asked(p2);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(overcharged["liveLink"]!["payment"]!["receipt"]!["holds"]!.Value<Boolean?>(), Is.False);
+                Assert.That(overcharged["liveLink"]!["disputeBecause"]!.Value<String>(),     Does.StartWith("The receipt of its web payment page does not hold").And.Contain("1.50 EUR more"));
+                Assert.That(cpo.Disputes.Select(dispute => dispute.Session),                 Is.EqualTo(new[] { "P2" }));
+                Assert.That(JObject.Parse(cpo.Disputes[0].Body)["receipt"]?["amount"]?.Value<String>(), Is.EqualTo("15.50"), "disputed with the receipt");
+                Assert.That(JObject.Parse(cpo.Disputes[0].Body)["signedValues"]!.Count(),    Is.EqualTo(2), "its start and its end value");
+            }
+
+            // P3: a price agreement of another start value.
+            var (p3, _, beganAt3) = await Started("P3");
+
+            cpo.SetPayment("P3", Agreement(begin1, beganAt3, digest));
+
+            var misagreed = await Asked(p3);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(misagreed["liveLink"]!["payment"]!["agreement"]!["holds"]!.Value<Boolean?>(), Is.False);
+                Assert.That(misagreed["check"]!["price"]!["agreement"]!.Value<String>(),     Is.EqualTo("invalid"));
+                Assert.That(misagreed["cost"]!["agreed"]!.Value<Boolean>(),                  Is.False, "charged by the tariff of the proof");
+            }
+
+            cpo.Send(TestRoamingNetwork.OCMF(meter, serial, TestCPO.PaymentReferenceOf("P3"), (DateTimeOffset.UtcNow, "E", 1010.000m)));
+
+            var disputed = await SessionWhen(driver, p3, json => json["liveLink"]?["dispute"] is JObject);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(disputed["liveLink"]!["disputeBecause"]!.Value<String>(),        Does.StartWith("The price agreement of its web payment page does not hold"));
+                Assert.That(cpo.Disputes.Select(dispute => dispute.Session),                 Is.EqualTo(new[] { "P2", "P3" }));
+                Assert.That(JObject.Parse(cpo.Disputes[1].Body)["priceAgreement"],           Is.Not.Null, "disputed with the agreement");
+            }
+
+        }
+
+        #endregion
+
     }
 
 }

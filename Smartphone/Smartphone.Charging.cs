@@ -268,7 +268,7 @@ namespace cloud.charging.open.Smartphone
                 return (station, null,
                         station.PriceConflict is not null
                             ? $"What charging at {EVSE.EVSEId} at {Location.Name} costs is not known: {station.PriceConflict}"
-                            : $"The proof of {EVSE.EVSEId} at {Location.Name} names no price per kWh, and a simulated session counts with nothing else.");
+                            : $"The proof of {EVSE.EVSEId} at {Location.Name} names no tariff that prices anything: no energy, no flat fee, no time charging or parked.");
 
             return (station, tariff, null);
 

@@ -78,7 +78,16 @@ namespace cloud.charging.open.Smartphone.Charging
         /// </summary>
         public SessionPriceEvidence PriceEvidence
 
-            => new (EVSEId, Proofs[0], PriceStatements);
+            => PriceEvidenceWith(null);
+
+        /// <summary>
+        /// The evidence of the price of the session with the assignment of a
+        /// price to it its operator signed, where one is given: its price
+        /// agreement (WWCP_POI's SessionPriceAgreement).
+        /// </summary>
+        public SessionPriceEvidence PriceEvidenceWith(JToken? Agreement)
+
+            => new (EVSEId, Proofs[0], PriceStatements, Agreement);
 
         /// <summary>
         /// Until when the proofs kept hold at most: the latest end of an

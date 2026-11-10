@@ -381,6 +381,10 @@ export const mapPage: Page = {
                                 <input name="paymentReference" type="text" autocomplete="off" ?disabled=${busy}>
                             </label>
                             <label class="small">
+                                Its payment link, where it gave one:
+                                <input name="paymentLink" type="text" autocomplete="off" placeholder="https://..." ?disabled=${busy}>
+                            </label>
+                            <label class="small">
                                 The limit chosen there:
                                 <span class="limit-input">
                                     <input name="limitValue" type="number" min="0" step="any" ?disabled=${busy}>
@@ -532,6 +536,7 @@ export const mapPage: Page = {
             const stopLink     = form.querySelector<HTMLInputElement>('input[name="stopLink"]')?.value.trim()    ?? '';
             const disputeLink  = form.querySelector<HTMLInputElement>('input[name="disputeLink"]')?.value.trim() ?? '';
             const reference    = form.querySelector<HTMLInputElement>('input[name="paymentReference"]')?.value.trim() ?? '';
+            const paymentLink  = form.querySelector<HTMLInputElement>('input[name="paymentLink"]')?.value.trim()      ?? '';
             const limit        = limitOf(form.querySelector<HTMLSelectElement>('select[name="limitKind"]')?.value ?? '',
                                          Number(form.querySelector<HTMLInputElement>('input[name="limitValue"]')?.value.trim() || Number.NaN));
 
@@ -549,7 +554,8 @@ export const mapPage: Page = {
                                         ...(stopLink    !== '' ? { stopLink }    : {}),
                                         ...(disputeLink !== '' ? { disputeLink } : {}),
                                         ...(reference   !== '' ? { paymentReference: reference } : {}),
-                                        ...(limit !== undefined ? { limit }      : {})
+                                        ...(limit !== undefined ? { limit }      : {}),
+                                        ...(paymentLink !== '' ? { paymentLink } : {})
                                     });
 
                 paying.delete(location.id);

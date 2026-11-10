@@ -128,7 +128,9 @@ namespace cloud.charging.open.Smartphone.Charging
         /// Each part of the limit of a session followed over its live link
         /// against what its signed values say: from its start value - or its
         /// first reading - to its end value - or its latest reading -, its cost
-        /// what the price of the proof of its station makes of that energy.
+        /// what the tariff it is charged by makes of what its signed values say
+        /// was charged when - or the price per kWh of its station of that
+        /// energy, where it is charged by none.
         /// None where it was started with no limit. A wrong value counts for
         /// nothing: of a wrong end value, up to the latest reading that counts.
         /// </summary>
@@ -160,8 +162,10 @@ namespace cloud.charging.open.Smartphone.Charging
 
             if (limit.MaxCost is Decimal maxCost)
             {
-                Decimal? cost = energy is Decimal charged ? Math.Round(charged * Session.PricePerKWh, 2) : null;
-                limits.Add(new LimitValue("cost", maxCost, Session.Currency, cost, Reached(cost, maxCost)));
+                Decimal? cost = Session.ChargedBy is not null
+                                    ? energy is not null ? Session.CostAt(last?.MeasuredAt ?? DateTimeOffset.UtcNow)?.Amount : null
+                                    : energy is Decimal charged ? Math.Round(charged * Session.PricePerKWh, 2) : null;
+                limits.Add(new LimitValue("cost", maxCost, Session.ChargedBy?.Currency ?? Session.Currency, cost, Reached(cost, maxCost)));
             }
 
             if (limit.MaxTime is Int32 maxTime)

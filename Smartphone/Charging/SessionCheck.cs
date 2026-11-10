@@ -264,14 +264,32 @@ namespace cloud.charging.open.Smartphone.Charging
                    : null;
 
         /// <summary>
-        /// What the signed energy costs at the price checked, where the price
-        /// is one of energy alone.
+        /// What the signed values cost at the price checked: what its tariff
+        /// makes of what the meter signed when - every part it prices.
+        /// </summary>
+        public TariffCost?                     ExpectedTariffCost
+        {
+            get
+            {
+
+                if (Price?.Verification is not SessionPriceVerification verification || verification.Selected is not SelectedSessionPrice selected ||
+                    StartReading is not MeterReading start || start.EnergyKWh is not Decimal from || EndReading is not MeterReading end || end == start)
+                    return null;
+
+                var points = Verified.Where (reading => reading.EnergyKWh is not null && reading.MeasuredAt >= start.MeasuredAt && reading.MeasuredAt <= end.MeasuredAt).
+                                      Select(reading => (reading.MeasuredAt, reading.EnergyKWh!.Value - from)).
+                                      ToArray();
+
+                return TariffCost.Of(TariffOf(selected, verification.Station), new ChargingProfile(points));
+
+            }
+        }
+
+        /// <summary>
+        /// What the signed values cost at the price checked.
         /// </summary>
         public Decimal?                        ExpectedCost
-            => SignedEnergyKWh is Decimal energy && Price?.Verification?.Selected is SelectedSessionPrice selected && EnergyOnly(selected.Elements) &&
-               Price.PricePerKWh is Decimal price
-                   ? Math.Round(energy * price, 2, MidpointRounding.AwayFromZero)
-                   : null;
+            => ExpectedTariffCost?.Amount;
 
         /// <summary>
         /// The readings of the values the meter signed: no value its operator
@@ -331,8 +349,10 @@ namespace cloud.charging.open.Smartphone.Charging
                 return new SessionCheck(Now, authorityError, null, Session.PricePerKWh, null, null, cdrEnergy, cdrCost);
 
             var price              = Session.Start is not null
-                                         ? PriceOf(authority, evidence, Session)
-                                         : null;
+                                         ? PriceOf(authority, evidence, Session.StartedAt, Session.Start.RequestDigest, null)
+                                         : LiveLinkStartOf(Session) is (DateTimeOffset started, String digest)
+                                               ? PriceOf(authority, evidence, started, digest, Session.LiveLink!.Payment?.Agreement)
+                                               : null;
 
             var (values, problem)  = MeterValuesOf(authority, evidence, Session);
 
@@ -608,20 +628,24 @@ namespace cloud.charging.open.Smartphone.Charging
         /// <summary>
         /// The price of the session as the price statements kept with it say,
         /// in force when it started - its start document the start as the
-        /// provider countersigned it.
+        /// provider countersigned it, or the signed start value of its live
+        /// link - and bound to it by the price agreement of its operator, where
+        /// one is given.
         /// </summary>
         private static SessionPriceCheck PriceOf(IRoamingNetworkTrustAuthority  Authority,
                                                  SessionEvidence                Evidence,
-                                                 ChargingSession                Session)
+                                                 DateTimeOffset                 Started,
+                                                 String                         StartDocumentSHA256,
+                                                 JToken?                        Agreement)
         {
 
-            if (!Evidence.PriceEvidence.TryVerify(Authority,
-                                                  Evidence.EVSEId,
-                                                  Evidence.MeterSerialNumber ?? "",
-                                                  Session.StartedAt,
-                                                  Session.Start!.RequestDigest,
-                                                  out var verification,
-                                                  out var error))
+            if (!Evidence.PriceEvidenceWith(Agreement).TryVerify(Authority,
+                                                                 Evidence.EVSEId,
+                                                                 Evidence.MeterSerialNumber ?? "",
+                                                                 Started,
+                                                                 StartDocumentSHA256,
+                                                                 out var verification,
+                                                                 out var error))
                 return new SessionPriceCheck(null, error, null);
 
             return new SessionPriceCheck(verification,
@@ -631,6 +655,157 @@ namespace cloud.charging.open.Smartphone.Charging
                                              : null);
 
         }
+
+        #endregion
+
+        #region LiveLinkStartOf(Session)
+
+        /// <summary>
+        /// The start of a session of a live link, as its price agreement names
+        /// it: when its signed start value says it began, and the SHA-256 of
+        /// that document as it came, in UTF-8, as lowercase hex - where its
+        /// start value came and held.
+        /// </summary>
+        public static (DateTimeOffset Started, String StartDocumentSHA256)? LiveLinkStartOf(ChargingSession Session)
+
+            => Session.LiveLink?.StartDocument is (LiveLinkDocument document, MeterReading reading) && document.Check?.Holds == true
+                   ? (reading.MeasuredAt, Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(document.Text))))
+                   : null;
+
+        #endregion
+
+        #region AgreementOf(Configuration, Session, Now)
+
+        /// <summary>
+        /// Whether the price agreement the web payment page gave for a session
+        /// of its live link holds - of this session and its signed start value,
+        /// signed by the operator of its station with a key that may sign
+        /// prices, of a price in force at its start (WWCP_POI's
+        /// SessionPriceEvidence) - and the tariff it agreed. Null where that is
+        /// not decided yet: its start value did not come or hold, or nothing of
+        /// it can be checked now.
+        /// </summary>
+        public static (Boolean? Holds, String? Error, SessionTariff? Tariff) AgreementOf(RoamingNetworkConfiguration  Configuration,
+                                                                                         ChargingSession              Session,
+                                                                                         DateTimeOffset               Now)
+        {
+
+            if (Session.LiveLink?.Payment?.Agreement is not JObject agreement || Session.Evidence is not SessionEvidence evidence)
+                return (null, "No price agreement came.", null);
+
+            if (LiveLinkStartOf(Session) is not (DateTimeOffset started, String digest))
+                return (null, "It is checked once the signed start value came and held.", null);
+
+            // Signed after now, as this phone's clock says: checked again
+            // later, not taken as one of another session for a clock ahead.
+            if (agreement["signedAt"]?.Type == JTokenType.String &&
+                DateTimeOffset.TryParse(agreement.Value<String>("signedAt"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var signedAt) &&
+                signedAt > Now)
+                return (null, $"It says it was signed at {signedAt:o}, after now: it is checked again then.", null);
+
+            if (AuthorityOf(Configuration, evidence, Now, out var authorityError) is not IRoamingNetworkTrustAuthority authority)
+                return (null, authorityError, null);
+
+            var price = PriceOf(authority, evidence, started, digest, agreement);
+
+            if (price.Verification is not SessionPriceVerification verification)
+                return (null, price.Error, null);
+
+            if (verification.Agreement == "valid" && verification.Selected is SelectedSessionPrice selected)
+                return (true, null, TariffOf(selected, verification.Station, Session.Tariff?.TimeZone));
+
+            return (false,
+                    verification.Diagnostics.FirstOrDefault() ?? "It does not select one price of those in force at the start.",
+                    null);
+
+        }
+
+        #endregion
+
+        #region ReceiptOf(Configuration, Session, Now)
+
+        /// <summary>
+        /// How the receipt the web payment page gave for a session of its live
+        /// link holds: a receipt, of its EVSE and its payment, signed by the
+        /// operator of its station where it is signed, in the currency of its
+        /// tariff - and not more than what this phone works out the session
+        /// costs, of its signed values that count, at the tariff it is charged
+        /// by. Not decided, where the cost is not exact, or where the signature
+        /// can not be checked now.
+        /// </summary>
+        public static LiveLinkReceiptCheck ReceiptOf(RoamingNetworkConfiguration  Configuration,
+                                                     ChargingSession              Session,
+                                                     DateTimeOffset               Now)
+        {
+
+            if (!WebPaymentReceipt.TryParse(Session.LiveLink?.Payment?.Receipt, out var receipt, out var receiptError))
+                return new LiveLinkReceiptCheck(Now, false, $"It is no receipt: {receiptError}", 0m, "", Now, null, false);
+
+            LiveLinkReceiptCheck Check(Boolean? Holds, String? Error, Decimal? Cost = null)
+                => new (Now, Holds, Error, receipt.Amount, receipt.Currency, receipt.CapturedAt, Cost, receipt.Signed, receipt.KeyId, receipt.PaymentReference);
+
+            if (receipt.EVSEId != Session.EVSEId)
+                return Check(false, $"It is of {receipt.EVSEId}, not of {Session.EVSEId}.");
+
+            if (receipt.PaymentReference is String reference && Session.LiveLink!.PaymentReference is String paid && reference != paid)
+                return Check(false, $"It is of the payment \"{reference}\", and the page took the payment \"{paid}\" for this session.");
+
+            if (receipt.Signed)
+            {
+
+                if (Session.Evidence is not SessionEvidence evidence ||
+                    AuthorityOf(Configuration, evidence, Now, out var authorityError) is not IRoamingNetworkTrustAuthority authority)
+                    return Check(null, "Its signature can not be checked now: nothing of the session is.");
+
+                if (LiveLinkStartOf(Session) is not (DateTimeOffset started, String digest) ||
+                    PriceOf(authority, evidence, started, digest, null).Verification is not SessionPriceVerification verification)
+                    return Check(null, "Its signature can not be checked: no signed start value of the session held, which the station is checked of.");
+
+                if (!receipt.TryVerify(verification.Station, out var signatureError))
+                    return Check(false, signatureError);
+
+            }
+
+            var cost = Session.CostAt(Now);
+
+            if (cost is null)
+                return Check(null, "The session is charged by no tariff this phone could work its cost out of.");
+
+            if (receipt.Currency != cost.Currency)
+                return Check(false, $"It took {receipt.Currency}, and the tariff of the session is in {cost.Currency}.", cost.Amount);
+
+            if (!cost.Exact)
+                return Check(null, $"The cost of the session could not be worked out exactly: {String.Join(" ", cost.Notes)}", cost.Amount);
+
+            if (receipt.Amount > cost.Amount)
+                return Check(false,
+                             $"It says the page took {Figure(receipt.Amount)} {receipt.Currency}, and the session costs {Figure(cost.Amount)} {cost.Currency}, as this phone works it out of its signed values at its tariff: " +
+                             $"{Figure(receipt.Amount - cost.Amount)} {cost.Currency} more.",
+                             cost.Amount);
+
+            return Check(true, null, cost.Amount);
+
+        }
+
+        #endregion
+
+        #region (private static) TariffOf(Selected, Station, TimeZone = null)
+
+        /// <summary>
+        /// The tariff of a price selected for a session: the elements its
+        /// statement sets, the least and the most its tariff says, and the time
+        /// zone of the pool of its station, where it names one.
+        /// </summary>
+        private static SessionTariff TariffOf(SelectedSessionPrice     Selected,
+                                              VerifiedChargingStation  Station,
+                                              String?                  TimeZone = null)
+
+            => new (Selected.Currency,
+                    new JArray(Selected.Elements.Select(element => element.DeepClone())),
+                    Selected.Tariff["@id"]?.Value<String>(),
+                    Selected.Tariff["minPrice"] as JObject,
+                    Selected.Tariff["maxPrice"] as JObject,
+                    TimeZone ?? (Station.ChargingPool["timeZone"]?.Type == JTokenType.String ? Station.ChargingPool["timeZone"]!.Value<String>() : null));
 
         #endregion
 
@@ -1082,18 +1257,7 @@ namespace cloud.charging.open.Smartphone.Charging
 
         #endregion
 
-        #region (private static) EnergyOnly(Elements) / Number(JSON) / GrossCostOf(JSON)
-
-        /// <summary>
-        /// Whether the given tariff elements price energy and nothing else: one
-        /// element, without restrictions, of energy components alone.
-        /// </summary>
-        private static Boolean EnergyOnly(IReadOnlyList<JObject> Elements)
-
-            => Elements.Count == 1                                                                   &&
-               Elements[0]["restrictions"] is null or JObject { HasValues: false }                   &&
-               Elements[0]["priceComponents"] is JArray { Count: > 0 } components                    &&
-               components.All(component => component is JObject json && json["type"]?.Value<String>() == "ENERGY");
+        #region (private static) Number(JSON) / GrossCostOf(JSON)
 
         private static Decimal? Number(JToken? JSON)
 
@@ -1172,6 +1336,7 @@ namespace cloud.charging.open.Smartphone.Charging
                                                                 ? Math.Round(signed, 3) == Math.Round(reported, 3)
                                                                 : (Boolean?) null),
                              new JProperty("expectedCost",  ExpectedCost),
+                             new JProperty("expectedCostExact", ExpectedTariffCost?.Exact),
                              new JProperty("cdrCost",       CDRCost),
                              new JProperty("costMatches",   ExpectedCost is Decimal expected && CDRCost is Decimal cost
                                                                 ? expected == Math.Round(cost, 2, MidpointRounding.AwayFromZero)
