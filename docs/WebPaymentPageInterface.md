@@ -342,9 +342,12 @@ session.
 The phone checks it once its start value held, with WWCP_POI's
 `SessionPriceEvidence`. Where it holds, the session is charged by the tariff it
 agreed, and the session page shows its price as bound. Where it does not, the
-session is disputed. Mind that WWCP_POI's simple profile of gross rates
-(`chargy-gross-rates/v1`) takes no flat fee: the price is bound all the same,
-of a profile WWCP_POI does not establish the rates of.
+session is disputed. WWCP_POI establishes the rates agreed of its simple
+profile of gross rates (`chargy-gross-rates/v1`): one element without
+restrictions, of energy, a flat fee and time each once at most, without VAT -
+energy and time in a step size, a flat fee in none. The price of any other
+tariff is bound all the same, of a profile WWCP_POI does not establish the
+rates of.
 
 ### The receipt
 
@@ -507,8 +510,5 @@ stopped, what was disputed and what the page answered.
   payment: its dispute stands, and the page has the values it disputes.
 - **The first price agreement and receipt are kept:** a page that corrects one
   replaces nothing; the session is disputed for the first.
-- **A flat fee** is not taken by WWCP_POI's simple profile of gross rates,
-  which asks every component for a step size a flat fee has none of: a price
-  agreement of it binds the price, of a profile it does not establish.
 - **A component or a restriction of current** is priced at nothing: no meter
   value says the current.

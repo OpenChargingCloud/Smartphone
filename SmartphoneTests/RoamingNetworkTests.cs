@@ -2933,10 +2933,9 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(agreed["liveLink"]!["payment"]!["agreement"]!["holds"]!.Value<Boolean?>(), Is.True, agreed["liveLink"]!["payment"]!.ToString());
                 Assert.That(agreed["liveLink"]!["payment"]!["agreement"]!["tariffId"]!.Value<String>(), Is.EqualTo(TestRoamingNetwork.DCTariff));
                 Assert.That(agreed["check"]!["price"]!["agreement"]!.Value<String>(),        Is.EqualTo("valid"));
-                // WWCP_POI's simple profile of gross rates takes a component
-                // only with a step size, and a flat fee has none: bound, of a
-                // profile it does not establish the rates of.
-                Assert.That(agreed["check"]!["price"]!["applicability"]!.Value<String>(),    Is.EqualTo("unsupported"));
+                // A flat fee without a step size and energy in one: of
+                // WWCP_POI's simple profile of gross rates.
+                Assert.That(agreed["check"]!["price"]!["applicability"]!.Value<String>(),    Is.EqualTo("bound"));
                 Assert.That(agreed["cost"]!["agreed"]!.Value<Boolean>(),                     Is.True, "charged by the tariff agreed");
             }
 
