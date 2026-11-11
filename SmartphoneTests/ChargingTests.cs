@@ -19,6 +19,8 @@
 
 using Newtonsoft.Json.Linq;
 
+using org.GraphDefined.Vanaheimr.Illias;
+
 using NUnit.Framework;
 
 using cloud.charging.open.Smartphone.Charging;
@@ -220,16 +222,16 @@ namespace cloud.charging.open.Smartphone.Tests
                 var json = dc.ToJSON(Monday + TimeSpan.FromMinutes(6));
 
                 Assert.That(json["status"]!.Value<String>(),                     Is.EqualTo("charging"));
-                Assert.That(json["energyKWh"]!.Value<Decimal>(),                 Is.EqualTo(15m));
-                Assert.That(json["progressPercent"]!.Value<Decimal>(),           Is.EqualTo(50m));
-                Assert.That(json["cost"]!["amount"]!.Value<Decimal>(),           Is.EqualTo(11.85m));
+                Assert.That(json["energyKWh"]!.AsDecimal(),                 Is.EqualTo(15m));
+                Assert.That(json["progressPercent"]!.AsDecimal(),           Is.EqualTo(50m));
+                Assert.That(json["cost"]!["amount"]!.AsDecimal(),           Is.EqualTo(11.85m));
                 Assert.That(json["durationSeconds"]!.Value<Int64>(),             Is.EqualTo(360));
                 Assert.That(json["simulated"]!.Value<Boolean>(),                 Is.True);
 
                 var over = dc.ToJSON(Monday + TimeSpan.FromHours(1));
 
                 Assert.That(over["status"]!.Value<String>(),                     Is.EqualTo("finished"));
-                Assert.That(over["powerKW"]!.Value<Decimal>(),                   Is.EqualTo(0m));
+                Assert.That(over["powerKW"]!.AsDecimal(),                   Is.EqualTo(0m));
                 Assert.That(over["durationSeconds"]!.Value<Int64>(),             Is.EqualTo(720), "a finished session went on counting its time");
 
             });

@@ -648,13 +648,13 @@ namespace cloud.charging.open.Smartphone.Tests
 
                 Assert.That(starting["status"]!.Value<String>(),                       Is.EqualTo("starting"), starting.ToString());
                 Assert.That(starting["simulated"]!.Value<Boolean>(),                   Is.False);
-                Assert.That(starting["energyKWh"]!.Value<Decimal>(),                   Is.Zero);
+                Assert.That(starting["energyKWh"]!.AsDecimal(),                   Is.Zero);
                 Assert.That(starting["provider"]!["state"]!.Value<String>(),           Is.EqualTo("started"));
                 Assert.That(starting["powerKW"],                                       Is.Null, "OCPI tells no power, and none is simulated");
 
                 Assert.That(charging["status"]!.Value<String>(),                       Is.EqualTo("charging"), charging.ToString());
-                Assert.That(charging["energyKWh"]!.Value<Decimal>(),                   Is.EqualTo(4.2m));
-                Assert.That(charging["cost"]!["amount"]!.Value<Decimal>(),             Is.EqualTo(2.73m));
+                Assert.That(charging["energyKWh"]!.AsDecimal(),                   Is.EqualTo(4.2m));
+                Assert.That(charging["cost"]!["amount"]!.AsDecimal(),             Is.EqualTo(2.73m));
                 Assert.That(charging["cost"]!["reported"]!.Value<Boolean>(),           Is.True);
                 Assert.That(charging["provider"]!["result"]!.Value<String>(),          Is.EqualTo("ACCEPTED"));
                 Assert.That(charging["provider"]!["sessionStatus"]!.Value<String>(),   Is.EqualTo("ACTIVE"));
@@ -663,8 +663,8 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(active  ["simulated"]!.Value<Boolean>(),                   Is.False);
 
                 Assert.That(finished["status"]!.Value<String>(),                       Is.EqualTo("finished"), finished.ToString());
-                Assert.That(finished["energyKWh"]!.Value<Decimal>(),                   Is.EqualTo(12.5m));
-                Assert.That(finished["cost"]!["amount"]!.Value<Decimal>(),             Is.EqualTo(8.13m));
+                Assert.That(finished["energyKWh"]!.AsDecimal(),                   Is.EqualTo(12.5m));
+                Assert.That(finished["cost"]!["amount"]!.AsDecimal(),             Is.EqualTo(8.13m));
                 Assert.That(finished["provider"]!["cdr"]!.Value<Boolean>(),            Is.True);
                 Assert.That(new DateTimeOffset(finished["endedAt"]!.Value<DateTime>()), Is.EqualTo(end), "it ended when the charge detail record says");
 
@@ -688,7 +688,7 @@ namespace cloud.charging.open.Smartphone.Tests
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(read["status"]!.Value<String>(),     Is.EqualTo("finished"), read.ToString());
-                Assert.That(read["energyKWh"]!.Value<Decimal>(), Is.EqualTo(12.5m));
+                Assert.That(read["energyKWh"]!.AsDecimal(), Is.EqualTo(12.5m));
                 Assert.That(emsp.TicketReads,                    Is.EqualTo(reads), "the provider was asked again of a session whose record came");
             }
 
@@ -778,7 +778,7 @@ namespace cloud.charging.open.Smartphone.Tests
             {
                 Assert.That(read["simulated"]!.Value<Boolean>(),  Is.EqualTo(Simulated), read.ToString());
                 Assert.That(read["status"]!.Value<String>(),      Is.EqualTo(Shown));
-                Assert.That(read["energyKWh"]!.Value<Decimal>(),  Is.Not.EqualTo(4.2m), "what is not of the start was taken");
+                Assert.That(read["energyKWh"]!.AsDecimal(),  Is.Not.EqualTo(4.2m), "what is not of the start was taken");
                 Assert.That(emsp.TicketReads,                     Is.EqualTo(1));
             }
 
@@ -834,7 +834,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(waited,                                Is.LessThan(TimeSpan.FromSeconds(3.5)), "the page waited for the provider");
                 Assert.That(first["simulated"]!.Value<Boolean>(),  Is.True, first.ToString());
                 Assert.That(later["status"]!.Value<String>(),      Is.EqualTo("charging"), later.ToString());
-                Assert.That(later["energyKWh"]!.Value<Decimal>(),  Is.EqualTo(4.2m), "what came late was not kept");
+                Assert.That(later["energyKWh"]!.AsDecimal(),  Is.EqualTo(4.2m), "what came late was not kept");
                 Assert.That(emsp.TicketReads,                      Is.EqualTo(1));
             }
 

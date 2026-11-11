@@ -21,6 +21,8 @@ using System.Globalization;
 
 using Newtonsoft.Json.Linq;
 
+using org.GraphDefined.Vanaheimr.Illias;
+
 using cloud.charging.open.chargy.Formats.OCMF;
 
 #endregion
@@ -233,10 +235,10 @@ namespace cloud.charging.open.Smartphone.Charging
                    ? new LiveLinkReceiptCheck(at,
                                               json["holds"]?.Type == JTokenType.Boolean ? json.Value<Boolean>("holds") : null,
                                               json.Value<String>("error"),
-                                              amount.Value<Decimal>(),
+                                              amount.AsDecimal(),
                                               json.Value<String>("currency") ?? "",
                                               captured,
-                                              json["cost"] is JValue { Type: JTokenType.Integer or JTokenType.Float } cost ? cost.Value<Decimal>() : null,
+                                              json["cost"] is JValue { Type: JTokenType.Integer or JTokenType.Float } cost ? cost.AsDecimal() : null,
                                               json.Value<Boolean?>("signed") == true,
                                               json.Value<String>("keyId"),
                                               json.Value<String>("paymentReference"))

@@ -1301,7 +1301,7 @@ namespace cloud.charging.open.Smartphone.Charging
         private static Decimal? Number(JToken? JSON)
 
             => JSON is JValue { Type: JTokenType.Integer or JTokenType.Float } number
-                   ? number.Value<Decimal>()
+                   ? number.AsDecimal()
                    : null;
 
         /// <summary>

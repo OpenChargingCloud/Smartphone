@@ -21,6 +21,8 @@ using System.Diagnostics.CodeAnalysis;
 
 using Newtonsoft.Json.Linq;
 
+using org.GraphDefined.Vanaheimr.Illias;
+
 using cloud.charging.open.Smartphone.Map;
 using cloud.charging.open.Smartphone.Provider;
 
@@ -688,7 +690,7 @@ namespace cloud.charging.open.Smartphone.Charging
             {
 
                 String  Text(String Name)     => JSON.Value<String>(Name) is { Length: > 0 } text ? text : throw new FormatException($"'{Name}' is missing.");
-                Decimal Number(String Name)   => JSON[Name] is JToken token && token.Type is JTokenType.Integer or JTokenType.Float ? token.Value<Decimal>() : throw new FormatException($"'{Name}' is no number.");
+                Decimal Number(String Name)   => JSON[Name] is JToken token && token.Type is JTokenType.Integer or JTokenType.Float ? token.AsDecimal() : throw new FormatException($"'{Name}' is no number.");
                 DateTimeOffset Time(String Name) => DateTimeOffset.Parse(Text(Name), System.Globalization.CultureInfo.InvariantCulture);
 
                 Session = new ChargingSession(

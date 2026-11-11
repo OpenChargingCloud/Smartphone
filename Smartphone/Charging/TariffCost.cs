@@ -22,6 +22,8 @@ using System.Text.RegularExpressions;
 
 using Newtonsoft.Json.Linq;
 
+using org.GraphDefined.Vanaheimr.Illias;
+
 #endregion
 
 namespace cloud.charging.open.Smartphone.Charging
@@ -707,7 +709,7 @@ namespace cloud.charging.open.Smartphone.Charging
             if (JSON is not JValue { Type: JTokenType.Integer or JTokenType.Float } value)
                 return false;
 
-            Number = value.Value<Decimal>();
+            Number = value.AsDecimal();
             return true;
 
         }

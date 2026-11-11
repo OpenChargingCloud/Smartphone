@@ -22,6 +22,8 @@ using System.Globalization;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
+using org.GraphDefined.Vanaheimr.Illias;
+
 using org.GraphDefined.Vanaheimr.Hermod.DNS;
 using org.GraphDefined.Vanaheimr.Hermod.HTTP;
 
@@ -526,7 +528,7 @@ namespace cloud.charging.open.Smartphone.Roaming
 
             if (JSON?.Type is JTokenType.Float or JTokenType.Integer)
             {
-                Value = JSON.Value<Decimal>();
+                Value = JSON.AsDecimal();
                 return true;
             }
 

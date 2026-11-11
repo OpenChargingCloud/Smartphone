@@ -22,6 +22,8 @@ using System.Globalization;
 
 using Newtonsoft.Json.Linq;
 
+using org.GraphDefined.Vanaheimr.Illias;
+
 #endregion
 
 namespace cloud.charging.open.Smartphone.Charging
@@ -112,7 +114,7 @@ namespace cloud.charging.open.Smartphone.Charging
 
                 => json[Name] is not JToken token || token.Type == JTokenType.Null
                        ? null
-                       : token.Type is JTokenType.Integer or JTokenType.Float && token.Value<Decimal>() is var value && value > 0
+                       : token.Type is JTokenType.Integer or JTokenType.Float && token.AsDecimal() is var value && value > 0
                              ? value
                              : throw new FormatException($"'limit.{Name}' is a number more than nothing.");
 

@@ -21,6 +21,8 @@ using System.Globalization;
 
 using Newtonsoft.Json.Linq;
 
+using org.GraphDefined.Vanaheimr.Illias;
+
 #endregion
 
 namespace cloud.charging.open.Smartphone.Provider
@@ -285,7 +287,7 @@ namespace cloud.charging.open.Smartphone.Provider
         private static Decimal? Number(JToken? JSON)
 
             => JSON is JValue { Type: JTokenType.Integer or JTokenType.Float } number
-                   ? number.Value<Decimal>()
+                   ? number.AsDecimal()
                    : null;
 
         /// <summary>

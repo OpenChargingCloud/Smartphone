@@ -676,13 +676,13 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(ac["webPayment"]!["of"]!. Value<String>(),                           Is.EqualTo("chargingStationOperator"));
 
                 Assert.That(dcEVSE["id"]!.Value<String>(),                                       Is.EqualTo(TestRoamingNetwork.DCEVSE));
-                Assert.That(dcEVSE["maxPowerKW"]!.Value<Decimal>(),                              Is.EqualTo(150m));
+                Assert.That(dcEVSE["maxPowerKW"]!.AsDecimal(),                              Is.EqualTo(150m));
                 Assert.That(dcEVSE["tariffs"]![0]!["id"]!.Value<String>(),                       Is.EqualTo(TestRoamingNetwork.DCTariff));
 
                 // The tariff says 0.69, the statement of the EVSE 0.65: the
                 // statement wins. The AC EVSE has none, and keeps its tariff.
-                Assert.That(dcEVSE["price"]!["pricePerKWh"]!.Value<Decimal>(),                   Is.EqualTo(0.65m));
-                Assert.That(acEVSE["price"]!["pricePerKWh"]!.Value<Decimal>(),                   Is.EqualTo(0.49m));
+                Assert.That(dcEVSE["price"]!["pricePerKWh"]!.AsDecimal(),                   Is.EqualTo(0.65m));
+                Assert.That(acEVSE["price"]!["pricePerKWh"]!.AsDecimal(),                   Is.EqualTo(0.49m));
                 Assert.That(acEVSE["price"]!["currency"]!.Value<String>(),                       Is.EqualTo("EUR"));
 
                 Assert.That(dc["priceStatements"]!.Single()["verified"]!.Value<Boolean>(),       Is.True, dc["priceStatements"]!.ToString());
@@ -707,7 +707,7 @@ namespace cloud.charging.open.Smartphone.Tests
             var location = (JObject) map["locations"]!.Single();
 
             Assert.That(location["verified"]!.Value<Boolean>(),                Is.True);
-            Assert.That(location["tariff"]!["price_per_kwh"]!.Value<Decimal>(), Is.EqualTo(0.49m), "the price of its first EVSE");
+            Assert.That(location["tariff"]!["price_per_kwh"]!.AsDecimal(), Is.EqualTo(0.49m), "the price of its first EVSE");
 
         }
 
@@ -849,7 +849,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(status,                                          Is.EqualTo(HttpStatusCode.Created), session.ToString());
                 Assert.That(session["simulated"]!.Value<Boolean>(),          Is.True);
                 Assert.That(session["evse"]!["evseId"]!.Value<String>(),     Is.EqualTo(TestRoamingNetwork.DCEVSE));
-                Assert.That(session["cost"]!["pricePerKWh"]!.Value<Decimal>(), Is.EqualTo(0.65m));
+                Assert.That(session["cost"]!["pricePerKWh"]!.AsDecimal(), Is.EqualTo(0.65m));
                 Assert.That(session["location"]!["name"]!.Value<String>(),   Is.EqualTo("Jena, Paradiesbahnhof"));
             }
 
@@ -902,7 +902,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(session["status"]!.Value<String>(),                     Is.EqualTo("starting"), "nothing came over it yet");
                 Assert.That(session["liveLink"]!["paymentReference"]!.Value<String>(), Is.EqualTo("web-payment-1"));
                 Assert.That(session["simulated"]!.Value<Boolean>(),                 Is.False);
-                Assert.That(session["cost"]!["pricePerKWh"]!.Value<Decimal>(),      Is.EqualTo(0.65m), "the price its checked proof gives");
+                Assert.That(session["cost"]!["pricePerKWh"]!.AsDecimal(),      Is.EqualTo(0.65m), "the price its checked proof gives");
                 Assert.That(session["liveLink"]!["from"]!.Value<String>(),          Is.EqualTo(liveLinkURL));
                 Assert.That(session["liveLink"]!["evseId"]!.Value<String>(),        Is.EqualTo(TestRoamingNetwork.DCEVSE));
                 Assert.That(session["liveLink"]!["transports"]!.Values<String>(),   Is.EqualTo(new[] { "https" }));
@@ -925,7 +925,7 @@ namespace cloud.charging.open.Smartphone.Tests
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(charging["status"]!.Value<String>(),                           Is.EqualTo("charging"));
-                Assert.That(charging["energyKWh"]!.Value<Decimal>(),                       Is.EqualTo(0m));
+                Assert.That(charging["energyKWh"]!.AsDecimal(),                       Is.EqualTo(0m));
                 Assert.That(charging["liveLink"]!["documents"]!.Value<Int32>(),            Is.EqualTo(1));
                 Assert.That(charging["liveLink"]!["readings"]!.Count(),                    Is.EqualTo(1));
                 Assert.That(charging["liveLink"]!["lastTransport"]!.Value<String>(),       Is.EqualTo("https"));
@@ -938,7 +938,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(start["meterId"]!.Value<String>(),                             Is.EqualTo("meter-dc-1"));
                 Assert.That(start["keyId"]!.Value<String>(),                               Is.EqualTo(keyId), "checked with another key than the one the proof gave");
                 Assert.That(start["identification"]!.Value<String>(),                      Is.EqualTo("web-payment-1"), "the payment it names");
-                Assert.That(start["reading"]!["energyKWh"]!.Value<Decimal>(),              Is.EqualTo(1000m));
+                Assert.That(start["reading"]!["energyKWh"]!.AsDecimal(),              Is.EqualTo(1000m));
                 Assert.That(start["reading"]!["transaction"]!.Value<String>(),             Is.EqualTo("B"));
             }
 
@@ -948,7 +948,7 @@ namespace cloud.charging.open.Smartphone.Tests
 
             using (Assert.EnterMultipleScope())
             {
-                Assert.That(charging["energyKWh"]!.Value<Decimal>(),                       Is.EqualTo(12.5m), charging.ToString());
+                Assert.That(charging["energyKWh"]!.AsDecimal(),                       Is.EqualTo(12.5m), charging.ToString());
                 Assert.That(charging["liveLink"]!["documents"]!.Value<Int32>(),            Is.EqualTo(2));
                 Assert.That(charging["liveLink"]!["readings"]![1]!["holds"]!.Value<Boolean?>(), Is.True, "the value after the start is not the meter's");
                 Assert.That(charging["liveLink"]!["wrong"]!.Type,                          Is.EqualTo(JTokenType.Null));
@@ -960,8 +960,8 @@ namespace cloud.charging.open.Smartphone.Tests
 
             using (Assert.EnterMultipleScope())
             {
-                Assert.That(finished["energyKWh"]!.Value<Decimal>(),                       Is.EqualTo(20m));
-                Assert.That(finished["cost"]!["amount"]!.Value<Decimal>(),                 Is.EqualTo(13.00m));
+                Assert.That(finished["energyKWh"]!.AsDecimal(),                       Is.EqualTo(20m));
+                Assert.That(finished["cost"]!["amount"]!.AsDecimal(),                 Is.EqualTo(13.00m));
                 Assert.That(finished["liveLink"]!["documents"]!.Value<Int32>(),            Is.EqualTo(3));
                 Assert.That(finished["liveLink"]!["endedBecause"]!.Value<String>(),        Does.Contain("end of the transaction"));
                 Assert.That(finished["endedAt"]?.Type,                                     Is.AnyOf(JTokenType.String, JTokenType.Date), "when it ended");
@@ -1000,7 +1000,7 @@ namespace cloud.charging.open.Smartphone.Tests
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(read["status"]!.Value<String>(),                        Is.EqualTo("finished"), read.ToString());
-                Assert.That(read["energyKWh"]!.Value<Decimal>(),                    Is.EqualTo(20m));
+                Assert.That(read["energyKWh"]!.AsDecimal(),                    Is.EqualTo(20m));
                 Assert.That(read["liveLink"]!["documents"]!.Value<Int32>(),         Is.EqualTo(3));
                 Assert.That(read["liveLink"]!["from"]!.Value<String>(),             Is.EqualTo(liveLinkURL));
                 Assert.That(read["liveLink"]!["start"]!["holds"]!.Value<Boolean?>(), Is.True, "how its start value held was not kept");
@@ -1067,7 +1067,7 @@ namespace cloud.charging.open.Smartphone.Tests
                     Assert.That(start["result"]!.Value<String>() ?? "",        Is.EqualTo(result),               name);
                     Assert.That(wrong["stoppedBecause"]!.Value<String>(),      Does.Contain("signed start meter value is a wrong one"), name);
                     Assert.That(wrong["endedAt"]?.Type,                        Is.AnyOf(JTokenType.String, JTokenType.Date), $"{name}: when it was stopped");
-                    Assert.That(wrong["energyKWh"]!.Value<Decimal>(),          Is.EqualTo(0m),                   name);
+                    Assert.That(wrong["energyKWh"]!.AsDecimal(),          Is.EqualTo(0m),                   name);
                 }
 
                 stopped.Add(id);
@@ -1162,7 +1162,7 @@ namespace cloud.charging.open.Smartphone.Tests
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(charging["status"]!.Value<String>(),                     Is.EqualTo("charging"), charging.ToString());
-                Assert.That(charging["energyKWh"]!.Value<Decimal>(),                 Is.EqualTo(4m));
+                Assert.That(charging["energyKWh"]!.AsDecimal(),                 Is.EqualTo(4m));
                 Assert.That(charging["liveLink"]!["documents"]!.Value<Int32>(),      Is.EqualTo(2));
                 Assert.That(charging["liveLink"]!["start"]!["holds"]!.Type,          Is.EqualTo(JTokenType.Null));
                 Assert.That(charging["liveLink"]!["start"]!["checkedAt"]!.ToString(), Is.EqualTo(start["checkedAt"]!.ToString()), "the same reason kept again");
@@ -1289,7 +1289,7 @@ namespace cloud.charging.open.Smartphone.Tests
             {
                 Assert.That(session["liveLink"]!["stopLink"]!.Value<String>(),            Is.EqualTo(new Uri(cpo.URL).Authority), "its host, not the link");
                 Assert.That(session.ToString(),                                           Does.Not.Contain("/sessions/S1/stop"), "the stop link itself is shown");
-                Assert.That(session["liveLink"]!["limit"]!["maxEnergy"]!.Value<Decimal>(), Is.EqualTo(20000m));
+                Assert.That(session["liveLink"]!["limit"]!["maxEnergy"]!.AsDecimal(), Is.EqualTo(20000m));
                 Assert.That(session["liveLink"]!["stop"]!.Type,                           Is.EqualTo(JTokenType.Null));
             }
 
@@ -1303,9 +1303,9 @@ namespace cloud.charging.open.Smartphone.Tests
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(limit["kind"]!.Value<String>(),       Is.EqualTo("energy"), charging.ToString());
-                Assert.That(limit["limit"]!.Value<Decimal>(),     Is.EqualTo(20m));
+                Assert.That(limit["limit"]!.AsDecimal(),     Is.EqualTo(20m));
                 Assert.That(limit["unit"]!.Value<String>(),       Is.EqualTo("kWh"));
-                Assert.That(limit["value"]!.Value<Decimal>(),     Is.EqualTo(5m));
+                Assert.That(limit["value"]!.AsDecimal(),     Is.EqualTo(5m));
                 Assert.That(limit["reached"]!.Value<Boolean?>(),  Is.False);
             }
 
@@ -1328,13 +1328,13 @@ namespace cloud.charging.open.Smartphone.Tests
 
             using (Assert.EnterMultipleScope())
             {
-                Assert.That(stopped["energyKWh"]!.Value<Decimal>(),             Is.EqualTo(7m), stopped.ToString());
+                Assert.That(stopped["energyKWh"]!.AsDecimal(),             Is.EqualTo(7m), stopped.ToString());
                 Assert.That(stopped["endedAt"]?.Type,                           Is.AnyOf(JTokenType.String, JTokenType.Date), "when it ended");
                 Assert.That(stopped["stoppedBy"]?.Value<String>(),              Is.Not.Null.And.Not.Empty);
                 Assert.That(ending["reason"]!.Value<String>(),                  Is.EqualTo("stopped"));
                 Assert.That(ending["transaction"]!.Value<String>(),             Is.EqualTo("R"));
                 Assert.That(ending["because"]!.Value<String>(),                 Does.Contain("stop link").And.Contain("ended remotely").And.Contain("20 kWh was not reached: 7 kWh"));
-                Assert.That(stopped["liveLink"]!["limits"]![0]!["value"]!.Value<Decimal>(), Is.EqualTo(7m));
+                Assert.That(stopped["liveLink"]!["limits"]![0]!["value"]!.AsDecimal(), Is.EqualTo(7m));
             }
 
             (status, var again) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{id}/stop");
@@ -1657,7 +1657,7 @@ namespace cloud.charging.open.Smartphone.Tests
                     Assert.That(cpo.Disputes.Last().Session,                          Is.EqualTo(name));
                     Assert.That(sent["reason"]!.Value<String>(),                      Is.EqualTo(link["disputeBecause"]!.Value<String>()), name);
                     Assert.That(sent["signedValues"]!.Count(),                        Is.EqualTo(2),                     $"{name}: its start value and its end value, as they came");
-                    Assert.That(disputed["energyKWh"]!.Value<Decimal>(),              Is.EqualTo(energy),                $"{name}: a wrong end value counts");
+                    Assert.That(disputed["energyKWh"]!.AsDecimal(),              Is.EqualTo(energy),                $"{name}: a wrong end value counts");
                     Assert.That(disputed.ToString(),                                  Does.Not.Contain($"/sessions/{name}/dispute"), $"{name}: the dispute link itself is shown");
                 }
 
@@ -1726,7 +1726,7 @@ namespace cloud.charging.open.Smartphone.Tests
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(charging["status"]!.Value<String>(),                        Is.EqualTo("charging"), charging.ToString());
-                Assert.That(charging["energyKWh"]!.Value<Decimal>(),                    Is.EqualTo(6.5m), "how the session goes, as its operator signed it");
+                Assert.That(charging["energyKWh"]!.AsDecimal(),                    Is.EqualTo(6.5m), "how the session goes, as its operator signed it");
                 Assert.That(charging["liveLink"]!["values"]!["byOperator"]!.Value<Int32>(), Is.EqualTo(1));
                 Assert.That(charging["liveLink"]!["wrong"]!.Type,                       Is.EqualTo(JTokenType.Null), "a value its operator signed is a wrong one");
                 Assert.That(readings[0]!["signedBy"]!.Value<String>(),                  Is.EqualTo("meter"));
@@ -1745,7 +1745,7 @@ namespace cloud.charging.open.Smartphone.Tests
 
             using (Assert.EnterMultipleScope())
             {
-                Assert.That(charging["energyKWh"]!.Value<Decimal>(),                    Is.EqualTo(12m), charging.ToString());
+                Assert.That(charging["energyKWh"]!.AsDecimal(),                    Is.EqualTo(12m), charging.ToString());
                 Assert.That(charging["liveLink"]!["values"]!["byOperator"]!.Value<Int32>(), Is.EqualTo(2));
                 Assert.That(readings.Count(),                                           Is.EqualTo(3), "the begin said again is one reading");
                 Assert.That(readings[0]!["signedBy"]!.Value<String>(),                  Is.EqualTo("meter"), "the begin the meter signed is the meter's, whoever says it again");
@@ -1763,8 +1763,8 @@ namespace cloud.charging.open.Smartphone.Tests
             {
                 Assert.That(end["holds"]!.Value<Boolean?>(),                            Is.True, finished.ToString());
                 Assert.That(end["signedBy"]!.Value<String>(),                           Is.EqualTo("meter"));
-                Assert.That(finished["energyKWh"]!.Value<Decimal>(),                    Is.EqualTo(20m), "from the start to the end the meter signed");
-                Assert.That(finished["cost"]!["amount"]!.Value<Decimal>(),              Is.EqualTo(13.00m));
+                Assert.That(finished["energyKWh"]!.AsDecimal(),                    Is.EqualTo(20m), "from the start to the end the meter signed");
+                Assert.That(finished["cost"]!["amount"]!.AsDecimal(),              Is.EqualTo(13.00m));
                 Assert.That(finished["liveLink"]!["disputeBecause"]!.Type,              Is.EqualTo(JTokenType.Null));
                 Assert.That(finished["liveLink"]!["values"]!["byOperator"]!.Value<Int32>(), Is.EqualTo(2));
             }
@@ -1891,7 +1891,7 @@ namespace cloud.charging.open.Smartphone.Tests
                                                                                                 And.Contain("\"web-payment-P2\""), unnamed.ToString());
                 Assert.That(unnamed["liveLink"]!["start"]!["identification"]!.Value<String>(), Is.EqualTo("web-payment-P2"));
                 Assert.That(unnamed["liveLink"]!["wrong"]!["identification"]!.Type,        Is.EqualTo(JTokenType.Null));
-                Assert.That(unnamed["energyKWh"]!.Value<Decimal>(),                        Is.EqualTo(0m), "a value of no payment counts");
+                Assert.That(unnamed["energyKWh"]!.AsDecimal(),                        Is.EqualTo(0m), "a value of no payment counts");
                 Assert.That(page.Stops.Select(one => one.Session),                         Is.EqualTo(new[] { "P1", "P2" }));
             }
 
@@ -1918,7 +1918,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(disputed["liveLink"]!["refused"]!.Value<Boolean>(),            Is.False, "an end value of another payment stops the session");
                 Assert.That(disputed["liveLink"]!["disputeBecause"]!.Value<String>(),      Does.StartWith("Its signed end meter value is a wrong one: It is of another session"));
                 Assert.That(disputed["liveLink"]!["ending"]!["reason"]!.Value<String>(),   Is.EqualTo("wrong"));
-                Assert.That(disputed["energyKWh"]!.Value<Decimal>(),                       Is.EqualTo(5m), "an end value of another payment counts");
+                Assert.That(disputed["energyKWh"]!.AsDecimal(),                       Is.EqualTo(5m), "an end value of another payment counts");
             }
 
             // No reference given: what the values name binds nothing.
@@ -1943,7 +1943,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(unbound["liveLink"]!["end"]!["holds"]!.Value<Boolean?>(),      Is.True);
                 Assert.That(unbound["liveLink"]!["end"]!["identification"]!.Type,          Is.EqualTo(JTokenType.Null));
                 Assert.That(unbound["liveLink"]!["disputeBecause"]!.Type,                  Is.EqualTo(JTokenType.Null));
-                Assert.That(unbound["energyKWh"]!.Value<Decimal>(),                        Is.EqualTo(10m));
+                Assert.That(unbound["energyKWh"]!.AsDecimal(),                        Is.EqualTo(10m));
             }
 
             // Stopped and disputed once each.
@@ -2200,7 +2200,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(Of("tariff").AsText(),                           Is.EqualTo(TestRoamingNetwork.DCTariff));
                 Assert.That(Of("evse").AsText(),                             Is.EqualTo(TestRoamingNetwork.DCEVSE));
                 Assert.That(session["start"]!["token"]!.Value<String>(),     Is.EqualTo(emsp.Starts.Single().Token));
-                Assert.That(session["cost"]!["pricePerKWh"]!.Value<Decimal>(), Is.EqualTo(0.65m));
+                Assert.That(session["cost"]!["pricePerKWh"]!.AsDecimal(), Is.EqualTo(0.65m));
             }
 
         }
@@ -2264,11 +2264,11 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(values?["values"]?[1]?["meterId"]?.Value<String>(),     Is.EqualTo("meter-dc-1"));
                 Assert.That(values?["values"]?[1]?["keyId"]?.Value<String>(),       Is.EqualTo(keyId), "checked with another key than the one the proof gave");
                 Assert.That(values?["values"]?[1]?["ofThisStart"]?.Value<Boolean>(), Is.True, "the meter values do not name the token of the start");
-                Assert.That(values?["startKWh"]?.Value<Decimal>(),                  Is.EqualTo(1000m));
-                Assert.That(values?["endKWh"]?.Value<Decimal>(),                    Is.EqualTo(1012.5m));
-                Assert.That(values?["energyKWh"]?.Value<Decimal>(),                 Is.EqualTo(12.5m));
+                Assert.That(values?["startKWh"].AsDecimalOrNull(),                  Is.EqualTo(1000m));
+                Assert.That(values?["endKWh"].AsDecimalOrNull(),                    Is.EqualTo(1012.5m));
+                Assert.That(values?["energyKWh"].AsDecimalOrNull(),                 Is.EqualTo(12.5m));
                 Assert.That(values?["energyMatches"]?.Value<Boolean>(),             Is.True);
-                Assert.That(values?["expectedCost"]?.Value<Decimal>(),              Is.EqualTo(8.13m), "12.5 kWh at 0.65 per kWh");
+                Assert.That(values?["expectedCost"].AsDecimalOrNull(),              Is.EqualTo(8.13m), "12.5 kWh at 0.65 per kWh");
                 Assert.That(values?["costMatches"]?.Value<Boolean>(),               Is.True);
 
                 Assert.That(price?["signatures"]?.Value<String>(),                  Is.EqualTo("valid"),   price?.ToString());
@@ -2276,7 +2276,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(price?["agreement"]?.Value<String>(),                   Is.EqualTo("missing"));
                 Assert.That(price?["selected"]?["entityId"]?.Value<String>(),       Is.EqualTo(TestRoamingNetwork.DCEVSE));
                 Assert.That(price?["selected"]?["tariffId"]?.Value<String>(),       Is.EqualTo(TestRoamingNetwork.DCTariff));
-                Assert.That(price?["selected"]?["pricePerKWh"]?.Value<Decimal>(),   Is.EqualTo(0.65m));
+                Assert.That(price?["selected"]?["pricePerKWh"].AsDecimalOrNull(),   Is.EqualTo(0.65m));
                 Assert.That(price?["matchesSession"]?.Value<Boolean>(),             Is.True);
 
                 Assert.That(kept?["proofs"]?.Count(),                               Is.EqualTo(2), "the proof of the start and the one of the stop are kept");
@@ -2366,7 +2366,7 @@ namespace cloud.charging.open.Smartphone.Tests
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(finished["check"]!["price"]!["applicability"]!.Value<String>(),      Is.EqualTo("bound"), "the first agreement is kept");
-                Assert.That(finished["check"]!["meterValues"]!["expectedCost"]!.Value<Decimal>(), Is.EqualTo(8.13m),  "12.5 kWh at 0.65 per kWh, as agreed");
+                Assert.That(finished["check"]!["meterValues"]!["expectedCost"]!.AsDecimal(), Is.EqualTo(8.13m),  "12.5 kWh at 0.65 per kWh, as agreed");
                 Assert.That(finished["check"]!["meterValues"]!["costMatches"]!.Value<Boolean>(),  Is.True);
                 Assert.That(kept?["chargingMode"]?.Value<String>(),                              Is.EqualTo(SessionPriceAgreement.Contract), "the agreement is not kept with the session");
             }
@@ -2536,7 +2536,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(values?["values"]?[1]?["signedBy"]?.Value<String>(),   Is.EqualTo("operator"));
                 Assert.That(values?["values"]?[1]?["operatorId"]?.Value<String>(), Is.EqualTo(TestRoamingNetwork.GEF.ToString()));
                 Assert.That(values?["values"]?[1]?["result"]?.Value<String>(),     Is.EqualTo("ValidSignature"));
-                Assert.That(values?["energyKWh"]?.Value<Decimal>(),                Is.EqualTo(12.5m), "from the start to the end the meter signed");
+                Assert.That(values?["energyKWh"].AsDecimalOrNull(),                Is.EqualTo(12.5m), "from the start to the end the meter signed");
                 Assert.That(values?["costMatches"]?.Value<Boolean>(),              Is.True);
             }
 
@@ -2891,7 +2891,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(link["stopLink"]!.Value<String>(),                    Is.EqualTo(host));
                 Assert.That(link["disputeLink"]!.Value<String>(),                 Is.EqualTo(host));
                 Assert.That(link["paymentReference"]!.Value<String>(),            Is.EqualTo(TestCPO.PaymentReferenceOf("H1")));
-                Assert.That(link["limit"]!["maxEnergy"]!.Value<Decimal>(),        Is.EqualTo(20000m));
+                Assert.That(link["limit"]!["maxEnergy"]!.AsDecimal(),        Is.EqualTo(20000m));
                 Assert.That(link["bound"]!["stopLink"]!.Value<Boolean>(),         Is.True);
                 Assert.That(link["bound"]!["disputeLink"]!.Value<Boolean>(),      Is.True);
                 Assert.That(link["bound"]!["paymentReference"]!.Value<Boolean>(), Is.True);
@@ -2923,7 +2923,7 @@ namespace cloud.charging.open.Smartphone.Tests
 
             using (Assert.EnterMultipleScope())
             {
-                Assert.That(stopped["energyKWh"]!.Value<Decimal>(),                         Is.EqualTo(7m), stopped.ToString());
+                Assert.That(stopped["energyKWh"]!.AsDecimal(),                         Is.EqualTo(7m), stopped.ToString());
                 Assert.That(stopped["liveLink"]!["end"]!["holds"]!.Value<Boolean?>(),        Is.True);
                 Assert.That(stopped["liveLink"]!["disputeBecause"]!.Type,                    Is.EqualTo(JTokenType.Null));
                 Assert.That(stopped["liveLink"]!["ending"]!["because"]!.Value<String>(),     Does.Contain("20 kWh was not reached: 7 kWh"), "the limit of the hand-over");
@@ -3071,7 +3071,7 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(asked1["liveLink"]!["bound"]!["paymentLink"]!.Value<Boolean>(),  Is.True);
                 Assert.That(asked1["liveLink"]!["payment"]!["problem"]!.Value<String>(),     Does.Contain("404"), "nothing of the payment yet");
                 Assert.That(asked1["check"]!["price"]!["applicability"]!.Value<String>(),    Is.EqualTo("unbound"), "no agreement yet");
-                Assert.That(asked1["cost"]!["worked"]!["amount"]!.Value<Decimal>(),          Is.EqualTo(1.00m), "the flat fee, of the start");
+                Assert.That(asked1["cost"]!["worked"]!["amount"]!.AsDecimal(),          Is.EqualTo(1.00m), "the flat fee, of the start");
             }
 
             cpo.SetPayment("P1", Agreement(begin1, beganAt1, digest));
@@ -3095,7 +3095,7 @@ namespace cloud.charging.open.Smartphone.Tests
 
             using (Assert.EnterMultipleScope())
             {
-                Assert.That(finished["cost"]!["amount"]!.Value<Decimal>(),                   Is.EqualTo(14.00m), "1.00 and 20 kWh at 0.65");
+                Assert.That(finished["cost"]!["amount"]!.AsDecimal(),                   Is.EqualTo(14.00m), "1.00 and 20 kWh at 0.65");
                 Assert.That(finished["cost"]!["worked"]!["components"]!.Count(),             Is.EqualTo(2));
                 Assert.That(finished["cost"]!["worked"]!["exact"]!.Value<Boolean>(),         Is.True);
             }
@@ -3108,8 +3108,8 @@ namespace cloud.charging.open.Smartphone.Tests
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(receipt["holds"]!.Value<Boolean?>(),                             Is.True, receipt.ToString());
-                Assert.That(receipt["amount"]!.Value<Decimal>(),                             Is.EqualTo(14.00m));
-                Assert.That(receipt["cost"]!.Value<Decimal>(),                               Is.EqualTo(14.00m));
+                Assert.That(receipt["amount"]!.AsDecimal(),                             Is.EqualTo(14.00m));
+                Assert.That(receipt["cost"]!.AsDecimal(),                               Is.EqualTo(14.00m));
                 Assert.That(receipt["signed"]!.Value<Boolean>(),                             Is.True);
                 Assert.That(paid["liveLink"]!["disputeBecause"]!.Type,                       Is.EqualTo(JTokenType.Null));
                 Assert.That(cpo.Disputes,                                                    Is.Empty);
