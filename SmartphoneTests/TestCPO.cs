@@ -42,7 +42,12 @@ namespace cloud.charging.open.Smartphone.Tests
     /// /handOvers/{session}: all of these in one document, with the payment
     /// reference "payment-{session}", a limit of 20 kWh and its payment link,
     /// at /payments/{session}, which answers what the test sets - its price
-    /// agreement and its receipt -, 404 before.
+    /// agreement and its receipt -, 404 before. And the page itself, at /pay:
+    /// asked with a "session" it is to have started, it sends the driver back
+    /// to the "handOverTo" the phone opened it with, the URL of the hand-over
+    /// of that session added as "handOver" - only to an https URL, or to one
+    /// of the machine itself -, and says the URL of the hand-over, to copy,
+    /// where it was opened with none.
     /// </summary>
     public sealed class TestCPO : IAsyncDisposable
     {
@@ -130,6 +135,7 @@ namespace cloud.charging.open.Smartphone.Tests
             api.AddHandler(HTTPPath.Parse("/sessions/{session}/dispute"), request => Task.FromResult(cpo.PostDispute(request)), HTTPMethod.POST);
             api.AddHandler(HTTPPath.Parse("/handOvers/{session}"),      request => Task.FromResult(cpo.GetHandOver(request)),  HTTPMethod.GET);
             api.AddHandler(HTTPPath.Parse("/payments/{session}"),       request => Task.FromResult(cpo.GetPayment(request)),   HTTPMethod.GET);
+            api.AddHandler(HTTPPath.Parse("/pay"),                      request => Task.FromResult(cpo.GetPaid(request)),      HTTPMethod.GET);
 
             await server.Start();
 
@@ -265,7 +271,7 @@ namespace cloud.charging.open.Smartphone.Tests
         #endregion
 
 
-        #region (private) GetLiveLink(Request) / GetHandOver(Request) / GetLive(Request) / PostStop(Request) / PostDispute(Request)
+        #region (private) GetLiveLink(Request) / GetHandOver(Request) / GetPaid(Request) / GetLive(Request) / PostStop(Request) / PostDispute(Request)
 
         private HTTPResponse GetLiveLink(HTTPRequest Request)
 
@@ -279,6 +285,40 @@ namespace cloud.charging.open.Smartphone.Tests
 
             return Response(Request, HTTPStatusCode.OK, HTTPContentType.Application.JSON_UTF8,
                             HandOver(Request.ParsedURLParameters[0]).ToString());
+
+        }
+
+        /// <summary>
+        /// The page once the driver paid and the session started: back to
+        /// where the phone said, with the URL of the hand-over - nothing of
+        /// the driver, and nowhere but an https URL or the machine itself.
+        /// </summary>
+        private HTTPResponse GetPaid(HTTPRequest Request)
+        {
+
+            var session     = Request.QueryString.GetString("session");
+            var handOverTo  = Request.QueryString.GetString("handOverTo");
+
+            if (String.IsNullOrWhiteSpace(session))
+                return Response(Request, HTTPStatusCode.OK, HTTPContentType.Text.PLAIN, "Pay here.");
+
+            if (String.IsNullOrWhiteSpace(handOverTo))
+                return Response(Request, HTTPStatusCode.OK, HTTPContentType.Text.PLAIN, HandOverURL(session));
+
+            if (!Uri.TryCreate(handOverTo, UriKind.Absolute, out var to) ||
+                !(to.Scheme == Uri.UriSchemeHttps || to.Scheme == Uri.UriSchemeHttp && to.IsLoopback) ||
+                to.Fragment.Length > 0)
+            {
+                return Response(Request, HTTPStatusCode.BadRequest, HTTPContentType.Text.PLAIN,
+                                "'handOverTo' is an https URL of the phone, or one of this machine.");
+            }
+
+            return new HTTPResponse.Builder(Request) {
+                       HTTPStatusCode  = HTTPStatusCode.SeeOther,
+                       Location        = Location.Parse($"{handOverTo}{(to.Query.Length > 0 ? "&" : "?")}handOver={Uri.EscapeDataString(HandOverURL(session))}"),
+                       CacheControl    = "no-store",
+                       Connection      = ConnectionType.Close
+                   };
 
         }
 

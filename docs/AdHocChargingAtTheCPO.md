@@ -80,8 +80,8 @@ sequenceDiagram
     D->>P: chooses a limit and pays
     C->>S: RequestStartTransaction with transactionLimit
     S->>S: meter signs the begin, ID = payment reference
-    P-->>D: the URL of its hand-over
-    D->>A: hands it over at the EVSE paid for
+    P-->>D: back to the app, with the URL of its hand-over
+    D->>A: takes it over at the EVSE paid for
     A->>P: GET the hand-over, at the host of the signed webPaymentURL alone
     P-->>A: live link, stop link, dispute link, payment reference, limit, payment link
     A->>N: proof of the station again
@@ -200,6 +200,10 @@ else its pool's, else its operator's. It is signed by a CPO key that may sign
 **Pay ad hoc at its operator** for the station of the charge point chosen. Only
 an `https` URL is linked; any other is only shown.
 
+The app opens it with **where to hand the session over** added to its query,
+as `handOverTo`: a URL of the app itself, which names the charge point chosen
+and nothing of the driver ([Step 2](#step-2---handing-the-session-over-to-the-app)).
+
 This static URL names no EVSE: the page learns which one the driver wants some
 other way, e.g. by asking. Continue with [Step 1](#step-1---cpo-paying-and-starting-at-the-web-payment-page).
 
@@ -305,18 +309,41 @@ link - is [WebPaymentPageInterface.md](WebPaymentPageInterface.md).
 The stop link, the dispute link and the payment link work for whoever has
 them, so they are secrets of the session - and so is the URL of the hand-over,
 which names them.
+
+6. Where the app opened the page with `handOverTo`, the page **sends the
+   driver back** there once the session started, the URL of the hand-over
+   added as `handOver` - and nothing else. Where it was opened with none - by
+   the QR code of [Path B](#path-b---scanning-the-dynamic-qr-code), say - it
+   shows the URL of the hand-over, to copy.
+
 What else a hand-over must and should be is
 [WebPaymentPageInterface.md, The hand-over](WebPaymentPageInterface.md#the-hand-over).
 
 
 ## Step 2 - Handing the session over to the app
 
-In the popup of the station, at the charge point paid for, the driver enters
-the URL of the hand-over the page gave: **Paid there? The hand-over its page
-gave**. The app takes the hand-over from the **host of the web payment page**
-the proof of the station names - the signed `webPaymentURL` of
+**Sent back by the page**, the driver copies nothing. The app opened the web
+payment page with `handOverTo`, e.g.
+
+```
+https://phone.example/charging/handOver?locationId=DE*GEF*P1&evseUid=DE*GEF*E2*1
+```
+
+and the page sends the browser there with `&handOver=` and the URL of its
+hand-over, percent-encoded. The app's page **Hand-over** says the station, the
+charge point and the host the hand-over is at, and takes it over once the
+driver says **Take it over** - not as it opens: an address is what anybody
+can make a link of, and nothing changes on the phone for a link followed.
+
+**Without that** - the page was not opened by the app, or sends nobody back -
+the driver enters the URL of the hand-over in the popup of the station, at the
+charge point paid for: **Paid there? The hand-over its page gave**.
+
+Either way the app takes the hand-over from the **host of the web payment
+page** the proof of the station names - the signed `webPaymentURL` of
 [A5](#a5---opening-the-web-payment-page), port included - and asks no other
-host. Where the page gives no hand-over, the driver enters the live link, the
+host: whoever sent the driver, and whatever `handOver` an address names.
+Where the page gives no hand-over, the driver enters the live link, the
 stop link, the dispute link, the payment reference, the limit and the payment
 link on their own instead. The app's API takes either:
 
@@ -630,10 +657,12 @@ dispute link, the driver is told to dispute the session at the page.
   the app does not take the EVSE ID out of it, and does not compare the host of
   its URL with the signed `webPaymentURL` - the format of the URL is the CPO's
   own template, and nothing says the two have to be the same site.
-- **The driver still carries the hand-over** from the page to the app, as one
-  URL to copy: there is no app link the page redirects to, and no QR code of it
-  the app scans. Nor does a static `webPaymentURL` tell the page which EVSE was
-  picked in the app.
+- **The page sends the driver back only where the app opened it**
+  (`handOverTo`). Opened by the QR code of a charge point, in a browser, it
+  knows no app: the driver copies the URL of the hand-over then - there is no
+  QR code of it the app scans, and no address every app answers at, as an
+  Android App Link or an iOS Universal Link would be. Nor does a static
+  `webPaymentURL` tell the page which EVSE was picked in the app.
 - **Not everything is bound to the CPO:** a link at another host than that of
   the web payment page, and a payment reference typed or pasted, are the word
   of whoever gave them. Binding them would take the CPO signing the hand-over
@@ -675,6 +704,7 @@ dispute link, the driver is told to dispute the session at the page.
 | 0 | [`Smartphone/Roaming/RoamingNetworkConfiguration.cs`](../Smartphone/Roaming/RoamingNetworkConfiguration.cs), [`KeyStatementCheck.cs`](../Smartphone/Roaming/KeyStatementCheck.cs) |
 | A1 | [`Smartphone/Roaming/RoamingNetworkClient.cs`](../Smartphone/Roaming/RoamingNetworkClient.cs), [`RoamingNetworkStatus.cs`](../Smartphone/Roaming/RoamingNetworkStatus.cs), [`Frontend/src/pages/map.ts`](../Smartphone/Frontend/src/pages/map.ts) |
 | A2-A5 | [`Smartphone/Roaming/StationCheck.cs`](../Smartphone/Roaming/StationCheck.cs) |
+| A5, 2 | where the page hands over to: [`Frontend/src/pages/handOver.ts`](../Smartphone/Frontend/src/pages/handOver.ts) |
 | 2 | [`Smartphone/HTTPAPI/SmartphoneHTTPAPI.Charging.cs`](../Smartphone/HTTPAPI/SmartphoneHTTPAPI.Charging.cs), [`Smartphone/Smartphone.LiveLinks.cs`](../Smartphone/Smartphone.LiveLinks.cs), [`Smartphone/Charging/WebPaymentHandOver.cs`](../Smartphone/Charging/WebPaymentHandOver.cs) |
 | 3 | [`Smartphone/Charging/LiveLinkFollow.cs`](../Smartphone/Charging/LiveLinkFollow.cs), [`Smartphone/Smartphone.Evidence.cs`](../Smartphone/Smartphone.Evidence.cs), [`Charging/SessionEvidence.cs`](../Smartphone/Charging/SessionEvidence.cs) |
 | 4 | [`Smartphone/Charging/SessionCheck.cs`](../Smartphone/Charging/SessionCheck.cs) |

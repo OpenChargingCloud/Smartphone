@@ -237,7 +237,16 @@ describe('the map of a roaming network', () => {
 
             const link = root.querySelector<HTMLAnchorElement>('.station-popup a.web-payment')!;
 
-            assert.equal(link.getAttribute('href'),   'https://pay.gef.example/stations/S1', 'not the page of the station of the charge point chosen');
+            const page = new URL(link.getAttribute('href')!);
+
+            assert.equal(page.origin + page.pathname, 'https://pay.gef.example/stations/S1', 'not the page of the station of the charge point chosen');
+
+            // Where that page sends the driver back to: this phone's own page, with the charge point paid for and nothing else.
+            const back = new URL(page.searchParams.get('handOverTo')!);
+
+            assert.equal(back.origin + back.pathname, 'http://127.0.0.1/charging/handOver', 'the page is not told where to hand the session over');
+            assert.deepEqual([ ...back.searchParams.entries() ], [ [ 'locationId', 'DE*GEF*P1' ], [ 'evseUid', 'DE*GEF*E1*1' ] ]);
+            assert.match(root.querySelector('.station-popup')!.textContent!, /told where to hand the session over to this phone/);
             assert.equal(link.getAttribute('target'), '_blank');
             assert.match(link.getAttribute('rel')!,   /noopener/);
             assert.match(root.querySelector('.station-popup')!.textContent!, /The web payment page of its station, as its proof says/);

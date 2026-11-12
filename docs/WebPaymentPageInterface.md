@@ -34,10 +34,13 @@ The only implementation of the CPO's side is the stand-in of the phone's tests,
 | **stop** | the phone | the page | a POST to the stop link | - |
 | **dispute** | the phone | the page | a POST to the dispute link | - |
 
-The driver hands over what the page gave in the popup of the station in the
-phone, at the charge point paid for: the URL of the hand-over, which names all
-the rest - or, where the page gives none, the live link, the links, the
-reference and the limit, each typed or pasted.
+Where the phone opened the page, the page sends the driver back to it with
+the URL of the hand-over, which names all the rest, and the driver copies
+nothing ([Sending the driver back](#sending-the-driver-back)). Else the driver
+hands over what the page gave in the popup of the station in the phone, at the
+charge point paid for: the URL of the hand-over - or, where the page gives
+none, the live link, the links, the reference and the limit, each typed or
+pasted.
 
 What the phone says a session costs is what the tariff of the station makes of
 what its meter signed when - every part of it, see
@@ -83,6 +86,37 @@ over one thing, not five:
   host only.
 - The driver may paste the document itself as well. That binds nothing to the
   CPO but the links at the host of the web payment page, as typing them does.
+
+### Sending the driver back
+
+The phone opens the web payment page with one parameter added to its query,
+and whatever the `webPaymentURL` has there already left as it is:
+
+```
+https://pay.gef.example/stations/S2?handOverTo=https%3A%2F%2Fphone.example%2Fcharging%2FhandOver%3FlocationId%3DDE*GEF*P1%26evseUid%3DDE*GEF*E2*1
+```
+
+- `handOverTo` is a URL of the phone, with a query of its own: the charge
+  point the driver chose in the phone, in the phone's words, and nothing of
+  the driver. The page reads nothing out of it and changes nothing of it.
+- Once the session started, the page **sends the browser there** - a `303`, or
+  a link the driver follows - with one parameter added to that query:
+  `handOver`, the URL of the hand-over, percent-encoded. It adds nothing else,
+  and nothing of the payment or the driver.
+- It must keep `handOverTo` from the page it was opened with to the one that
+  sends the driver back - through the payment service provider and back -, of
+  this very payment alone.
+- It should send the driver only to an `https` URL without a fragment - or to
+  one of the machine itself, for a phone tried there - and should say where,
+  by its host, before it does: `handOverTo` is what anybody can put into a
+  link to the page, and the URL of the hand-over is a secret of the session
+  (see [Security](#security)).
+- Opened with no `handOverTo` - by the QR code of a charge point, say -, it
+  shows the URL of the hand-over as a link or as text to copy, as before.
+
+The phone takes nothing as the driver arrives: its page says the station, the
+charge point and the host of the hand-over, and takes it over once the driver
+says so - from the host of the web payment page alone, as a hand-over pasted.
 
 ### The live link
 
@@ -451,6 +485,14 @@ station of this family do it is not checked here.
   host alone, its payment reference is the page's, and a stop or dispute link
   at that host is the CPO's - the session page says which are. Nothing of the
   hand-over itself is signed.
+- **`handOverTo` is the word of whoever linked the page.** A link to the page
+  with somebody else's `handOverTo` has the driver who pays there sent to that
+  somebody, with the URL of the hand-over - and so with the stop, dispute and
+  payment links of the session. So the page says where it sends the driver,
+  sends nobody anywhere but to `https`, and adds the hand-over alone. On the
+  phone's side nothing is taken for an address opened: the driver is asked,
+  and a hand-over at another host than that of the web payment page is
+  refused, whoever sent the driver.
 - **The rest is the word of whoever gave it:** links at another host, and a
   reference typed or pasted. A forged stop link that answers `2xx` makes the
   phone believe the station stops; the phone sees only that no end comes.
@@ -474,6 +516,7 @@ the smallest page the phone works with:
 | `POST /sessions/{session}/dispute` | `200` `{ "message": "The dispute is taken." }`, or what a test sets |
 | `GET /handOvers/{session}` | the hand-over: the live link, the stop and dispute links above, the payment reference `payment-{session}`, a limit of 20 kWh and the payment link below, `application/json` |
 | `GET /payments/{session}` | the payment: the price agreement and the receipt a test sets, `application/json`; `404` before |
+| `GET /pay?session={session}&handOverTo={url}` | the page once the driver paid: `303` to `handOverTo` with `handOver` added, the URL of the hand-over; `400` where `handOverTo` is neither `https` nor of the machine itself, or has a fragment; with no `handOverTo`, the URL of the hand-over as `text/plain` |
 
 The tests give the DC station the stand-in's own URL as its web payment page,
 so that its hand-over is taken from there, and a test may price its EVSE as it
@@ -490,9 +533,14 @@ stopped, what was disputed and what the page answered.
 
 ## Open points
 
-- **The driver still carries the hand-over** from the page to the phone, as
-  one URL to copy. An app link the page redirects to, or a QR code of that URL
-  the phone scans, would spare that; the phone has neither.
+- **The page sends the driver back only where the phone opened it.** Opened
+  by the QR code of a charge point it knows no `handOverTo`, and the driver
+  copies the URL of the hand-over. An address every app answers at - an
+  Android App Link, an iOS Universal Link - would spare that, or a QR code of
+  that URL the phone scans; there is neither.
+- **`handOverTo` is not bound to the phone** that opened the page: the page
+  cannot tell it from one in a link somebody else made (see
+  [Security](#security)).
 - **Links at another host** than that of the web payment page are not bound to
   the CPO, nor is anything typed or pasted. Binding them would take the CPO
   signing the hand-over with a key the roaming network attests for `payments`.

@@ -2,6 +2,7 @@ import * as L from 'leaflet';
 
 import { api, type ChargingLocation, type EVSE, type LocationCheck, type MapData, type TransactionLimit } from '../api/client';
 import { auth } from '../auth';
+import { withHandOverTo } from './handOver';
 import { availability, maxPowerKW, positionOf, search, standardWord, stationStatus, statusClass, statusWord, webPaymentOf, webPaymentWord } from '../map/stations';
 import { dayAndTime, money } from '../charging/words';
 import { toURL } from '@node/basePath';
@@ -36,7 +37,7 @@ export const mapPage: Page = {
 
     title: 'Map',
 
-    render({ root, navigate }) {
+    render({ root, url, navigate }) {
 
         const content = shell(root, {
             active:    '/map',
@@ -338,11 +339,14 @@ export const mapPage: Page = {
                     `}
 
                     ${payment?.url ? html`
-                        <a class="btn web-payment" href=${payment.url} target="_blank" rel="noopener noreferrer"
+                        <a class="btn web-payment" href=${pick !== undefined ? withHandOverTo(payment.url, url.origin, id, pick) : payment.url}
+                           target="_blank" rel="noopener noreferrer"
                            @click=${() => { if (pick !== undefined) paying.set(id, pick); }}>
                             <i class="fa-solid fa-credit-card"></i> Pay ad hoc at its operator
                         </a>
-                        <div class="small muted">The web payment page ${webPaymentWord(payment.of)}, as its proof says.</div>
+                        <div class="small muted">
+                            The web payment page ${webPaymentWord(payment.of)}, as its proof says${pick !== undefined ? ' - told where to hand the session over to this phone' : ''}.
+                        </div>
                     ` : payment?.error ? html`
                         <div class="small muted web-payment-error">${payment.error}</div>
                     ` : nothing}

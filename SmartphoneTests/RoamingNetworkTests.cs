@@ -3045,6 +3045,97 @@ namespace cloud.charging.open.Smartphone.Tests
                                                 TestRoamingNetwork.DCTariff,
                                                 PriceStatementDigest,
                                                 TestRoamingNetwork.GEF,
+        #region TheWebPaymentPageSendsTheDriverBackWithItsHandOver()
+
+        /// <summary>
+        /// The web payment page sends the driver back to where the phone
+        /// opened it with, as "handOverTo" - a page of the phone, with the
+        /// charge point paid for - and adds the URL of its hand-over as
+        /// "handOver": what comes back is all the phone needs to take the
+        /// session over, with nothing to copy. The page sends nobody to a
+        /// URL that is neither https nor of the machine itself; and what the
+        /// phone takes is checked as ever - a hand-over at another host than
+        /// that of the web payment page is refused, whoever sent the driver.
+        /// </summary>
+        [Test]
+        public async Task TheWebPaymentPageSendsTheDriverBackWithItsHandOver()
+        {
+
+            cpo     = await TestCPO.Start();
+            network = await TestRoamingNetwork.Start(DCWebPayment: $"{cpo.URL}/pay");
+
+            await WithTheRoamingNetwork();
+
+            using var driver = await SignedInAs("driver1", "driver");
+
+            await Send(driver, HttpMethod.Get, "api/v1/map");
+            await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            var pool  = TestRoamingNetwork.PoolId;
+            var dc    = TestRoamingNetwork.DCEVSE;
+
+            // As the map opens the web payment page: where to hand the session
+            // over, with the charge point paid for and nothing of the driver.
+            var handOverTo = $"{driver.BaseAddress!.GetLeftPart(UriPartial.Authority)}/charging/handOver" +
+                             $"?locationId={Uri.EscapeDataString(pool)}&evseUid={Uri.EscapeDataString(dc)}";
+
+            using var browser = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
+
+            // The driver paid, and the page started the session "R1".
+            using var paid = await browser.GetAsync($"{cpo.URL}/pay?session=R1&handOverTo={Uri.EscapeDataString(handOverTo)}");
+
+            Assert.That(paid.StatusCode, Is.EqualTo(HttpStatusCode.SeeOther), await paid.Content.ReadAsStringAsync());
+
+            var back   = paid.Headers.Location!;
+            var query  = System.Web.HttpUtility.ParseQueryString(back.Query);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(back.GetLeftPart(UriPartial.Path),  Is.EqualTo(handOverTo.Split('?')[0]), "not back to where the phone said");
+                Assert.That(query["locationId"],                Is.EqualTo(pool));
+                Assert.That(query["evseUid"],                   Is.EqualTo(dc));
+                Assert.That(query["handOver"],                  Is.EqualTo(cpo.HandOverURL("R1")));
+                Assert.That(query.Count,                        Is.EqualTo(3), "the page added more than its hand-over");
+                Assert.That(cpo.HandOverRequests,               Is.Zero, "nothing is taken before the driver says so");
+            }
+
+            // What the page of the phone hands on, once the driver says so.
+            var (status, session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                               new { locationId = query["locationId"], evseUid = query["evseUid"], handOver = query["handOver"] });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(cpo.HandOverRequests,                                            Is.EqualTo(1));
+                Assert.That(session["liveLink"]!["handOver"]!.Value<String>(),               Is.EqualTo(new Uri(cpo.URL).Authority));
+                Assert.That(session["liveLink"]!["paymentReference"]!.Value<String>(),       Is.EqualTo(TestCPO.PaymentReferenceOf("R1")));
+                Assert.That(session["liveLink"]!["bound"]!["paymentReference"]!.Value<Boolean>(), Is.True);
+            }
+
+            // Opened with none, the page says the URL of its hand-over, to copy.
+            using var plain = await browser.GetAsync($"{cpo.URL}/pay?session=R2");
+
+            Assert.That(await plain.Content.ReadAsStringAsync(), Is.EqualTo(cpo.HandOverURL("R2")));
+
+            // The page sends nobody elsewhere than to https, or to the machine itself.
+            foreach (var elsewhere in new[] { "http://phone.example/charging/handOver", "javascript:alert(1)", "/charging/handOver", "https://phone.example/#there" })
+            {
+                using var refused = await browser.GetAsync($"{cpo.URL}/pay?session=R3&handOverTo={Uri.EscapeDataString(elsewhere)}");
+                Assert.That(refused.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest), elsewhere);
+            }
+
+            // And whoever sends the driver to the phone: a hand-over at
+            // another host than that of the web payment page is not taken.
+            (status, var refusedHandOver) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                                       new { locationId = pool, evseUid = dc, handOver = cpo.HandOverURL("R4").Replace("127.0.0.1", "localhost") });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.Conflict), refusedHandOver.ToString());
+
+        }
+
+        #endregion
+
                                                 SignedAt: BeganAt).JSON;
 
             JObject Receipt(String Session, Decimal Amount)

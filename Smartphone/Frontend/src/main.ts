@@ -14,6 +14,7 @@ import { nodeMenu, startNode } from '@node/start';
 
 import { chargingPage } from './pages/charging';
 import { configurationPage } from './pages/configuration';
+import { handOverPage, handOverPath } from './pages/handOver';
 import { historyPage } from './pages/history';
 import { locationPage } from './pages/location';
 import { mapPage } from './pages/map';
@@ -83,6 +84,7 @@ startNode({
 
         '/charging':                chargingPage,
         '/charging/history':        historyPage,
+        [handOverPath]:             handOverPage,
         '/charging/sessions/:id':   sessionPage,
 
         '/configuration':           configurationPage,
