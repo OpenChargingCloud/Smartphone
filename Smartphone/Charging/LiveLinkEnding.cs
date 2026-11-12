@@ -222,6 +222,14 @@ namespace cloud.charging.open.Smartphone.Charging
                                           null,
                                           limits);
 
+            // Passed on by an e-mobility provider: stopped through it, where
+            // it was, and with no limit of the page - those of its ticket are
+            // compared with what was charged on their own.
+            if (follow.PassedOnBy is String party)
+                return Session.StoppedAt is DateTimeOffset stoppedAt
+                           ? new LiveLinkEnding("stopped", $"This phone stopped it through {party} at {stoppedAt:HH:mm:ss}, and {cause}.", end?.Transaction, limits)
+                           : new LiveLinkEnding("other",   $"It ended: {cause}.",                                                       end?.Transaction, limits);
+
             if (follow.Stop is { Accepted: true } stop)
             {
                 reason   = "stopped";

@@ -670,7 +670,8 @@ namespace cloud.charging.open.Smartphone
 
         /// <summary>
         /// What the provider says of one session, kept with it - and said in the
-        /// log where it says something new.
+        /// log where it says something new. The live link of the session it
+        /// passes on is followed from then on (<see cref="FollowPassedOnAsync"/>).
         /// </summary>
         private async Task ReportFromProviderAsync(ProviderAccount  Account,
                                                    ChargingSession  Session)
@@ -691,7 +692,7 @@ namespace cloud.charging.open.Smartphone
             if (report is null)
                 return;
 
-            if (!Sessions.TryReport(Session.Id, report, out _, out var error))
+            if (!Sessions.TryReport(Session.Id, report, out var reported, out var error))
             {
                 Log.Warning($"{Account.Party} reported of the session {Session.Id} that {report.InWords}, and this phone could not keep it: {error}", "provider", "charging");
                 return;
@@ -699,6 +700,8 @@ namespace cloud.charging.open.Smartphone
 
             if (Session.Report?.InWords != report.InWords)
                 Log.Info($"{Account.Party} reports of the session {Session.Id} ({Session.Start!.Token}) at {Session.EVSEId}: {report.InWords}.", "provider", "charging");
+
+            await FollowPassedOnAsync($"{Account.Party}", reported);
 
         }
 

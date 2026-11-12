@@ -292,7 +292,8 @@ namespace cloud.charging.open.Smartphone.Charging
         /// What the e-mobility provider reported of a session started through
         /// it, kept with the session in place of what it reported before - but
         /// the first price agreement of the operator it passed on, which a later
-        /// one does not replace, as a web payment page's does not.
+        /// one does not replace, as a web payment page's does not. A live link
+        /// it passed on before stays where it passes none on now.
         /// </summary>
         public Boolean TryReport(String                                     Id,
                                  ProviderReport                             Report,
@@ -314,7 +315,8 @@ namespace cloud.charging.open.Smartphone.Charging
                 }
 
                 var before    = sessions[index];
-                var reported  = before with { Report = Report with { PriceAgreement = before.Report?.PriceAgreement ?? Report.PriceAgreement } };
+                var reported  = before with { Report = Report with { PriceAgreement = before.Report?.PriceAgreement ?? Report.PriceAgreement,
+                                                                     LiveLink       = Report.LiveLink               ?? before.Report?.LiveLink } };
 
                 sessions[index] = reported;
 
@@ -325,6 +327,115 @@ namespace cloud.charging.open.Smartphone.Charging
                 }
 
                 Session = reported;
+                return true;
+
+            }
+
+        }
+
+        #endregion
+
+        #region TryAttach(Id, LiveLink, out Session, out Error)
+
+        /// <summary>
+        /// The live link the e-mobility provider passed on for a session
+        /// started through it, kept with the session to be followed from now
+        /// on - where it follows none yet: the first stays.
+        /// </summary>
+        public Boolean TryAttach(String                                     Id,
+                                 LiveLinkFollow                             LiveLink,
+                                 [NotNullWhen(true)]  out ChargingSession?  Session,
+                                 [NotNullWhen(false)] out String?           Error)
+        {
+
+            Session = null;
+
+            lock (sync)
+            {
+
+                var index = sessions.FindIndex(session => session.Id == Id);
+
+                if (index < 0)
+                {
+                    Error = $"There is no charging session '{Id}' on this phone.";
+                    return false;
+                }
+
+                var before = sessions[index];
+
+                if (before.Start is null)
+                {
+                    Error = $"The charging session '{Id}' was not started through an e-mobility provider.";
+                    return false;
+                }
+
+                if (before.LiveLink is not null)
+                {
+                    Error = $"The charging session '{Id}' follows a live link already.";
+                    return false;
+                }
+
+                var followed = before with { LiveLink = LiveLink };
+
+                sessions[index] = followed;
+
+                if (!TrySave(out Error))
+                {
+                    sessions[index] = before;
+                    return false;
+                }
+
+                Session = followed;
+                return true;
+
+            }
+
+        }
+
+        #endregion
+
+        #region TryKeepStop(Id, StoppedBy, Stopped, out Session, out Error)
+
+        /// <summary>
+        /// The stop the e-mobility provider countersigned for a session this
+        /// phone stopped already, one of its signed values a wrong one: kept
+        /// with its start, and when and by whom, where nobody stopped it
+        /// before.
+        /// </summary>
+        public Boolean TryKeepStop(String                                     Id,
+                                   String                                     StoppedBy,
+                                   ChargingStartReference                     Stopped,
+                                   [NotNullWhen(true)]  out ChargingSession?  Session,
+                                   [NotNullWhen(false)] out String?           Error)
+        {
+
+            Session = null;
+
+            lock (sync)
+            {
+
+                var index = sessions.FindIndex(session => session.Id == Id);
+
+                if (index < 0)
+                {
+                    Error = $"There is no charging session '{Id}' on this phone.";
+                    return false;
+                }
+
+                var before  = sessions[index];
+                var stopped = before with { StoppedAt  = before.StoppedAt ?? timeProvider.GetUtcNow(),
+                                            StoppedBy  = before.StoppedBy ?? StoppedBy,
+                                            Start      = Stopped };
+
+                sessions[index] = stopped;
+
+                if (!TrySave(out Error))
+                {
+                    sessions[index] = before;
+                    return false;
+                }
+
+                Session = stopped;
                 return true;
 
             }

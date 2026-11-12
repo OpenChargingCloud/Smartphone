@@ -336,6 +336,15 @@ namespace cloud.charging.open.Smartphone.Tests
             => reported[Token].PriceAgreement = Agreement;
 
         /// <summary>
+        /// The live link the charge point operator gave for the session of the
+        /// start of the given token, passed on as it came: its URL, or its
+        /// document - in place of one before.
+        /// </summary>
+        public void OperatorLiveLink(String Token, JToken LiveLink)
+
+            => reported[Token].LiveLink = LiveLink;
+
+        /// <summary>
         /// The meter value its charge detail records carry, as an OCMF text.
         /// </summary>
         public const String SignedMeterValue = """OCMF|{"FV":"1.0","RD":[{"TM":"2026-10-29T13:30:00,000+0000 S","RV":12.5,"RU":"kWh"}]}""";
@@ -1055,6 +1064,7 @@ namespace cloud.charging.open.Smartphone.Tests
         public JObject?         Session     { get; set; }
         public JObject?         CDR         { get; set; }
         public JObject?         PriceAgreement  { get; set; }
+        public JToken?          LiveLink        { get; set; }
 
         /// <summary>
         /// The start as GET /api/v1/tickets/{id} tells it - with another token,
@@ -1093,6 +1103,9 @@ namespace cloud.charging.open.Smartphone.Tests
 
             if (PriceAgreement is not null)
                 json["priceAgreement"] = PriceAgreement.DeepClone();
+
+            if (LiveLink is not null)
+                json["liveLink"] = LiveLink.DeepClone();
 
             return json;
 

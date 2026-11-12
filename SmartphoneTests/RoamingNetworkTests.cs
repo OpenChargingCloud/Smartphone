@@ -2566,6 +2566,247 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
+        #region TheProviderPassesOnTheLiveLinkOfASessionWhoseSignedValuesAreCheckedAsTheyCome()
+
+        /// <summary>
+        /// A session started through the provider follows the live link its
+        /// operator gave and the provider passed on: its signed values are
+        /// checked as they come, with the key the proof of the station gives
+        /// for its meter, and each is to name the token of the start. What it
+        /// charged is what its meter signed, not what the provider reports,
+        /// until its charge detail record came. It is stopped through the
+        /// provider as any, followed until its meter signs the end - and its
+        /// charge detail record is checked all the same.
+        /// </summary>
+        [Test]
+        public async Task TheProviderPassesOnTheLiveLinkOfASessionWhoseSignedValuesAreCheckedAsTheyCome()
+        {
+
+            var (admin, driver, session, token) = await ChargingThroughTheProvider();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            smartphone!.ProviderReportInterval = TimeSpan.Zero;
+
+            cpo = await TestCPO.Start();
+
+            var id     = session["id"]!.Value<String>()!;
+            var begin  = DateTimeOffset.UtcNow;
+            var first  = TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, token, (begin, "B", 1000.000m));
+
+            cpo.Send(first);
+
+            emsp!.OperatorSession (token, "ACTIVE", 0m);
+            emsp. OperatorLiveLink(token, cpo.LiveLinkURL("S1"));
+
+            var charging = await SessionWhen(driver, id, json => json["liveLink"]?["start"] is JObject);
+            var start    = charging["liveLink"]!["start"]!;
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(charging["status"]!.Value<String>(),                           Is.EqualTo("charging"), charging.ToString());
+                Assert.That(charging["provider"]!["liveLink"]!.Value<Boolean>(),           Is.True);
+                Assert.That(charging["liveLink"]!["passedOnBy"]!.Value<String>(),          Is.EqualTo(TestEMSP.Party));
+                Assert.That(charging["liveLink"]!["from"]!.Value<String>(),                Is.EqualTo(cpo.LiveLinkURL("S1")));
+                Assert.That(charging["liveLink"]!["paymentReference"]!.Value<String>(),    Is.EqualTo(token), "every signed value is to name the token of the start");
+                Assert.That(charging["liveLink"]!["stopLink"]!.Type,                       Is.EqualTo(JTokenType.Null), "stopped through the provider, not through a link");
+                Assert.That(charging["liveLink"]!["disputeLink"]!.Type,                    Is.EqualTo(JTokenType.Null));
+                Assert.That(start["holds"]!.Value<Boolean?>(),                             Is.True, start.ToString());
+                Assert.That(start["meterSerialNumber"]!.Value<String>(),                   Is.EqualTo(TestRoamingNetwork.DCMeterSerial));
+                Assert.That(start["identification"]!.Value<String>(),                      Is.EqualTo(token));
+                Assert.That(charging["ticket"],                                            Is.Not.Null, "it stays a session through the provider");
+                Assert.That(charging["start"]!["token"]!.Value<String>(),                  Is.EqualTo(token));
+            }
+
+            cpo.Send(TestRoamingNetwork.OCMF(network.DCMeter, TestRoamingNetwork.DCMeterSerial, token, (DateTimeOffset.UtcNow, "C", 1012.500m)));
+
+            charging = await SessionWhen(driver, id, json => json["liveLink"]?["values"]?["holding"]?.Value<Int32>() == 1);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(charging["energyKWh"]!.AsDecimal(),                Is.EqualTo(12.5m), "what its meter signed, not the 0 kWh the provider reports");
+                Assert.That(charging["status"]!.Value<String>(),               Is.EqualTo("charging"));
+                Assert.That(charging["liveLink"]!["wrong"]!.Type,              Is.EqualTo(JTokenType.Null));
+            }
+
+            var (status, stopped) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{id}/stop");
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                                 Is.EqualTo(HttpStatusCode.OK), stopped.ToString());
+                Assert.That(stopped["status"]!.Value<String>(),     Is.EqualTo("stopped"));
+                Assert.That(emsp.Stops.Count,                       Is.EqualTo(1), "stopped through the provider");
+                Assert.That(cpo.Stops,                              Is.Empty,      "no stop link was asked");
+            }
+
+            var end   = DateTimeOffset.UtcNow;
+            var last  = TestRoamingNetwork.OCMF(network.DCMeter, TestRoamingNetwork.DCMeterSerial, token, (end, "E", 1020.000m));
+
+            cpo.Send(last);
+
+            var ended = await SessionWhen(driver, id, json => json["liveLink"]?["end"] is JObject);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(ended["status"]!.Value<String>(),                           Is.EqualTo("stopped"), ended.ToString());
+                Assert.That(ended["energyKWh"]!.AsDecimal(),                            Is.EqualTo(20m));
+                Assert.That(ended["liveLink"]!["end"]!["holds"]!.Value<Boolean?>(),     Is.True, ended["liveLink"]!["end"]!.ToString());
+                Assert.That(ended["liveLink"]!["disputeBecause"]!.Type,                 Is.EqualTo(JTokenType.Null));
+                Assert.That(ended["liveLink"]!["ending"]!["reason"]!.Value<String>(),   Is.EqualTo("stopped"));
+                Assert.That(ended["liveLink"]!["ending"]!["because"]!.Value<String>(),  Does.Contain($"through {TestEMSP.Party}"));
+                Assert.That(ended["liveLink"]!["limits"]!.Count(),                      Is.Zero);
+            }
+
+            emsp.OperatorCDR(token, 20m, 13.00m, end, SignedValues(("Start", first), ("End", last)));
+
+            var finished = await SessionWhen(driver, id, json => (json["provider"] as JObject)?["cdr"]?.Value<Boolean>() == true && json["check"]?["meterValues"] is JObject);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(finished["check"]!["meterValues"]!["verified"]!.Value<Boolean>(),  Is.True, finished["check"]!.ToString());
+                Assert.That(finished["energyKWh"]!.AsDecimal(),                                Is.EqualTo(20m), "what its charge detail record says");
+                Assert.That(finished["liveLink"]!["documents"]!.Value<Int32>(),                Is.EqualTo(3), "what came over its live link is kept");
+            }
+
+        }
+
+        #endregion
+
+        #region AWrongSignedValueOverThePassedOnLiveLinkStopsTheSessionThroughTheProvider(What, Error)
+
+        /// <summary>
+        /// A signed value that comes over the live link the provider passed on
+        /// and is a wrong one - not signed by the key the proof of the station
+        /// gives for its meter, or naming another token than that of the
+        /// start - stops the session at once, and its station through the
+        /// provider: with a stop request signed by the key of its ticket,
+        /// which the provider countersigns - once.
+        /// </summary>
+        [TestCase("otherKey",    "Its signed start meter value is a wrong one")]
+        [TestCase("otherToken",  "Its signed start meter value is a wrong one")]
+        public async Task AWrongSignedValueOverThePassedOnLiveLinkStopsTheSessionThroughTheProvider(String What, String Error)
+        {
+
+            var (admin, driver, session, token) = await ChargingThroughTheProvider();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            smartphone!.ProviderReportInterval = TimeSpan.Zero;
+
+            cpo = await TestCPO.Start();
+
+            var id = session["id"]!.Value<String>()!;
+
+            cpo.Send(What == "otherKey"
+                         ? TestRoamingNetwork.OCMF(TestRoamingNetwork.NewMeterKey(), TestRoamingNetwork.DCMeterSerial, token,          (DateTimeOffset.UtcNow, "B", 1000.000m))
+                         : TestRoamingNetwork.OCMF(network!.DCMeter,                 TestRoamingNetwork.DCMeterSerial, "T-0123456789", (DateTimeOffset.UtcNow, "B", 1000.000m)));
+
+            emsp!.OperatorSession (token, "ACTIVE", 0m);
+            emsp. OperatorLiveLink(token, cpo.LiveLinkURL("S1"));
+
+            var stopped = await SessionWhen(driver, id, json => json["status"]?.Value<String>() == "stopped" && json["start"]?["stopRequestDigest"] is JValue { Type: JTokenType.String });
+            var stop    = stopped["liveLink"]!["stop"]!;
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(stopped["stoppedBecause"]!.Value<String>(),            Does.Contain(Error), stopped.ToString());
+                Assert.That(stopped["stoppedBy"]!.Value<String>(),                 Is.EqualTo("this phone"));
+                Assert.That(stopped["liveLink"]!["refused"]!.Value<Boolean>(),     Is.True);
+                Assert.That(stopped["liveLink"]!["start"]!["holds"]!.Value<Boolean?>(), Is.False);
+                Assert.That(stop["accepted"]!.Value<Boolean>(),                    Is.True, stop.ToString());
+                Assert.That(stop["requestedBy"]!.Value<String>(),                  Is.EqualTo("this phone"));
+                Assert.That(stop["answer"]!.Value<String>(),                       Does.Contain($"{TestEMSP.Party} countersigned the stop"));
+                Assert.That(emsp.Stops.Count,                                      Is.EqualTo(1), "its station was not stopped through the provider");
+                Assert.That(cpo.Stops,                                             Is.Empty);
+                Assert.That(cpo.Disputes,                                          Is.Empty, "through the provider there is no dispute");
+                Assert.That(stopped["liveLink"]!["disputeBecause"]!.Value<String>(), Does.Contain(Error));
+            }
+
+            // Stopped once, and followed no more.
+            await Task.Delay(500);
+
+            var asked = cpo.LiveRequests;
+
+            await Task.Delay(1000);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(emsp.Stops.Count,   Is.EqualTo(1),      "its station was stopped again");
+                Assert.That(cpo.LiveRequests,   Is.EqualTo(asked),  "its live link is still asked");
+            }
+
+        }
+
+        #endregion
+
+        #region ALiveLinkOfAnotherChargePointPassedOnIsNotFollowed()
+
+        /// <summary>
+        /// A live link the provider passes on is followed only where it is of
+        /// the charge point of the session - one of another, or what is no
+        /// live link, is not, and the session stays what the provider
+        /// reports. One that fits, passed on later, is followed then.
+        /// </summary>
+        [Test]
+        public async Task ALiveLinkOfAnotherChargePointPassedOnIsNotFollowed()
+        {
+
+            var (admin, driver, session, token) = await ChargingThroughTheProvider();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            smartphone!.ProviderReportInterval = TimeSpan.Zero;
+
+            cpo = await TestCPO.Start();
+
+            var id = session["id"]!.Value<String>()!;
+
+            cpo.Send(TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, token, (DateTimeOffset.UtcNow, "B", 1000.000m)));
+
+            emsp!.OperatorSession(token, "ACTIVE", 1.5m);
+
+            foreach (var passedOn in new JToken[] { cpo.LiveLink("S1", TestRoamingNetwork.ACEVSE),
+                                                    "http://pay.gef.example/liveLinks/S1",
+                                                    new JObject(new JProperty("@context", "x")) })
+            {
+
+                emsp.OperatorLiveLink(token, passedOn);
+
+                var reported = await SessionWhen(driver, id, json => (json["provider"] as JObject)?["liveLink"]?.Value<Boolean>() == true && json["status"]?.Value<String>() == "charging");
+
+                await Task.Delay(300);
+
+                (_, reported) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+                using (Assert.EnterMultipleScope())
+                {
+                    Assert.That(reported["liveLink"],                   Is.Null, $"{passedOn}: {reported}");
+                    Assert.That(reported["status"]!.Value<String>(),    Is.EqualTo("charging"));
+                    Assert.That(reported["energyKWh"]!.AsDecimal(),     Is.EqualTo(1.5m), "what the provider reports");
+                }
+
+            }
+
+            Assert.That(cpo.LiveRequests, Is.Zero, "a live link not of its charge point was followed");
+
+            emsp.OperatorLiveLink(token, cpo.LiveLink("S1"));
+
+            var followed = await SessionWhen(driver, id, json => (json["liveLink"]?["start"] as JObject)?["holds"]?.Value<Boolean?>() == true);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(followed["liveLink"]!["from"]!.Type,                    Is.EqualTo(JTokenType.Null), "its document passed on, not its URL");
+                Assert.That(followed["liveLink"]!["passedOnBy"]!.Value<String>(),   Is.EqualTo(TestEMSP.Party));
+                Assert.That(followed["energyKWh"]!.AsDecimal(),                     Is.EqualTo(0m), "what its meter signed so far");
+            }
+
+        }
+
+        #endregion
+
         #region APriceAgreementThroughTheProviderBindsThePriceTheOperatorChargesIt()
 
         /// <summary>

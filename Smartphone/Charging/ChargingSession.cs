@@ -93,6 +93,16 @@ namespace cloud.charging.open.Smartphone.Charging
     /// its signed values is a wrong one, its end value as well, or none
     /// signed its end: finished or stopped all the same.
     /// </para>
+    /// <para>
+    /// One started through the provider may follow a live link as well: the
+    /// one its operator gave and the provider passed on. It stays what the
+    /// provider reports - its status, its cost, its charge detail record -,
+    /// and what its meter signs comes while it charges: what it charged is
+    /// what its signed values say, until its charge detail record came;
+    /// finished once its meter signed the end, though the provider may not
+    /// say so yet; and stopped at once where one of its signed values is a
+    /// wrong one - its station through the provider.
+    /// </para>
     /// </remarks>
     public sealed record ChargingSession(String           Id,
                                          String           LocationId,
@@ -170,6 +180,16 @@ namespace cloud.charging.open.Smartphone.Charging
         public SessionTariff? ChargedBy
             => LiveLink?.Payment?.AgreedTariff ?? Tariff;
 
+        /// <summary>
+        /// Its live link, where the web payment page of the operator of its
+        /// station started it and the driver handed it over: the session is
+        /// what its live link says. Null of a session started through the
+        /// e-mobility provider, which is what the provider reports, with the
+        /// live link the provider passed on beside it.
+        /// </summary>
+        public LiveLinkFollow? HandedOver
+            => Start is null ? LiveLink : null;
+
         #endregion
 
 
@@ -235,7 +255,7 @@ namespace cloud.charging.open.Smartphone.Charging
 
             // Of a live link, stopped through its stop link once it ended: until
             // the meter signs the end, the station charges on.
-            if (LiveLink is LiveLinkFollow liveLink)
+            if (HandedOver is LiveLinkFollow liveLink)
                 return StoppedAt is not null || liveLink.Refused
                            ? ChargingSessionStatus.Stopped
                            : liveLink.EndedAt is not null
@@ -246,10 +266,23 @@ namespace cloud.charging.open.Smartphone.Charging
                                        ? ChargingSessionStatus.Charging
                                        : ChargingSessionStatus.Starting;
 
+            // As the provider reports it - but stopped at once where a signed
+            // value of the live link it passed on is a wrong one, and finished
+            // once the meter signed the end, or the station ended the stream,
+            // though the provider does not say so yet.
             if (Report is ProviderReport report)
-                return StoppedAt is not null
-                           ? ChargingSessionStatus.Stopped
-                           : StatusOf(report);
+            {
+
+                if (StoppedAt is not null || LiveLink?.Refused == true)
+                    return ChargingSessionStatus.Stopped;
+
+                var reported = StatusOf(report);
+
+                return LiveLink?.EndedAt is not null && reported is ChargingSessionStatus.Starting or ChargingSessionStatus.Charging
+                           ? ChargingSessionStatus.Finished
+                           : reported;
+
+            }
 
             return StoppedAt is DateTimeOffset stopped && stopped < FullAt
                        ? ChargingSessionStatus.Stopped
@@ -291,7 +324,7 @@ namespace cloud.charging.open.Smartphone.Charging
 
             var status = StatusAt(Now);
 
-            if (LiveLink is LiveLinkFollow liveLink)
+            if (HandedOver is LiveLinkFollow liveLink)
                 return status switch {
                            ChargingSessionStatus.Stopped   => StoppedAt ?? (liveLink.Refused ? liveLink.Wrong?.Check?.CheckedAt : liveLink.EndedAt),
                            ChargingSessionStatus.Finished  => liveLink.EndedAt,
@@ -300,8 +333,8 @@ namespace cloud.charging.open.Smartphone.Charging
 
             if (Report is ProviderReport report)
                 return status switch {
-                           ChargingSessionStatus.Stopped   => StoppedAt ?? report.ChargingUntil ?? report.EndedAt ?? report.ReceivedAt,
-                           ChargingSessionStatus.Finished  => report.ChargingUntil ?? report.EndedAt ?? report.ReceivedAt,
+                           ChargingSessionStatus.Stopped   => StoppedAt ?? (LiveLink?.Refused == true ? LiveLink.Wrong?.Check?.CheckedAt : null) ?? report.ChargingUntil ?? LiveLink?.EndedAt ?? report.EndedAt ?? report.ReceivedAt,
+                           ChargingSessionStatus.Finished  => report.ChargingUntil ?? LiveLink?.EndedAt ?? report.EndedAt ?? report.ReceivedAt,
                            ChargingSessionStatus.Failed    => report.EndedAt ?? report.ReceivedAt,
                            _                               => null
                        };
@@ -327,17 +360,20 @@ namespace cloud.charging.open.Smartphone.Charging
         #region EnergyAt(Now)
 
         /// <summary>
-        /// What it has charged by the given time, in kWh: what the provider
-        /// reported, or what the simulated vehicle took.
+        /// What it has charged by the given time, in kWh: what the signed
+        /// values of its live link say; what the provider reported - until its
+        /// charge detail record came, what the signed values of the live link
+        /// the provider passed on say, where any came -; or what the simulated
+        /// vehicle took.
         /// </summary>
         public Decimal EnergyAt(DateTimeOffset Now)
         {
 
-            if (LiveLink is LiveLinkFollow liveLink)
+            if (HandedOver is LiveLinkFollow liveLink)
                 return liveLink.EnergyKWh ?? 0m;
 
             if (Report is ProviderReport report)
-                return report.EnergyKWh ?? 0m;
+                return (report.CDR is null ? LiveLink?.EnergyKWh : null) ?? report.EnergyKWh ?? 0m;
 
             var until  = EndedAt(Now) ?? Now;
             var hours  = Math.Max(0, (until - StartedAt).TotalHours);
@@ -359,7 +395,7 @@ namespace cloud.charging.open.Smartphone.Charging
         public ChargingProfile ProfileAt(DateTimeOffset Now)
         {
 
-            if (LiveLink is LiveLinkFollow liveLink)
+            if (HandedOver is LiveLinkFollow liveLink)
             {
 
                 var counted = liveLink.Counted.Where(reading => reading.EnergyKWh is not null).ToArray();
@@ -438,7 +474,7 @@ namespace cloud.charging.open.Smartphone.Charging
         public JObject ToJSON(DateTimeOffset Now)
         {
 
-            if (LiveLink is LiveLinkFollow liveLink)
+            if (HandedOver is LiveLinkFollow liveLink)
                 return LiveLinkJSON(liveLink, Now);
 
             if (Report is ProviderReport report)
@@ -495,7 +531,10 @@ namespace cloud.charging.open.Smartphone.Charging
         /// <summary>
         /// The session as the provider reported it: its figures the operator's,
         /// its cost the operator's where it said one, else what the checked
-        /// price makes of what was charged.
+        /// price makes of what was charged. With the live link the provider
+        /// passed on, where it did: what came over it and how its signed
+        /// values held, how it ended, and why this phone stopped the session,
+        /// where one of them is a wrong one.
         /// </summary>
         private JObject ReportedJSON(ProviderReport Report, DateTimeOffset Now)
         {
@@ -537,11 +576,26 @@ namespace cloud.charging.open.Smartphone.Charging
                            new JProperty("provider",           Report.ToJSON())
                        );
 
+            if (LiveLink is LiveLinkFollow passedOn)
+            {
+
+                var liveLink = passedOn.ToJSON();
+
+                liveLink.Add(new JProperty("limits",  new JArray()));
+                liveLink.Add(new JProperty("ending",  LiveLinkEnding.Of(this)?.ToJSON()));
+
+                json.Add(new JProperty("liveLink", liveLink));
+
+            }
+
             if (Report.ChargingSince is DateTimeOffset chargingSince)
                 json.Add(new JProperty("chargingSince", chargingSince.ToString("o")));
 
             if (status == ChargingSessionStatus.Stopped)
-                json.Add(new JProperty("stoppedBy", StoppedBy));
+                json.Add(new JProperty("stoppedBy", StoppedBy ?? (LiveLink?.Refused == true ? LiveLink.Stop?.RequestedBy : null)));
+
+            if (status == ChargingSessionStatus.Stopped && LiveLink?.RefusedBecause is String because)
+                json.Add(new JProperty("stoppedBecause", because));
 
             if (Ticket is not null)
                 json.Add(new JProperty("ticket", Ticket.ToJSON()));

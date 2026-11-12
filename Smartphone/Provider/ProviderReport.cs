@@ -34,7 +34,8 @@ namespace cloud.charging.open.Smartphone.Provider
     /// start, what the charge point operator answered the commands, the
     /// session and the charge detail record the operator pushed for it - each
     /// as far as the operator sent it, and only where it is of this start -,
-    /// and the price agreement the operator signed for it, where it gave one.
+    /// the price agreement the operator signed for it, where it gave one, and
+    /// the live link of its session, where the operator gave one.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -48,6 +49,14 @@ namespace cloud.charging.open.Smartphone.Provider
     /// is nothing of it, the operator's signature all. It is checked with the
     /// price of the session.
     /// </para>
+    /// <para>
+    /// The live link is where the signed meter values of the session come
+    /// while it charges - a charge transparency live link, its URL or its
+    /// document, as the operator gave it and the provider passed it on. The
+    /// provider's word is nothing of it either: every value that comes over
+    /// it is checked with the key the proof of the station gives for its
+    /// meter, and is to name the token of the start.
+    /// </para>
     /// </remarks>
     /// <param name="ReceivedAt">When the phone took it.</param>
     /// <param name="State">The provider's state of the start: "sent", "started", "refused", "failed", "stopped", "ended" or "expired".</param>
@@ -57,6 +66,7 @@ namespace cloud.charging.open.Smartphone.Provider
     /// <param name="Session">The OCPI session the operator pushed for the start, or null until it did.</param>
     /// <param name="CDR">The OCPI charge detail record the operator pushed for the start, or null until it did.</param>
     /// <param name="PriceAgreement">The price agreement the operator signed for the start, or null until it gave one.</param>
+    /// <param name="LiveLink">The live link of the session the operator gave for the start - its https URL, or its document -, or null until it gave one.</param>
     public sealed record ProviderReport(DateTimeOffset   ReceivedAt,
                                         String           State,
                                         DateTimeOffset?  EndedAt,
@@ -64,7 +74,8 @@ namespace cloud.charging.open.Smartphone.Provider
                                         JObject?         StopResult,
                                         JObject?         Session,
                                         JObject?         CDR,
-                                        JObject?         PriceAgreement  = null)
+                                        JObject?         PriceAgreement  = null,
+                                        JToken?          LiveLink        = null)
     {
 
         #region Properties
@@ -175,9 +186,22 @@ namespace cloud.charging.open.Smartphone.Provider
                                       start["stopResult"]     as JObject,
                                       session,
                                       cdr,
-                                      start["priceAgreement"] as JObject);
+                                      start["priceAgreement"] as JObject,
+                                      LiveLinkOf(start["liveLink"]));
 
         }
+
+        /// <summary>
+        /// A live link as the provider passes it on: its URL, a text, or its
+        /// document - anything else is none.
+        /// </summary>
+        private static JToken? LiveLinkOf(JToken? JSON)
+
+            => JSON switch {
+                   JObject document                                                                              => document,
+                   JValue { Type: JTokenType.String } text when !String.IsNullOrWhiteSpace(text.Value<String>()) => text,
+                   _                                                                                             => null
+               };
 
         /// <summary>
         /// A session or a CDR where it is of the start: its authorization
@@ -216,7 +240,8 @@ namespace cloud.charging.open.Smartphone.Provider
             var json = new JObject(
                            new JProperty("state",       State),
                            new JProperty("receivedAt",  ReceivedAt.ToString("o")),
-                           new JProperty("cdr",         CDR is not null)
+                           new JProperty("cdr",         CDR is not null),
+                           new JProperty("liveLink",    LiveLink is not null)
                        );
 
             if (ResultType is String result)
@@ -252,6 +277,7 @@ namespace cloud.charging.open.Smartphone.Provider
             if (Session        is not null) json.Add(new JProperty("session",         Session));
             if (CDR            is not null) json.Add(new JProperty("cdr",             CDR));
             if (PriceAgreement is not null) json.Add(new JProperty("priceAgreement",  PriceAgreement));
+            if (LiveLink       is not null) json.Add(new JProperty("liveLink",        LiveLink));
 
             return json;
 
@@ -275,7 +301,8 @@ namespace cloud.charging.open.Smartphone.Provider
                                       json["stopResult"] as JObject,
                                       json["session"]         as JObject,
                                       json["cdr"]             as JObject,
-                                      json["priceAgreement"]  as JObject);
+                                      json["priceAgreement"]  as JObject,
+                                      LiveLinkOf(json["liveLink"]));
 
         }
 

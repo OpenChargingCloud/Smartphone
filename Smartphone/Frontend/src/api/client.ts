@@ -337,6 +337,8 @@ export interface ProviderReport {
     result?:         string;
     /** The status of the operator's session: PENDING, ACTIVE, COMPLETED, INVALID, RESERVATION. */
     sessionStatus?:  string;
+    /** Whether the provider passed on a live link of the session, as its operator gave it. */
+    liveLink?:       boolean;
 }
 
 /** The charging ticket a session was started with: which, good when, and whose keys - nothing secret. */
@@ -531,6 +533,12 @@ export interface LiveLinkFollow {
     start:          LiveLinkStartCheck | null;
     /** How the signed values after the start held, its end value among them - "notChecked" while one was not checked yet; "byOperator" of those that hold, signed by the operator. */
     values:         { holding: number; byOperator?: number; wrong: number; undecided: number; notChecked: number };
+    /**
+     * The e-mobility provider that passed the live link on, of a session started through it - null or absent where
+     * the web payment page gave it. Such a one has no stop link, no dispute link and no payment link: it is stopped
+     * through the provider, and its payment reference is the token of its start.
+     */
+    passedOnBy?:    string | null;
     /** The signed value after the start and before the end that is a wrong one - the phone stopped the session -, or null. */
     wrong:          LiveLinkWrongValue | null;
     /** Whether one of its signed values before the end is a wrong one: the phone stopped the session. */

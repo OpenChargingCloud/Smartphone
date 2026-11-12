@@ -23,7 +23,9 @@ function ticketLimitFigure(Limit: TicketLimitValue, Figure: number): string {
  * every two seconds and Stop - of one the web payment page of its operator
  * started, where the page gave a stop link. One this phone disputes says
  * why and how, and offers to dispute it again where the page did not take
- * it. A session the e-mobility
+ * it. One started through the e-mobility provider shows the live link its
+ * operator gave and the provider passed on, where it did: what its meter
+ * signs, checked as it comes. A session the e-mobility
  * provider reports has no power, no target and no time it is full at: OCPI
  * tells none of them.
  * One at a station of a roaming network says how it holds against what it
@@ -255,8 +257,13 @@ export const sessionPage: Page = {
         }
 
 
-        /** The live link of a session the web payment page of its operator started: how it is followed, and what came over it. */
+        /**
+         * The live link of a session: how it is followed, and what came over it - of one the web payment page of its
+         * operator started, or of one started through the e-mobility provider, which passed it on.
+         */
         function liveLinkView(link: LiveLinkFollow): TemplateResult {
+
+            const by = typeof link.passedOnBy === 'string' ? link.passedOnBy : null;
 
             return html`
                 <section class="card session-live-link">
@@ -264,10 +271,13 @@ export const sessionPage: Page = {
                     <h2><i class="fa-solid fa-tower-broadcast"></i> Live link</h2>
 
                     <div class="kv-list">
+                        ${by !== null
+                              ? kv('Passed on',   `${dayAndTime(link.handedOverAt)} by ${by}, as its operator gave it`)
+                              : html`
                         ${kv('Handed over',       dayAndTime(link.handedOverAt))}
                         ${kv('Hand-over',         link.handOver !== null
                                                       ? html`from <span class="mono">${link.handOver}</span>, the host of the web payment page its proof names`
-                                                      : 'none taken: what its page gave was typed or pasted')}
+                                                      : 'none taken: what its page gave was typed or pasted')}`}
                         ${kv('From',              link.from !== null ? html`<span class="mono">${link.from}</span>` : 'its document itself')}
                         ${kv('Followed over',     link.transports.length > 0 ? link.transports.join(', ') : 'nothing')}
                         ${kv('Updates',           link.lastUpdateAt !== null
@@ -275,17 +285,25 @@ export const sessionPage: Page = {
                                                       : 'none yet')}
                         ${link.lastEndpoint !== null ? kv('Last from', html`<span class="mono">${link.lastEndpoint}</span>`) : nothing}
                         ${kv('Signed documents',  String(link.documents))}
-                        ${kv('Payment reference', link.paymentReference !== null
+                        ${by !== null
+                              ? kv('Token',       html`<span class="mono">${link.paymentReference ?? ''}</span>: every signed value is to name it -
+                                                       the token of its start, which ${by} countersigned`)
+                              : kv('Payment reference', link.paymentReference !== null
                                                       ? html`<span class="mono">${link.paymentReference}</span>: every signed value is to name it -
                                                              ${link.bound.paymentReference ? 'from the web payment page its proof names' : 'typed or pasted, not proven to be that of its page'}`
                                                       : 'none given: that its values are of this payment is not proven')}
                         ${link.problem      !== null ? kv('Now',   link.problem)      : nothing}
                         ${link.endedBecause !== null ? kv('Ended', link.endedBecause) : nothing}
-                        ${kv('Stop link',         link.stopLink !== null ? html`at <span class="mono">${link.stopLink}</span>${boundWords(link.bound.stopLink, link)}` : 'none given: it is stopped at the page')}
+                        ${by !== null
+                              ? kv('Stopped',     `through ${by}, with a stop request the key of its ticket signs`)
+                              : kv('Stop link',   link.stopLink !== null ? html`at <span class="mono">${link.stopLink}</span>${boundWords(link.bound.stopLink, link)}` : 'none given: it is stopped at the page')}
                         ${link.stop !== null ? kv('Stop asked', html`${dayAndTime(link.stop.requestedAt)} by ${link.stop.requestedBy}:
                                                                      <span class="${link.stop.accepted ? 'stop-taken' : 'form-error'}">${link.stop.accepted ? 'taken' : 'not taken'} - ${link.stop.answer}</span>`) : nothing}
+                        ${by !== null
+                              ? kv('Dispute',     `none through ${by}: a wrong value is taken up with ${by}`)
+                              : html`
                         ${kv('Dispute link',      link.disputeLink !== null ? html`at <span class="mono">${link.disputeLink}</span>${boundWords(link.bound.disputeLink, link)}` : 'none given: it is disputed at the page')}
-                        ${kv('Payment link',      link.paymentLink !== null ? html`at <span class="mono">${link.paymentLink}</span>${boundWords(link.bound.paymentLink, link)}` : 'none given: its price is not bound to it, and what the page took is not compared')}
+                        ${kv('Payment link',      link.paymentLink !== null ? html`at <span class="mono">${link.paymentLink}</span>${boundWords(link.bound.paymentLink, link)}` : 'none given: its price is not bound to it, and what the page took is not compared')}`}
                         ${link.paymentLink !== null ? paymentView(link, link.payment) : nothing}
                         ${link.dispute !== null ? kv('Dispute sent', html`${dayAndTime(link.dispute.requestedAt)} by ${link.dispute.requestedBy}:
                                                                           <span class="${link.dispute.accepted ? 'stop-taken' : 'form-error'}">${link.dispute.accepted ? 'taken' : 'not taken'} - ${link.dispute.answer}</span>`) : nothing}
@@ -336,6 +354,19 @@ export const sessionPage: Page = {
                         </ul>
                     ` : nothing}
 
+                    ${by !== null ? html`
+                    <p class="small muted passed-on">
+                        Its operator gave this live link, and ${by} passed it on: the word of neither is anything of it.
+                        Every signed value is checked as it comes, with the key the proof of the station gives for the
+                        meter, against the values before it, and is to name the token of the start - one of another
+                        token, or of none, is of another session. A value between the start and the end may be signed
+                        by the operator of the station instead: it shows how the session goes, and counts for nothing.
+                        A wrong one stops the session here, and the station through ${by}. A wrong end value stops
+                        nothing, and there is no dispute through ${by}: it is taken up there. Until its charge detail
+                        record came, what it charged is what the meter signed; the record is checked on its own, once
+                        it came. The documents are kept, each as it came.
+                    </p>
+                    ` : html`
                     <p class="small muted">
                         A key a live link names is no authority, the one the proof of the station gives for the meter
                         is: every signed value is checked with it as it comes, and against the values before it - none
@@ -351,6 +382,7 @@ export const sessionPage: Page = {
                         the end, what the signed values that count say is compared with the limit chosen at the page.
                         The documents are kept, each as it came.
                     </p>
+                    `}
 
                 </section>
             `;
@@ -556,7 +588,7 @@ export const sessionPage: Page = {
                                       aria-label="How far it has charged"></progress>
                         ` : nothing}
 
-                        ${running && mayStop && (session.liveLink === undefined || session.liveLink.stopLink !== null) ? html`
+                        ${running && mayStop && (session.liveLink === undefined || session.liveLink.stopLink !== null || session.start !== undefined) ? html`
                             <div class="form-actions">
                                 <button type="button" class="btn danger" ?disabled=${stopping} @click=${() => void stop()}>
                                     <i class="fa-solid fa-stop"></i> ${stopping ? 'Stopping ...' : session.liveLink?.stop?.accepted === true ? 'Stop again' : 'Stop charging'}

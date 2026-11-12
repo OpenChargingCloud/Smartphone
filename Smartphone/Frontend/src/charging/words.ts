@@ -81,7 +81,7 @@ export function isRunning(Session: ChargingSession): boolean {
  */
 export function reportedInWords(Session: ChargingSession): string {
 
-    if (Session.liveLink !== undefined)
+    if (Session.liveLink !== undefined && Session.start === undefined)
         return liveLinkInWords(Session);
 
     const report = Session.provider;
@@ -101,7 +101,12 @@ export function reportedInWords(Session: ChargingSession): string {
                      ? ' It says nothing of the cost: that is what was charged, times the price per kWh.'
                      : '';
 
-    return `${what}${cost} Last heard from the e-mobility provider at ${clock(report.receivedAt)}.`;
+    // With the live link the provider passed on, where it did: what its meter signs, as it comes.
+    const live = Session.liveLink !== undefined
+                     ? ` ${liveLinkInWords(Session)}`
+                     : '';
+
+    return `${what}${cost} Last heard from the e-mobility provider at ${clock(report.receivedAt)}.${live}`;
 
 }
 
@@ -125,7 +130,9 @@ export function liveLinkInWords(Session: ChargingSession): string {
         return `This phone stopped it: ${link.wrong !== null ? 'a signed meter value after its start' : 'its signed start meter value'} is a wrong one. ` +
                `${(link.wrong ?? link.start)?.error ?? ''} ${stationStopInWords(link)} ${disputeInWords(link)}`;
 
-    const how  = link.stopLink === null
+    const how  = typeof link.passedOnBy === 'string'
+                     ? `It follows the live link its operator gave, which ${link.passedOnBy} passed on: what its meter signs is checked as it comes.`
+               : link.stopLink === null
                      ? 'Started at the web payment page of its operator, and stopped there.'
                      : link.stop?.accepted === true && link.endedAt === null
                            ? `Started at the web payment page of its operator, which took the stop this phone asked for at ${clock(link.stop.requestedAt)}: it charges until the meter signs its end.`
@@ -167,6 +174,9 @@ export function disputeInWords(Link: LiveLinkFollow): string {
     if (Link.disputeBecause === null)
         return '';
 
+    if (typeof Link.passedOnBy === 'string')
+        return `There is no dispute through ${Link.passedOnBy}: take it up with ${Link.passedOnBy}.`;
+
     if (Link.dispute?.accepted === true)
         return `This phone disputed it through the dispute link of the web payment page at ${clock(Link.dispute.requestedAt)}.`;
 
@@ -188,6 +198,13 @@ export function disputeInWords(Link: LiveLinkFollow): string {
  * did not take the stop.
  */
 export function stationStopInWords(Link: LiveLinkFollow): string {
+
+    if (typeof Link.passedOnBy === 'string')
+        return Link.stop?.accepted === true
+                   ? `This phone stopped the station through ${Link.passedOnBy} at ${clock(Link.stop.requestedAt)}.`
+                   : Link.stop !== null
+                         ? `${Link.passedOnBy} did not take the stop this phone asked for: ${Link.stop.answer} Stop it at the station.`
+                         : `This phone stops the station through ${Link.passedOnBy}.`;
 
     if (Link.stop?.accepted === true)
         return `This phone stopped the station through the stop link of the web payment page at ${clock(Link.stop.requestedAt)}.`;

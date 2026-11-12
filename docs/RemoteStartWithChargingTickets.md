@@ -305,7 +305,8 @@ ticket the EMSP did not issue, the answer is `404`, the same for both.
       "session":    { "id": "S1", "status": "ACTIVE", "kwh": 4.2, "…": "…" },
       "cdr":        null,
       "priceAgreement": { "@context": "https://open.charging.cloud/contexts/wwcp/sessionPriceAgreement/v1",
-                          "chargingMode": "contract", "pricingProfile": "chargy-contract-gross-rates/v1", "…": "…" } }
+                          "chargingMode": "contract", "pricingProfile": "chargy-contract-gross-rates/v1", "…": "…" },
+      "liveLink":   "https://cpo.example/liveLinks/S1" }
   ] }
 ```
 
@@ -337,6 +338,12 @@ ticket the EMSP did not issue, the answer is `404`, the same for both.
   untouched: the CPO's signature is what counts, the EMSP only passes it on.
   It is absent until the CPO gave one. How the CPO gives it the EMSP is open
   (see [Open points](#open-points)). Section 10 says what it has to name.
+- **`liveLink`** is the Charge Transparency LiveLink of the session, as the
+  CPO gave it: its https URL, or its document. The signed values of the meter
+  come over it while the session charges. It is absent until the CPO gave
+  one, and the EMSP only passes it on: nothing of what comes over it is taken
+  on the EMSP's word, or the CPO's. How the CPO gives it the EMSP is open as
+  well.
 
 **The app asks** while a session started through the EMSP is shown and not
 over: when its pages ask for it, at most every 15 seconds. Once the session is
@@ -363,9 +370,21 @@ An EMSP that answers `404` or `405` to the request knows nothing of the
 start, or does not answer it yet. For such an EMSP the app simulates the
 figures, as before, and says so.
 
+**The live link** is followed from the answer it came with, where the session
+is starting or charging, it is of the EVSE of the session, and the session
+follows none yet - on its own from then on, not only when a page asks. Every
+signed value that comes over it is checked as it comes: by the key the proof
+of the station gives for its meter, as section 10 says of a CDR's, and it is
+to name the start's token as its OCMF identification (section 6). Until the
+CDR came, what the session charged is what the meter signed. A value before
+the end that is a wrong one stops the session on the phone at once, and the
+app sends a stop request as section 7 says, signed by the ticket key - the
+only stop it has. A wrong end value stops nothing; neither is disputed, as
+the EMSP has no place for it.
+
 The meter values are the CDR's `signed_data`. The app keeps them as they
 came, shows the CDR's figures as the CPO's, and checks them as section 10
-says.
+says - whatever came over a live link before.
 
 
 ## 10. The meter values and the price, checked
@@ -497,8 +516,10 @@ bytes, and its signature then no longer holds. Payloads are deterministic CBOR
   app takes either way. How the CPO gives the EMSP its price agreement for a
   session (`priceAgreement`, sections 9 and 10): a field of the OCPI session
   or the CDR it pushes, or a module of its own - and through a roaming hub,
-  which has to pass it on. The EMSP's own price to the driver, which no
-  agreement of the CPO binds.
+  which has to pass it on. The same of its live link of a session
+  (`liveLink`, section 9), which only the stand-in EMSP of the app's tests
+  passes on. The EMSP's own price to the driver, which no agreement of the
+  CPO binds.
 - **Offline.** A station that checks tickets itself, without its CSMS: drafted
   in [ChargingWithATicketAtTheStation.md](ChargingWithATicketAtTheStation.md).
 
@@ -510,4 +531,4 @@ bytes, and its signature then no longer holds. Payloads are deterministic CBOR
 | EMSP | self sign-up; account keys from a PKCS#10 request; tickets issued from a request signed by the ticket key and an account key, the account's signature taken off - with Styx's CBOR and COSE in place of its own; start and stop requests (`POST /api/v1/tickets/{id}/start` and `/stop`) checked and countersigned with a token per start - `token`, `authRef` and `iat` as text labels - and sent on as OCPI `START_SESSION` / `STOP_SESSION` on 2.2.1 and 2.3.0; the token `ALLOWED` while its ticket is good, and only at the location and EVSE of its start and for the CPO it went to - through WWCP_OCPI's `OnLocalTokenAuthorization` - and `BLOCKED` once its session is over; what became of a start, told as section 9 says (`GET /api/v1/tickets/{id}`) |
 | CSMS / CPO, missing | starting and stopping at a station on `START_SESSION` and `STOP_SESSION`; checking a ticket and a start request, limits as a charging profile, the token in the OCMF identification |
 | Roaming hub, missing | passing on what one peer sends to another - commands, their results, sessions and CDRs - so that, for now, an EMSP reaches a CPO only peered with it directly |
-| Smartphone | the station's proof checked against the identity keys of the trust anchor trusted on the phone, its tariff, and its energy meter's key; an account at an EMSP, signed up or in with a session; an account key from a PKCS#10 request; a ticket per start, built, signed and checked with Styx - against the EMSP as committed and as moved to Styx; start and stop requests, signed by the ticket key and their countersignature checked - against a stand-in EMSP of its tests, which countersigns as this draft says; against the EMSP as far as it goes without a CPO, ticket and start request taken and the EVSE unknown to it; what became of a start, asked for as section 9 says and taken only where it is of that start - the session as the stand-in tells it, and from the EMSP a ticket with no start, where no CPO took one, its session left simulated; simulated where a provider tells nothing; the signed meter values of a charge detail record checked as section 10 says - against a roaming network and a stand-in EMSP of its tests, whose operator sends OCMF its meter signed - and the price against the statement in force at the start, bound by the operator's price agreement the stand-in passes on, of the charging mode `contract` |
+| Smartphone | the station's proof checked against the identity keys of the trust anchor trusted on the phone, its tariff, and its energy meter's key; an account at an EMSP, signed up or in with a session; an account key from a PKCS#10 request; a ticket per start, built, signed and checked with Styx - against the EMSP as committed and as moved to Styx; start and stop requests, signed by the ticket key and their countersignature checked - against a stand-in EMSP of its tests, which countersigns as this draft says; against the EMSP as far as it goes without a CPO, ticket and start request taken and the EVSE unknown to it; what became of a start, asked for as section 9 says and taken only where it is of that start - the session as the stand-in tells it, and from the EMSP a ticket with no start, where no CPO took one, its session left simulated; simulated where a provider tells nothing; the signed meter values of a charge detail record checked as section 10 says - against a roaming network and a stand-in EMSP of its tests, whose operator sends OCMF its meter signed - and the price against the statement in force at the start, bound by the operator's price agreement the stand-in passes on, of the charging mode `contract`; the live link of a session the stand-in passes on followed, its signed values checked as they come and to name the token, a wrong one stopping the session through the EMSP |

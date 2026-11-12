@@ -32,6 +32,7 @@ using cloud.charging.open.chargy.IO;
 using cloud.charging.open.chargy.LiveLink;
 
 using cloud.charging.open.Smartphone.Charging;
+using cloud.charging.open.Smartphone.Provider;
 using cloud.charging.open.Smartphone.Roaming;
 
 using ChargingSession  = cloud.charging.open.Smartphone.Charging.ChargingSession;
@@ -76,6 +77,13 @@ namespace cloud.charging.open.Smartphone
         /// The live links followed now, by the session.
         /// </summary>
         private readonly ConcurrentDictionary<String, (CancellationTokenSource Stop, Task Following)>  liveLinkFollowers  = new();
+
+        /// <summary>
+        /// Why the live link an e-mobility provider passed on for a session
+        /// is not followed, as it was said last: said once, not with every
+        /// report.
+        /// </summary>
+        private readonly ConcurrentDictionary<String, String>  passedOnProblems  = new();
 
         private readonly Object   liveLinksLock  = new();
         private          Boolean  followsLiveLinks;
@@ -512,6 +520,101 @@ namespace cloud.charging.open.Smartphone
         #endregion
 
 
+        #region (private) FollowPassedOnAsync(Party, Session, CancellationToken = default)
+
+        /// <summary>
+        /// Follow the live link the e-mobility provider passed on for a
+        /// session started through it, where it passed one on, the session is
+        /// starting or charging and follows none yet: the live link its
+        /// operator gave for it, over which the signed values of its meter
+        /// come while it charges. The provider's word is nothing of it: what
+        /// comes is checked as of any live link - with the key the proof of
+        /// the station gives for its meter -, and every value is to name the
+        /// token of the start, which the provider countersigned and the
+        /// operator authorized the session with. One of another charge point
+        /// is not followed. Where it can not be had now, it is asked for
+        /// again with the next report - and said in the log once.
+        /// </summary>
+        private async Task FollowPassedOnAsync(String             Party,
+                                               ChargingSession    Session,
+                                               CancellationToken  CancellationToken = default)
+        {
+
+            if (Session.LiveLink        is not null ||
+                Session.Start           is not ChargingStartReference start ||
+                Session.Report?.LiveLink is not JToken passedOn ||
+                !Session.IsActiveAt(TimeProvider.GetUtcNow()))
+                return;
+
+            var where = $"the session {Session.Id} ({start.Token}) at {Session.LocationName}, {Session.EVSEId}";
+
+            void NotFollowed(String Problem)
+            {
+
+                if (passedOnProblems.TryGetValue(Session.Id, out var said) && said == Problem)
+                    return;
+
+                passedOnProblems[Session.Id] = Problem;
+
+                Log.Warning($"{Party} passed on a live link of {where}, and this phone does not follow it: {Problem}", "charging", "provider");
+
+            }
+
+            try
+            {
+
+                var (document, from, problem, _) = await LiveLinkDocumentAsync(passedOn, CancellationToken);
+
+                if (document is null)
+                {
+                    NotFollowed(problem ?? "It is no live link.");
+                    return;
+                }
+
+                var follow = new LiveLinkFollow(document, from, TimeProvider.GetUtcNow(),
+                                                PaymentReference:  start.Token,
+                                                PassedOnBy:        Party);
+
+                if (follow.EVSEId is String named && named != Session.EVSEId)
+                {
+                    NotFollowed($"It is of {named}, not of {Session.EVSEId}.");
+                    return;
+                }
+
+                if (!Sessions.TryAttach(Session.Id, follow, out var followed, out var error))
+                {
+                    NotFollowed(error);
+                    return;
+                }
+
+                passedOnProblems.TryRemove(Session.Id, out _);
+
+                Log.Notice($"{Party} passed on the live link of {where}, as its operator gave it" +
+                           (from is not null ? $", from {from}" : "") +
+                           $": this phone follows it, and checks every signed value that comes over it as it comes - each is to name the token {start.Token}.",
+                           "charging", "provider");
+
+                StartFollowing(followed);
+
+                // The proof checked before the start may run out before the
+                // meter signs the first value.
+                if (followed.Evidence?.CoveredUntil is DateTimeOffset coveredUntil && coveredUntil < TimeProvider.GetUtcNow() + 2 * ProofRefreshInterval)
+                    await KeepLatestProofAsync(followed, "at the start", CancellationToken);
+
+            }
+            catch (OperationCanceledException)
+            {
+                // The phone stops.
+            }
+            catch (Exception e)
+            {
+                NotFollowed(e.Message);
+            }
+
+        }
+
+        #endregion
+
         #region (private) StopLiveLinkAsync(Running, Who, StopLink, CancellationToken)
 
         /// <summary>
@@ -570,11 +673,49 @@ namespace cloud.charging.open.Smartphone
         /// <summary>
         /// Stop the station of a session this phone stopped because one of its
         /// signed values is a wrong one, through the stop link of the web
-        /// payment page, where the page gave one and it was not asked yet.
+        /// payment page, where the page gave one and it was not asked yet - one
+        /// started through an e-mobility provider through the provider, with a
+        /// stop request signed by the key of its ticket, as the driver's is.
         /// </summary>
         private async Task StopRefusedAsync(ChargingSession    Session,
                                             CancellationToken  CancellationToken)
         {
+
+            if (Session.LiveLink is LiveLinkFollow { Refused: true, PassedOnBy: String party, Stop: null } passedOn)
+            {
+
+                // Stopped by the driver before the wrong value came: the
+                // provider countersigned its stop already.
+                if (Session.Ticket is null || Session.Start is null || Session.Start.StopRequestDigest is not null)
+                    return;
+
+                var (stopped, problem) = await StopThroughProviderAsync(Session.Ticket, Session.Start, CancellationToken);
+
+                var asked = new LiveLinkStop(TimeProvider.GetUtcNow(),
+                                             "this phone",
+                                             stopped is not null,
+                                             stopped is not null
+                                                 ? $"{party} countersigned the stop of the token {stopped.Token}."
+                                                 : problem ?? $"{party} stopped nothing.");
+
+                Follow(Session.Id, kept => kept with { Stop = asked });
+
+                if (stopped is null)
+                {
+                    Log.Warning($"This phone could not stop the station of the session {Session.Id} at {Session.LocationName}, {Session.EVSEId}, through {party}: {asked.Answer} {passedOn.RefusedBecause}",
+                                "charging", "provider");
+                    return;
+                }
+
+                if (!Sessions.TryKeepStop(Session.Id, "this phone", stopped, out _, out var error))
+                    Log.Warning($"{party} countersigned the stop of the session {Session.Id}, and this phone could not keep it: {error}", "charging", "provider");
+
+                Log.Notice($"This phone stopped the station of the session {Session.Id} at {Session.LocationName}, {Session.EVSEId}, through {party}, which countersigned the stop of the token {stopped.Token}. {passedOn.RefusedBecause}",
+                           "charging", "provider");
+
+                return;
+
+            }
 
             if (Session.LiveLink is not LiveLinkFollow { Refused: true, StopLink: String stopLink, Stop: null } follow)
                 return;
@@ -684,6 +825,19 @@ namespace cloud.charging.open.Smartphone
                 return;
 
             var where = $"the session {Session.Id} at {Session.LocationName}, {Session.EVSEId}";
+
+            // Through an e-mobility provider there is no dispute link: said
+            // once, and the driver takes it up with the provider.
+            if (follow.PassedOnBy is String party)
+            {
+
+                if (SayNoLink)
+                    Log.Warning($"This phone disputes {where}, and there is no dispute through {party}: the driver takes it up with {party}. {because}",
+                                "charging", "provider");
+
+                return;
+
+            }
 
             if (follow.DisputeLink is not String disputeLink)
             {
@@ -1136,6 +1290,14 @@ namespace cloud.charging.open.Smartphone
                                ? "It disputes the session through the dispute link of the web payment page of its operator."
                                : "";
 
+            // How its station is stopped, where one of its values before the
+            // end is a wrong one.
+            var stops    = follow.PassedOnBy is String passedOnBy
+                               ? $"It stops the station through {passedOnBy}. "
+                               : follow.StopLink is not null
+                                     ? "It stops the station through the stop link of the web payment page of its operator. "
+                                     : "The web payment page of its operator gave no stop link: the driver stops the station there. ";
+
             foreach (var (document, check) in checks)
             {
 
@@ -1160,9 +1322,7 @@ namespace cloud.charging.open.Smartphone
 
                     case false:
                         Log.Warning(($"{what} is a wrong one: {check.Error} This phone stopped the session and follows its live link no more. " +
-                                     (follow.StopLink is not null
-                                          ? "It stops the station through the stop link of the web payment page of its operator. "
-                                          : "The web payment page of its operator gave no stop link: the driver stops the station there. ") +
+                                     stops +
                                      disputes).TrimEnd(),
                                     "charging", "meter", "poi");
                         break;
@@ -1252,7 +1412,8 @@ namespace cloud.charging.open.Smartphone
 
             foreach (var session in Sessions.All().Where(session => session.LiveLink is LiveLinkFollow follow &&
                                                                     (session.IsActiveAt(now)                                     ||
-                                                                     follow is { Refused: true, StopLink: not null, Stop: null } ||
+                                                                     follow is { Refused: true, StopLink:   not null, Stop: null } ||
+                                                                     follow is { Refused: true, PassedOnBy: not null, Stop: null } ||
                                                                      follow.DisputePending)))
                 StartFollowing(session);
 

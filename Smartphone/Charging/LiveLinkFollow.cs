@@ -568,6 +568,7 @@ namespace cloud.charging.open.Smartphone.Charging
     /// <param name="HandOver">The URL of the hand-over the page gave, at the host of that page, where the phone took it from there - null where what the page gave was typed or pasted.</param>
     /// <param name="PaymentLink">The payment link the web payment page gave for the session, where it gave one.</param>
     /// <param name="Payment">What its payment link said so far.</param>
+    /// <param name="PassedOnBy">The e-mobility provider that passed it on for a session started through it, its party - null where the web payment page gave it. Such a one has no stop link, no dispute link and no payment link: it is stopped through the provider, and its payment reference is the token of its start.</param>
     public sealed record LiveLinkFollow(JObject                           Link,
                                         String?                           From,
                                         DateTimeOffset                    HandedOverAt,
@@ -589,7 +590,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                         String?                           WebPaymentPage    = null,
                                         String?                           HandOver          = null,
                                         String?                           PaymentLink       = null,
-                                        LiveLinkPayment?                  Payment           = null)
+                                        LiveLinkPayment?                  Payment           = null,
+                                        String?                           PassedOnBy        = null)
     {
 
         #region Data
@@ -1086,7 +1088,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                                               new JProperty("paymentLink",       PaymentLinkBound)
                                                           )),
                         new JProperty("paymentLink",      PaymentLinkHost),
-                        new JProperty("payment",          Payment?.ToJSON()));
+                        new JProperty("payment",          Payment?.ToJSON()),
+                        new JProperty("passedOnBy",       PassedOnBy));
 
         }
 
@@ -1128,6 +1131,7 @@ namespace cloud.charging.open.Smartphone.Charging
             if (HandOver         is not null) json.Add(new JProperty("handOver",         HandOver));
             if (PaymentLink      is not null) json.Add(new JProperty("paymentLink",      PaymentLink));
             if (Payment          is not null) json.Add(new JProperty("payment",          Payment.ToStorageJSON()));
+            if (PassedOnBy       is not null) json.Add(new JProperty("passedOnBy",       PassedOnBy));
 
             return json;
 
@@ -1182,7 +1186,8 @@ namespace cloud.charging.open.Smartphone.Charging
                                       json.Value<String>("webPaymentPage"),
                                       json.Value<String>("handOver"),
                                       json.Value<String>("paymentLink"),
-                                      LiveLinkPayment.TryParse(json["payment"]));
+                                      LiveLinkPayment.TryParse(json["payment"]),
+                                      json.Value<String>("passedOnBy"));
 
         }
 

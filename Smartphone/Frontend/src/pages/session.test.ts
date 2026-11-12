@@ -463,6 +463,61 @@ describe('a charging session', () => {
 
     });
 
+    it('shows the live link the provider passed on beside what it reports: stopped through the provider, and no link of a page', async () => {
+
+        const link = liveLinkSession().liveLink!;
+
+        current = reportedSession({ provider: { ...reportedSession().provider!, liveLink: true },
+                                    liveLink: { ...link, passedOnBy: 'DE*GDF', paymentReference: 'T-9F2C41D08A7E3B65', handOver: null, webPaymentHost: null,
+                                                stopLink: null, disputeLink: null, paymentLink: null, payment: null, limit: null, limits: [],
+                                                bound: { stopLink: false, disputeLink: false, paymentReference: false, paymentLink: false } } });
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.session-live-link') !== null);
+
+        const card = root.querySelector('.session-live-link')!.textContent!;
+        const said = root.querySelector('.session-reported')!.textContent!;
+
+        assert.match(card, /Passed on\s*.* by DE\*GDF, as its operator gave it/);
+        assert.match(card, /Token\s*T-9F2C41D08A7E3B65: every signed value is to name it -\s+the token of its start, which DE\*GDF countersigned/);
+        assert.match(card, /Stopped\s*through DE\*GDF/);
+        assert.match(card, /Dispute\s*none through DE\*GDF/);
+        assert.doesNotMatch(card, /Hand-over|Stop link|Dispute link|Payment link|Payment reference|web payment page/);
+        assert.ok(root.querySelector('.session-live-link .passed-on'), 'not said whose word the live link is');
+
+        assert.match(said, /The figures are the charge point operator's, as it reports the session\./);
+        assert.match(said, /It follows the live link its operator gave, which DE\*GDF passed on/);
+        assert.doesNotMatch(said, /web payment page/);
+
+        assert.ok(root.querySelector('.session-ticket'), 'it is no session through the provider any more');
+        assert.ok(root.querySelector('.btn.danger'), 'no Stop for a session that is stopped through the provider');
+
+    });
+
+    it('says that a wrong value over the live link the provider passed on stopped the session, and its station through the provider', async () => {
+
+        const wrong = wrongStartSession().liveLink!;
+
+        current = reportedSession({ status: 'stopped', endedAt: '2026-10-10T08:10:00Z', stoppedBy: 'this phone',
+                                    stoppedBecause: 'Its signed start meter value is a wrong one: The signature is not the meter\'s.',
+                                    liveLink: { ...wrong, passedOnBy: 'DE*GDF', paymentReference: 'T-9F2C41D08A7E3B65', handOver: null, webPaymentHost: null,
+                                                stopLink: null, disputeLink: null, dispute: null, paymentLink: null, payment: null,
+                                                stop: { requestedAt: '2026-10-10T08:10:01Z', requestedBy: 'this phone', accepted: true,
+                                                        answer: 'DE*GDF countersigned the stop of the token T-9F2C41D08A7E3B65.' } } });
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read', 'charging:run' ],
+                                smartphone, root => root.querySelector('.session-live-link') !== null);
+
+        const text = root.textContent!;
+
+        assert.match(text, /This phone stopped the session: its signed start meter value is a wrong one\. This phone stopped the station through DE\*GDF at/);
+        assert.match(text, /There is no dispute through DE\*GDF: take it up with DE\*GDF\./);
+        assert.doesNotMatch(text, /web payment page/);
+        assert.equal(root.querySelector('.btn.dispute'), null, 'a dispute is offered where there is none');
+        assert.equal(root.querySelector('.btn.danger'),  null, 'Stop for a session that is stopped');
+
+    });
+
     it('offers Stop while the operator has not reported charging yet', async () => {
 
         current = reportedSession({ status: 'starting', energyKWh: 0, durationSeconds: 0,

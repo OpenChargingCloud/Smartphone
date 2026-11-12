@@ -292,7 +292,10 @@ namespace cloud.charging.open.Smartphone
         /// ticket's key, and only once the provider countersigned it. One the
         /// web payment page of the operator started through the stop link the
         /// page gave, handed over with its live link or now: it charges on
-        /// until the meter signs its end.
+        /// until the meter signs its end. One started through the provider
+        /// that follows the live link the provider passed on is stopped
+        /// through the provider as any, and its live link followed until the
+        /// meter signs its end.
         /// </summary>
         /// <param name="Id">The session.</param>
         /// <param name="Who">Who asked, for the log and the session.</param>
@@ -314,7 +317,7 @@ namespace cloud.charging.open.Smartphone
 
             // Started at the web payment page of the operator: stopped through
             // the stop link it gave, and followed until the meter signs its end.
-            if (running.LiveLink is not null)
+            if (running.HandedOver is not null)
                 return await StopLiveLinkAsync(running, Who, StopLink, CancellationToken);
 
             ChargingStartReference? stopped = null;

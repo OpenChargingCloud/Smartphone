@@ -46,7 +46,7 @@ The account key never reaches the CPO. The ticket key never leaves the phone.
 | who starts | the CPO's web payment page | the app, through the EMP (OCPI `START_SESSION`) |
 | who pays | the driver, at the page | the EMP bills the account; the CPO bills the EMP |
 | what the CPO learns of the driver | what the payment tells it | the EMP, a ticket, and a token used for this start alone |
-| signed meter values reach the app | while it charges, over the live link | after it ended, in the CDR - **Open:** while it charges |
+| signed meter values reach the app | while it charges, over the live link | while it charges, over the live link of the CPO the EMP passes on, where it does - and after it ended, in the CDR |
 | what the meter signs as `ID` | the payment reference | the token of the start, or the ticket's id |
 | a limit | chosen at the page, `transactionLimit` | the ticket's limits, chosen in the app of a few values - **Open:** no CPO keeps to them yet |
 | stopping | the stop link of the page | a stop request, signed by the ticket key and countersigned by the EMP |
@@ -313,16 +313,53 @@ As for ad hoc charging, the app asks for the **proof of the station every five
 minutes** while it charges, and once more at its stop, and keeps three at
 most: the one of the start, the first after it, the latest.
 
+### Signed values while it charges: the live link the EMP passes on
+
+The OCPI session's `kwh` and `total_cost` are the CPO's word, signed by
+nobody. What the meter signs while it charges comes over a
+[Charge Transparency LiveLink](https://github.com/OpenChargingCloud/ChargyCore.NET/tree/master/documentation/ChargeTransparencyLiveLink)
+of the session, as ad hoc charging has it: the CPO gives it, and the EMP
+**passes it on** with the start - `liveLink`, its https URL or its document,
+beside `session` and `priceAgreement`.
+
+1. **[App]** takes it with the report, where the session is starting or
+   charging and follows none yet. It fetches the document where a URL came,
+   takes it only where it is a live link **of the charge point of the
+   session**, and follows it from then on - not only while a page shows the
+   session. One that can not be had, or is of another charge point, is not
+   followed, said once in the log, and asked for again with the next report.
+2. **[App]** checks **every signed value as it comes**, as of a live link
+   handed over ad hoc: signed by the key the proof of the station gives for
+   its meter, good as the meter says, and fitting the values before it. And
+   each is to name **the token of the start** as its identification (`ID`) -
+   the token the EMP countersigned and the CPO authorized the session with:
+   a value of another token, or of none, is of another session. The word of
+   the EMP is nothing of it, nor is the CPO's: a key the live link names is no
+   authority.
+3. The session **stays what the EMP reports** - its status, its cost, its
+   CDR. Until the CDR came, what it charged is what the meter signed, where
+   any value came. It is finished once the meter signed the end, though the
+   EMP may not say so yet.
+4. **A wrong value before the end stops the session at once** - and its
+   station **through the EMP**: the app signs a stop request with the ticket
+   key, as the driver's stop is ([Step 7](#step-7---app--emp--cpo-stopping)),
+   and says why in its log and on the session's page. A wrong end value stops
+   nothing.
+
+The CDR is checked on its own once it came
+([Step 8](#step-8---app-the-cdr-and-its-signed-meter-values)): what came over
+the live link takes nothing from it.
+
 **Open:**
 
-- **No signed values while it charges.** The OCPI session's `kwh` and
-  `total_cost` are the CPO's word, signed by nobody. A
-  [Charge Transparency LiveLink](https://github.com/OpenChargingCloud/ChargyCore.NET/tree/master/documentation/ChargeTransparencyLiveLink)
-  of the session, passed on by the EMP, would give them - and with them the
-  checks of every value as it comes, and a stop for a wrong one, as ad hoc
-  charging has them.
+- **How the CPO gives the EMP the live link**: a field of the OCPI session it
+  pushes, or a module of its own - and through a roaming hub, which has to pass
+  it on. Only the stand-in EMP of the app's tests passes one on today.
+- **No dispute.** A wrong value, a wrong end value, or a stream that ended with
+  no end signed is said, and there is no place in the EMP's API to dispute it
+  ([Step 10](#step-10---billing-and-disputes)).
 - **Asking, not being told.** Whether the EMP should push what it learns to the
-  app, and how.
+  app, and how. The live link itself is followed without the EMP.
 
 
 ## Step 7 - [App ↔ EMP → CPO] Stopping
@@ -339,6 +376,12 @@ most: the one of the start, the first after it, the latest.
 
 Only the holder of the ticket stops. The EMP can still stop on its own, as OCPI
 lets it, and says so by its signature alone.
+
+The app itself stops in the same way where a signed value that came over the
+live link of the session is a wrong one
+([Step 6](#step-6---app-while-it-charges)): the session is stopped on the
+phone at once, whatever becomes of the stop request. A session stopped by its
+driver is followed over its live link until the meter signs its end.
 
 **Open:** the CPO's side - stopping at the station on `STOP_SESSION` - as in
 Step 5.
@@ -451,7 +494,7 @@ account the token was made for, and bills it. The CPO's CDR names no account.
 | `charging_ticket` and `start_request` in OCPI, and passed on by a roaming hub | [Step 4](#step-4---emp--cpo-ocpi-start_session) |
 | A CSMS that starts and stops on `START_SESSION` / `STOP_SESSION`, checks tickets, and has the token signed as OCMF `ID` | [Step 5](#step-5---cpo-checks-and-the-start-at-the-station) |
 | How a CPO trusts the EMP's ticket issuer | [Step 5](#step-5---cpo-checks-and-the-start-at-the-station) |
-| Signed meter values while it charges, e.g. a live link through the EMP | [Step 6](#step-6---app-while-it-charges) |
+| The CPO's live link of a session carried to the EMP, in OCPI and through a roaming hub | [Step 6](#step-6---app-while-it-charges) |
 | The EMP pushing to the app rather than being asked | [Step 6](#step-6---app-while-it-charges) |
 | The CPO's price agreement of a session carried to the EMP, in OCPI and through a roaming hub | [Step 9](#step-9---app-the-final-price) |
 | Disputes, and the EMP's invoice compared | [Step 10](#step-10---billing-and-disputes) |
@@ -463,13 +506,14 @@ account the token was made for, and bills it. The CPO's CDR names no account.
 
 | | |
 |---|---|
-| **App** (Smartphone) | the station's proof and prices checked; an account at an EMP with an account key; a ticket per start; start and stop requests, signed and their countersignature checked; what became of a start asked of the EMP and taken only where it is of that start; the signed values of a CDR and its price checked, bound by the CPO's price agreement where the EMP passes one on |
+| **App** (Smartphone) | the station's proof and prices checked; an account at an EMP with an account key; a ticket per start; start and stop requests, signed and their countersignature checked; what became of a start asked of the EMP and taken only where it is of that start; the live link of the session followed where the EMP passes one on, its signed values checked as they come, a wrong one stopping the session through the EMP; the signed values of a CDR and its price checked, bound by the CPO's price agreement where the EMP passes one on |
 | **EMP** ([EMSP](https://github.com/OpenChargingCloud/EMSP)) | accounts, account keys, tickets; start and stop requests checked, countersigned and sent on as OCPI `START_SESSION` / `STOP_SESSION` on 2.2.1 and 2.3.0; the token of a start `ALLOWED` only for it; what became of a start, told to the app |
 | **CPO** ([CSMS](https://github.com/OpenChargingCloud/CSMSCLI)) | missing: starting and stopping on the commands, checking tickets, limits, the token in OCMF `ID` |
 | **Roaming hub** ([RoamingHub](https://github.com/OpenChargingCloud/RoamingHubCLI)) | missing: passing on commands, their results, sessions and CDRs between peers |
 
 The app is tested against a stand-in EMP whose operator reports sessions and
-CDRs with OCMF its meter signed
+CDRs with OCMF its meter signed, and passes on the live link of a stand-in
+CPO
 ([`SmartphoneTests/TestEMSP.cs`](../SmartphoneTests/TestEMSP.cs),
 [`ProviderTests.cs`](../SmartphoneTests/ProviderTests.cs)). Against the real
 EMP it gets as far as the EVSE: the EMP takes the ticket and the start
@@ -485,5 +529,5 @@ started.
 | A | [`Smartphone/Roaming/StationCheck.cs`](../Smartphone/Roaming/StationCheck.cs), [`Smartphone/Smartphone.Charging.cs`](../Smartphone/Smartphone.Charging.cs) |
 | 2 | [`Smartphone/Provider/ChargingTickets.cs`](../Smartphone/Provider/ChargingTickets.cs) |
 | 3, 7 | [`Smartphone/Provider/StartRequests.cs`](../Smartphone/Provider/StartRequests.cs) |
-| 6 | [`Smartphone/Provider/ProviderReport.cs`](../Smartphone/Provider/ProviderReport.cs), [`Smartphone/Smartphone.Evidence.cs`](../Smartphone/Smartphone.Evidence.cs) |
+| 6 | [`Smartphone/Provider/ProviderReport.cs`](../Smartphone/Provider/ProviderReport.cs), [`Smartphone/Smartphone.Evidence.cs`](../Smartphone/Smartphone.Evidence.cs); the live link: [`Smartphone/Smartphone.LiveLinks.cs`](../Smartphone/Smartphone.LiveLinks.cs), [`Smartphone/Charging/LiveLinkFollow.cs`](../Smartphone/Charging/LiveLinkFollow.cs) |
 | 8, 9 | [`Smartphone/Charging/SessionCheck.cs`](../Smartphone/Charging/SessionCheck.cs), [`SessionEvidence.cs`](../Smartphone/Charging/SessionEvidence.cs); the price agreement: [`Smartphone/Provider/ProviderReport.cs`](../Smartphone/Provider/ProviderReport.cs) |
