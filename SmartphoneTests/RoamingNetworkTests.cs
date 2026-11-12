@@ -3045,95 +3045,6 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
-        #region APaymentLinkBindsThePriceAndItsReceiptIsComparedWithTheCost()
-
-        /// <summary>
-        /// The DC EVSE is priced at a flat fee of 1.00 and 0.65 a kWh: a
-        /// session costs both, as its signed values say. Its payment link
-        /// answers nothing until the start value is signed, then the price
-        /// agreement of DE*GEF for this session and its start value, which
-        /// binds the price - and after the end the receipt of what the page
-        /// took, signed by DE*GEF with a key that may sign payments, which
-        /// holds where it is not more than the cost. A receipt of more, and a
-        /// price agreement of another start value, dispute the session through
-        /// its dispute link, with what does not hold.
-        /// </summary>
-        [Test]
-        public async Task APaymentLinkBindsThePriceAndItsReceiptIsComparedWithTheCost()
-        {
-
-            var flatAndEnergy = new JArray(new JObject(new JProperty("priceComponents", new JArray(
-                                    new JObject(new JProperty("type", "FLAT"),   new JProperty("price", 1.00m)),
-                                    new JObject(new JProperty("type", "ENERGY"), new JProperty("price", 0.65m), new JProperty("stepSize", 1))
-                                ))));
-
-            cpo     = await TestCPO.Start();
-            network = await TestRoamingNetwork.Start(DCWebPayment: $"{cpo.URL}/pay", DCPrice: flatAndEnergy);
-
-            await WithTheRoamingNetwork();
-
-            using var driver = await SignedInAs("driver1", "driver");
-
-            await Send(driver, HttpMethod.Get, "api/v1/map");
-            await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
-
-            var pool     = TestRoamingNetwork.PoolId;
-            var dc       = TestRoamingNetwork.DCEVSE;
-            var meter    = network.DCMeter;
-            var serial   = TestRoamingNetwork.DCMeterSerial;
-            var keyId    = POIPublicKey.From(network.OperatorSigning).Id;
-
-            var (status, refused) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
-                                               new { locationId = pool, evseUid = dc, liveLink = cpo.LiveLinkURL("P0"), paymentLink = "ftp://cpo.example/payments/P0" });
-
-            Assert.That(status,                             Is.EqualTo(HttpStatusCode.BadRequest), refused.ToString());
-            Assert.That(refused["error"]!.Value<String>(),  Does.Contain("is no payment link"));
-
-            // The start value, signed at a whole second - as the agreement
-            // names when charging started -: the next one, once it passed,
-            // so that the proof attested before covers it.
-            static async Task<DateTimeOffset> NextSecond()
-            {
-                var now   = DateTimeOffset.UtcNow;
-                var next  = DateTimeOffset.FromUnixTimeSeconds(now.ToUnixTimeSeconds() + 1);
-                await Task.Delay(next - now + TimeSpan.FromMilliseconds(20));
-                return next;
-            }
-
-            async Task<(String Id, String Begin, DateTimeOffset BeganAt)> Started(String Session)
-            {
-
-                var beganAt  = await NextSecond();
-                var begin    = TestRoamingNetwork.OCMF(meter, serial, TestCPO.PaymentReferenceOf(Session), (beganAt, "B", 1000.000m));
-
-                cpo.Send(begin);
-
-                var (startStatus, started) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
-                                                         new { locationId = pool, evseUid = dc, handOver = cpo.HandOverURL(Session) });
-
-                Assert.That(startStatus, Is.EqualTo(HttpStatusCode.Created), started.ToString());
-
-                var id = started["id"]!.Value<String>()!;
-
-                await SessionWhen(driver, id, json => json["liveLink"]?["start"] is JObject start && start["holds"]?.Value<Boolean?>() == true && json["check"]?["price"] is JObject);
-
-                return (id, begin, beganAt);
-
-            }
-
-            JObject Agreement(String Begin, DateTimeOffset BeganAt, String PriceStatementDigest)
-
-                => SessionPriceAgreement.Create(network.OperatorSigning,
-                                                keyId,
-                                                COSEAlgorithm.ES256,
-                                                TestRoamingNetwork.NetworkId,
-                                                dc,
-                                                serial,
-                                                BeganAt,
-                                                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(Begin))),
-                                                TestRoamingNetwork.DCTariff,
-                                                PriceStatementDigest,
-                                                TestRoamingNetwork.GEF,
         #region TheWebPaymentPageSendsTheDriverBackWithItsHandOver()
 
         /// <summary>
@@ -3225,6 +3136,95 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
+        #region APaymentLinkBindsThePriceAndItsReceiptIsComparedWithTheCost()
+
+        /// <summary>
+        /// The DC EVSE is priced at a flat fee of 1.00 and 0.65 a kWh: a
+        /// session costs both, as its signed values say. Its payment link
+        /// answers nothing until the start value is signed, then the price
+        /// agreement of DE*GEF for this session and its start value, which
+        /// binds the price - and after the end the receipt of what the page
+        /// took, signed by DE*GEF with a key that may sign payments, which
+        /// holds where it is not more than the cost. A receipt of more, and a
+        /// price agreement of another start value, dispute the session through
+        /// its dispute link, with what does not hold.
+        /// </summary>
+        [Test]
+        public async Task APaymentLinkBindsThePriceAndItsReceiptIsComparedWithTheCost()
+        {
+
+            var flatAndEnergy = new JArray(new JObject(new JProperty("priceComponents", new JArray(
+                                    new JObject(new JProperty("type", "FLAT"),   new JProperty("price", 1.00m)),
+                                    new JObject(new JProperty("type", "ENERGY"), new JProperty("price", 0.65m), new JProperty("stepSize", 1))
+                                ))));
+
+            cpo     = await TestCPO.Start();
+            network = await TestRoamingNetwork.Start(DCWebPayment: $"{cpo.URL}/pay", DCPrice: flatAndEnergy);
+
+            await WithTheRoamingNetwork();
+
+            using var driver = await SignedInAs("driver1", "driver");
+
+            await Send(driver, HttpMethod.Get, "api/v1/map");
+            await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            var pool     = TestRoamingNetwork.PoolId;
+            var dc       = TestRoamingNetwork.DCEVSE;
+            var meter    = network.DCMeter;
+            var serial   = TestRoamingNetwork.DCMeterSerial;
+            var keyId    = POIPublicKey.From(network.OperatorSigning).Id;
+
+            var (status, refused) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                               new { locationId = pool, evseUid = dc, liveLink = cpo.LiveLinkURL("P0"), paymentLink = "ftp://cpo.example/payments/P0" });
+
+            Assert.That(status,                             Is.EqualTo(HttpStatusCode.BadRequest), refused.ToString());
+            Assert.That(refused["error"]!.Value<String>(),  Does.Contain("is no payment link"));
+
+            // The start value, signed at a whole second - as the agreement
+            // names when charging started -: the next one, once it passed,
+            // so that the proof attested before covers it.
+            static async Task<DateTimeOffset> NextSecond()
+            {
+                var now   = DateTimeOffset.UtcNow;
+                var next  = DateTimeOffset.FromUnixTimeSeconds(now.ToUnixTimeSeconds() + 1);
+                await Task.Delay(next - now + TimeSpan.FromMilliseconds(20));
+                return next;
+            }
+
+            async Task<(String Id, String Begin, DateTimeOffset BeganAt)> Started(String Session)
+            {
+
+                var beganAt  = await NextSecond();
+                var begin    = TestRoamingNetwork.OCMF(meter, serial, TestCPO.PaymentReferenceOf(Session), (beganAt, "B", 1000.000m));
+
+                cpo.Send(begin);
+
+                var (startStatus, started) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                                         new { locationId = pool, evseUid = dc, handOver = cpo.HandOverURL(Session) });
+
+                Assert.That(startStatus, Is.EqualTo(HttpStatusCode.Created), started.ToString());
+
+                var id = started["id"]!.Value<String>()!;
+
+                await SessionWhen(driver, id, json => json["liveLink"]?["start"] is JObject start && start["holds"]?.Value<Boolean?>() == true && json["check"]?["price"] is JObject);
+
+                return (id, begin, beganAt);
+
+            }
+
+            JObject Agreement(String Begin, DateTimeOffset BeganAt, String PriceStatementDigest)
+
+                => SessionPriceAgreement.Create(network.OperatorSigning,
+                                                keyId,
+                                                COSEAlgorithm.ES256,
+                                                TestRoamingNetwork.NetworkId,
+                                                dc,
+                                                serial,
+                                                BeganAt,
+                                                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(Begin))),
+                                                TestRoamingNetwork.DCTariff,
+                                                PriceStatementDigest,
+                                                TestRoamingNetwork.GEF,
                                                 SignedAt: BeganAt).JSON;
 
             JObject Receipt(String Session, Decimal Amount)
