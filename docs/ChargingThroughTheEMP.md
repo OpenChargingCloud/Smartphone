@@ -453,7 +453,6 @@ account the token was made for, and bills it. The CPO's CDR names no account.
 | How a CPO trusts the EMP's ticket issuer | [Step 5](#step-5---cpo-checks-and-the-start-at-the-station) |
 | Signed meter values while it charges, e.g. a live link through the EMP | [Step 6](#step-6---app-while-it-charges) |
 | The EMP pushing to the app rather than being asked | [Step 6](#step-6---app-while-it-charges) |
-| Status, error flags and order of the values of a CDR | [Step 8](#step-8---app-the-cdr-and-its-signed-meter-values) |
 | The CPO's price agreement of a session carried to the EMP, in OCPI and through a roaming hub | [Step 9](#step-9---app-the-final-price) |
 | Disputes, and the EMP's invoice compared | [Step 10](#step-10---billing-and-disputes) |
 | How many minutes `at` and `iat` may be off at the EMP and the CPO | [the draft](RemoteStartWithChargingTickets.md#open-points) |
