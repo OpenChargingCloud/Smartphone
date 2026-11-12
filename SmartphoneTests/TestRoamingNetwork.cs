@@ -325,6 +325,36 @@ namespace cloud.charging.open.Smartphone.Tests
                                           String?                                                          Identification,
                                           String                                                           Status,
                                           params (DateTimeOffset At, String Transaction, Decimal EnergyKWh)[]  Readings)
+
+            => OCMFOf(Meter, Serial, Identification, Status, null, Readings);
+
+        #endregion
+
+        #region (static) OCMFOfErrorFlags(Meter, Serial, Identification, ErrorFlags, Readings)
+
+        /// <summary>
+        /// A meter value in OCMF, as <see cref="OCMF"/> - its readings good
+        /// ("ST": "G"), and with the given error flags ("EF"), as the meter
+        /// flags them: "E" of the energy, "t" of the time.
+        /// </summary>
+        public static String OCMFOfErrorFlags(ECPrivateKeyParameters                                           Meter,
+                                              String                                                           Serial,
+                                              String?                                                          Identification,
+                                              String                                                           ErrorFlags,
+                                              params (DateTimeOffset At, String Transaction, Decimal EnergyKWh)[]  Readings)
+
+            => OCMFOf(Meter, Serial, Identification, "G", ErrorFlags, Readings);
+
+        #endregion
+
+        #region (private static) OCMFOf(Meter, Serial, Identification, Status, ErrorFlags, Readings)
+
+        private static String OCMFOf(ECPrivateKeyParameters                                           Meter,
+                                     String                                                           Serial,
+                                     String?                                                          Identification,
+                                     String                                                           Status,
+                                     String?                                                          ErrorFlags,
+                                     (DateTimeOffset At, String Transaction, Decimal EnergyKWh)[]     Readings)
         {
 
             var json = new JObject(
@@ -344,6 +374,7 @@ namespace cloud.charging.open.Smartphone.Tests
                                   new JProperty("RI",  "1-b:1.8.0"),
                                   new JProperty("RU",  "kWh"),
                                   new JProperty("RT",  "DC"),
+                                  new JProperty("EF",  ErrorFlags ?? ""),
                                   new JProperty("ST",  Status)
                               ))))
                           );

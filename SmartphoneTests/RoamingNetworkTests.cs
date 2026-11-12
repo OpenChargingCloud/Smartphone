@@ -2311,13 +2311,14 @@ namespace cloud.charging.open.Smartphone.Tests
         /// A signed meter value of a charge detail record its meter did sign
         /// holds no more than one of a live link where the meter says it is
         /// not good, or where it does not fit the others: a status other than
-        /// "G", the meter counting backwards, a value measured after the end
+        /// "G", an error flagged, the meter counting backwards, a value measured after the end
         /// of the transaction, a begin of the transaction said twice. That
         /// value is not verified, and says why; the others are, and the
         /// values of the record as a whole are not.
         /// </summary>
         [TestCase("status",     1, "The meter says its end value is not good: its status is \"M\"")]
         [TestCase("backwards",  1, "The meter counts backwards: 990 kWh at ")]
+        [TestCase("errorFlags", 1, "The meter flags an error of its end value: \"E\"")]
         [TestCase("afterEnd",   2, ", after the end of the transaction at ")]
         [TestCase("beginTwice", 1, "It says the transaction began with 1001 kWh at ")]
         public async Task AMeterValueOfAChargeDetailRecordThatDoesNotFitDoesNotHold(String What, Int32 Wrong, String Error)
@@ -2349,6 +2350,9 @@ namespace cloud.charging.open.Smartphone.Tests
                                              ("End",          TestRoamingNetwork.OCMFOfStatus(meter, serial, token, "M", (end, "E", 1012.500m)))),
 
                 "backwards"  => SignedValues(start,
+                "errorFlags" => SignedValues(start,
+                                             ("End",          TestRoamingNetwork.OCMFOfErrorFlags(meter, serial, token, "E", (end, "E", 1012.500m)))),
+
                                              ("End",          TestRoamingNetwork.OCMF(meter, serial, token, (end, "E",  990.000m)))),
 
                 "afterEnd"   => SignedValues(start,
