@@ -349,6 +349,31 @@ export interface ChargingTicketReference {
     keyThumbprint:      string;
     /** The SHA-256 of the certificate of the provider's ticket issuer, hex. */
     issuerFingerprint:  string;
+    /** The limits the driver chose for this start, as the ticket says them. */
+    limits?:            TicketLimits;
+}
+
+/** The limits of a charging ticket: at most so much energy, in kWh, and at most so long, in minutes. */
+export interface TicketLimits {
+    kWh?:      number;
+    minutes?:  number;
+}
+
+/** The limits of energy and of time a driver chooses among: the same few for everybody, as a limit of one's own tells its driver apart. */
+export const ticketLimitChoices = { kWh: [ 10, 20, 40, 60 ], minutes: [ 30, 60, 120, 240 ] } as const;
+
+/** One limit of a charging ticket against what was charged. */
+export interface TicketLimitValue {
+    kind:    'energy' | 'time';
+    /** The limit: in kWh, or in seconds. */
+    limit:   number;
+    unit:    string;
+    /** What was charged, in its unit; null where nothing says. */
+    value:   number | null;
+    /** Whether the value is what the meter signed - else the word of the provider, or of this phone. */
+    signed:  boolean;
+    /** Whether the limit was kept; null where nothing says what was charged. */
+    kept:    boolean | null;
 }
 
 /** What a session keeps of its start through the e-mobility provider, as the provider countersigned it - and of its stop. */
@@ -420,6 +445,8 @@ export interface ChargingSession {
     provider?:        ProviderReport;
     /** The charging ticket it was started with, where the phone has an e-mobility provider. */
     ticket?:          ChargingTicketReference;
+    /** The limits of its ticket against what was charged, where the driver chose any. */
+    ticketLimits?:    TicketLimitValue[];
     start?:           ChargingStartReference;
     /** At a station of a roaming network: its meter values and its price, checked against what it kept of the station. */
     check?:           SessionCheck;
@@ -769,7 +796,8 @@ export const api = {
     charging: {
         list:         (onlyActive = false)                  => request<ChargingSessions>('GET',  `/charging/sessions${onlyActive ? '?active=true' : ''}`),
         get:          (id: string)                          => request<ChargingSession> ('GET',  session(id)),
-        start:        (locationId: string, evseUid: string) => request<ChargingSession> ('POST', '/charging/sessions', { locationId, evseUid }),
+        start:        (locationId: string, evseUid: string, limit?: TicketLimits) =>
+                          request<ChargingSession>('POST', '/charging/sessions', limit !== undefined ? { locationId, evseUid, limit } : { locationId, evseUid }),
         /**
          * Take over the live link the web payment page of the operator gave - its https URL, or its document - of the session it started there,
          * with the stop link and the dispute link it gave, the reference of the payment it took and the limit the driver chose there, where there are.

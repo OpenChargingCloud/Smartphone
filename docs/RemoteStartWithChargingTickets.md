@@ -67,7 +67,12 @@ good for an hour, made right before the start.
 
 **Nothing that tells drivers apart.** `nbf` is now, `exp` a fixed time after
 it, and the limits are the same few values for everybody (or none): a ticket
-with unusual limits is a fingerprint of its own.
+with unusual limits is a fingerprint of its own. The app offers `kWh` of 10,
+20, 40 or 60 and `minutes` of 30, 60, 120 or 240, each or both, refuses any
+other, and writes no `kW`. It keeps the limits with the session and compares
+what was charged with them - what the EMSP reports until the CDR came, then
+what the meter signed (section 10) -, kept where not over a limit by more than
+a hundredth.
 
 
 ## 3. The start request: signed by the ticket key, and by the EMSP

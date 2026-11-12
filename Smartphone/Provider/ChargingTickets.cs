@@ -51,7 +51,8 @@ namespace cloud.charging.open.Smartphone.Provider
     /// </para>
     /// <para>
     /// One ticket per start: a ticket used twice links two sessions at the
-    /// charge point operator. Without limits, and good for an hour: a ticket
+    /// charge point operator. Good for an hour, and without limits or with
+    /// those of a few values the driver chose among (TicketLimits): a ticket
     /// unlike every other one is a fingerprint of its own.
     /// </para>
     /// </remarks>
@@ -115,22 +116,25 @@ namespace cloud.charging.open.Smartphone.Provider
         #endregion
 
 
-        #region Payload(Id, EMSP, TicketKey, NotBefore, NotAfter)
+        #region Payload(Id, EMSP, TicketKey, NotBefore, NotAfter, Limits = null)
 
         /// <summary>
         /// The payload of a ticket, as deterministic CBOR:
-        /// { "typ", "v", "id", "emsp", "key", "nbf", "exp" } - and no limits.
+        /// { "typ", "v", "id", "emsp", "key", "nbf", "exp" } - and "limits",
+        /// { "kWh", "minutes" }, where the driver chose any.
         /// </summary>
         /// <param name="Id">16 random bytes.</param>
         /// <param name="EMSP">The provider it is good with, as it names itself: "DE*GDF".</param>
         /// <param name="TicketKey">The ticket's key.</param>
         /// <param name="NotBefore">From when it is good.</param>
         /// <param name="NotAfter">Until when it is good.</param>
+        /// <param name="Limits">The limits the driver chose for this start, of the few everybody chooses among.</param>
         public static Byte[] Payload(Byte[]          Id,
                                      String          EMSP,
                                      ECDsa           TicketKey,
                                      DateTimeOffset  NotBefore,
-                                     DateTimeOffset  NotAfter)
+                                     DateTimeOffset  NotAfter,
+                                     TicketLimits?   Limits  = null)
         {
 
             var key = TicketKey.ExportParameters(false);
@@ -147,7 +151,10 @@ namespace cloud.charging.open.Smartphone.Provider
                                                              new (CBORValue.FromInt64(-3), CBORValue.FromBytes(key.Q.Y!))
                                                          ])),
                        new (CBORValue.FromText("nbf"),   CBORValue.FromInt64(NotBefore.ToUnixTimeSeconds())),
-                       new (CBORValue.FromText("exp"),   CBORValue.FromInt64(NotAfter. ToUnixTimeSeconds()))
+                       new (CBORValue.FromText("exp"),   CBORValue.FromInt64(NotAfter. ToUnixTimeSeconds())),
+                       .. (Limits is not null
+                               ? new KeyValuePair<CBORValue, CBORValue>[] { new (CBORValue.FromText("limits"), Limits.ToCBOR()) }
+                               : [])
                    ]).ToByteArray(CBORWriterOptions.Canonical);
 
         }

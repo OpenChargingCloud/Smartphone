@@ -1,6 +1,6 @@
 import * as L from 'leaflet';
 
-import { api, type ChargingLocation, type EVSE, type LocationCheck, type MapData, type TransactionLimit } from '../api/client';
+import { api, ticketLimitChoices, type ChargingLocation, type EVSE, type LocationCheck, type MapData, type TicketLimits, type TransactionLimit } from '../api/client';
 import { auth } from '../auth';
 import { withHandOverTo } from './handOver';
 import { availability, maxPowerKW, positionOf, search, standardWord, stationStatus, statusClass, statusWord, webPaymentOf, webPaymentWord } from '../map/stations';
@@ -64,6 +64,26 @@ export const mapPage: Page = {
         const chosen   = new Map<string, string>();
         const starting = new Set<string>();
         const failed   = new Map<string, string>();
+
+        // Whether this phone has an account at an e-mobility provider: then a
+        // start is one through it, with a charging ticket - and the limits the
+        // driver chooses here are that ticket's.
+        let hasProvider  = false;
+        let limitKWh:     number | undefined = undefined;
+        let limitMinutes: number | undefined = undefined;
+
+        if (mayCharge)
+            void api.provider.get().then(settings => {
+
+                if (cancelled || settings.account === null)
+                    return;
+
+                hasProvider = true;
+
+                for (const id of popups.keys())
+                    drawPopup(id);
+
+            }).catch(() => { /* Not allowed to see it, or none there: no limits to choose. */ });
 
         // The charge point a driver went to pay for at the web payment page,
         // by its station: the one its live link is handed over at, once the
@@ -326,6 +346,25 @@ export const mapPage: Page = {
                     <ul class="evse-list">
                         ${location.evses.map(evse => evseView(location, evse, pick, checked))}
                     </ul>
+
+                    ${mayCharge && hasProvider ? html`
+                        <div class="ticket-limits">
+                            <label>At most
+                                <select class="ticket-limit-energy" ?disabled=${busy}
+                                        @change=${(event: Event) => { limitKWh = chosenLimit(event); }}>
+                                    <option value="" ?selected=${limitKWh === undefined}>any energy</option>
+                                    ${ticketLimitChoices.kWh.map(choice => html`<option value=${choice} ?selected=${limitKWh === choice}>${choice} kWh</option>`)}
+                                </select>
+                            </label>
+                            <label>and
+                                <select class="ticket-limit-time" ?disabled=${busy}
+                                        @change=${(event: Event) => { limitMinutes = chosenLimit(event); }}>
+                                    <option value="" ?selected=${limitMinutes === undefined}>any time</option>
+                                    ${ticketLimitChoices.minutes.map(choice => html`<option value=${choice} ?selected=${limitMinutes === choice}>${choice < 60 ? `${choice} min` : `${choice / 60} h`}</option>`)}
+                                </select>
+                            </label>
+                        </div>
+                    ` : nothing}
 
                     ${mayCharge ? html`
                         <button type="button" class="btn primary charge-now"
@@ -644,6 +683,27 @@ export const mapPage: Page = {
         }
 
 
+        /** The limit a select was set to: one of its choices, or none. */
+        function chosenLimit(event: Event): number | undefined {
+
+            const value = (event.target as HTMLSelectElement).value;
+
+            return value === '' ? undefined : Number(value);
+
+        }
+
+        /** The limits chosen for the next start through the provider, or none. */
+        function ticketLimits(): TicketLimits | undefined {
+
+            if (!hasProvider || (limitKWh === undefined && limitMinutes === undefined))
+                return undefined;
+
+            return { ...(limitKWh     !== undefined ? { kWh:     limitKWh     } : {}),
+                     ...(limitMinutes !== undefined ? { minutes: limitMinutes } : {}) };
+
+        }
+
+
         async function chargeNow(location: ChargingLocation, evseUid: string | undefined): Promise<void> {
 
             if (evseUid === undefined || starting.has(location.id))
@@ -656,7 +716,7 @@ export const mapPage: Page = {
             try
             {
 
-                const session = await api.charging.start(location.id, evseUid);
+                const session = await api.charging.start(location.id, evseUid, ticketLimits());
 
                 if (!cancelled)
                     navigate(`/charging?session=${encodeURIComponent(session.id)}`);

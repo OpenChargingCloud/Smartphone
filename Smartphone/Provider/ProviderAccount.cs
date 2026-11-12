@@ -231,7 +231,8 @@ namespace cloud.charging.open.Smartphone.Provider
                                       String          EVSEId,
                                       DateTimeOffset  IssuedAt,
                                       Byte[]?         Start  = null,
-                                      Byte[]?         Stop   = null)
+                                      Byte[]?         Stop   = null,
+                                      TicketLimits?   Limits = null)
     {
 
         /// <summary>
@@ -239,7 +240,7 @@ namespace cloud.charging.open.Smartphone.Provider
         /// </summary>
         public ChargingTicketReference Reference
 
-            => new (Id, Party, NotBefore, NotAfter, KeyThumbprint, IssuerFingerprint);
+            => new (Id, Party, NotBefore, NotAfter, KeyThumbprint, IssuerFingerprint, Limits);
 
         /// <summary>
         /// Its key.
@@ -273,6 +274,9 @@ namespace cloud.charging.open.Smartphone.Provider
             if (Stop is not null)
                 json.Add(new JProperty("stop",  Convert.ToBase64String(Stop)));
 
+            if (Limits is not null)
+                json.Add(new JProperty("limits", Limits.ToJSON()));
+
             return json;
 
         }
@@ -305,7 +309,8 @@ namespace cloud.charging.open.Smartphone.Provider
                                           Text ("evseId"),
                                           Time ("issuedAt"),
                                           Bytes("start"),
-                                          Bytes("stop"));
+                                          Bytes("stop"),
+                                          TicketLimits.TryParseStorage(JSON["limits"]));
 
                 // A key that is the ticket's, or none: it is what proves it.
                 using var key = Ticket.TicketKey();
@@ -339,17 +344,29 @@ namespace cloud.charging.open.Smartphone.Provider
                                                  DateTimeOffset  NotBefore,
                                                  DateTimeOffset  NotAfter,
                                                  String          KeyThumbprint,
-                                                 String          IssuerFingerprint)
+                                                 String          IssuerFingerprint,
+                                                 TicketLimits?   Limits  = null)
     {
 
         public JObject ToJSON()
+        {
 
-            => new (new JProperty("id",                 Id),
-                    new JProperty("party",              Party),
-                    new JProperty("notBefore",          NotBefore.ToString("o")),
-                    new JProperty("notAfter",           NotAfter. ToString("o")),
-                    new JProperty("keyThumbprint",      KeyThumbprint),
-                    new JProperty("issuerFingerprint",  IssuerFingerprint));
+            var json = new JObject(
+                           new JProperty("id",                 Id),
+                           new JProperty("party",              Party),
+                           new JProperty("notBefore",          NotBefore.ToString("o")),
+                           new JProperty("notAfter",           NotAfter. ToString("o")),
+                           new JProperty("keyThumbprint",      KeyThumbprint),
+                           new JProperty("issuerFingerprint",  IssuerFingerprint)
+                       );
+
+            // The limits the driver chose for this start, as the ticket says them.
+            if (Limits is not null)
+                json.Add(new JProperty("limits", Limits.ToJSON()));
+
+            return json;
+
+        }
 
         public static ChargingTicketReference? TryParse(JToken? JSON)
         {
@@ -363,7 +380,7 @@ namespace cloud.charging.open.Smartphone.Provider
                !DateTimeOffset.TryParse(json.Value<String>("notAfter"),  CultureInfo.InvariantCulture, DateTimeStyles.None, out var notAfter))
                 return null;
 
-            return new ChargingTicketReference(id, party, notBefore, notAfter, key, issuer);
+            return new ChargingTicketReference(id, party, notBefore, notAfter, key, issuer, TicketLimits.TryParseStorage(json["limits"]));
 
         }
 

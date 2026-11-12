@@ -416,17 +416,19 @@ namespace cloud.charging.open.Smartphone
         #endregion
 
 
-        #region TicketForStartAsync(EVSEId, CancellationToken)
+        #region TicketForStartAsync(EVSEId, Limits = null, CancellationToken = default)
 
         /// <summary>
         /// A charging ticket for one start, from the e-mobility provider: a key
         /// made for it alone, the ticket good from now for an hour, signed by
         /// that key and the phone's account key - and back from the provider
         /// signed by its key and the provider's, the account's signature gone.
-        /// Kept, with its key.
+        /// Kept, with its key. With the limits the driver chose for this
+        /// start, where any: part of what both sign.
         /// </summary>
         public async Task<(IssuedTicket? Ticket, String? Error)> TicketForStartAsync(String             EVSEId,
-                                                                                    CancellationToken  CancellationToken = default)
+                                                                                    TicketLimits?      Limits             = null,
+                                                                                    CancellationToken  CancellationToken  = default)
         {
 
             if (provider is not ProviderAccount account)
@@ -438,7 +440,7 @@ namespace cloud.charging.open.Smartphone
 
             var now       = DateTimeOffset.FromUnixTimeSeconds(TimeProvider.GetUtcNow().ToUnixTimeSeconds());
             var id        = RandomNumberGenerator.GetBytes(16);
-            var payload   = ChargingTickets.Payload(id, account.Party, ticketKey, now, now + ChargingTickets.Validity);
+            var payload   = ChargingTickets.Payload(id, account.Party, ticketKey, now, now + ChargingTickets.Validity, Limits);
             var kid       = Convert.FromHexString(account.AccountCertificateId);
             var request   = ChargingTickets.Request(payload, ticketKey, accountKey, kid);
 
@@ -462,7 +464,8 @@ namespace cloud.charging.open.Smartphone
                                           ChargingTickets.Thumbprint(ticketKey),
                                           Convert.ToHexStringLower(SHA256.HashData(issuer.RawData)),
                                           EVSEId,
-                                          TimeProvider.GetUtcNow());
+                                          TimeProvider.GetUtcNow(),
+                                          Limits: Limits);
 
             // Its key signs what is done with the ticket from now on: lost, and
             // the ticket is nobody's.
@@ -471,7 +474,7 @@ namespace cloud.charging.open.Smartphone
             if (!TryWriteOwnerOnly(TicketFile(ticket.Id), ticket.ToStorageJSON(), out var error))
                 return (null, $"The charging ticket for {EVSEId} could not be kept, and with it its key: {error}");
 
-            Log.Info($"{account.Party} issued the charging ticket {ticket.Id} for {EVSEId}, good until {ticket.NotAfter:o}: its key {ticket.KeyThumbprint[..16]}…, " +
+            Log.Info($"{account.Party} issued the charging ticket {ticket.Id} for {EVSEId}, good until {ticket.NotAfter:o}{(Limits is not null ? $" and limited to {Limits.InWords}" : "")}: its key {ticket.KeyThumbprint[..16]}…, " +
                      "signed by the provider's ticket issuer and not by the account.",
                      "provider", "charging");
 

@@ -416,6 +416,32 @@ describe('a charging session', () => {
 
     });
 
+    it('shows the limits of its charging ticket against what was charged, and says which is over its limit', async () => {
+
+        current = session({ status: 'stopped', endedAt: '2026-10-10T08:10:00Z', stoppedBy: 'root',
+                            ticket: { id: '9f2c41d08a7e3b65c0ffee0123456789', party: 'DE*GDF',
+                                      notBefore: '2026-10-10T08:00:00Z', notAfter: '2026-10-10T09:00:00Z',
+                                      keyThumbprint: '6cab95a41a13b2c42f552b7c81248078b3f319afe7d3caf133bc4b4dbead1605',
+                                      issuerFingerprint: '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0',
+                                      limits: { kWh: 10, minutes: 30 } },
+                            ticketLimits: [ { kind: 'energy', limit: 10,   unit: 'kWh', value: 12.5, signed: true,  kept: false },
+                                            { kind: 'time',   limit: 1800, unit: 's',   value: 600,  signed: false, kept: true  } ] });
+
+        const root = await open(sessionPage, `/charging/sessions/${current.id}`, [ 'charging:read' ],
+                                smartphone, root => root.querySelector('.session-ticket .ticket-limits') !== null);
+
+        const ticket = root.querySelector('.session-ticket')!;
+        const limits = [ ...ticket.querySelectorAll('.ticket-limits li') ];
+
+        assert.match(ticket.textContent!, /Limited to\s*10 kWh, 30 min/);
+        assert.equal(limits.length, 2);
+        assert.equal(limits[0]!.className, 'exceeded');
+        assert.match(limits[0]!.textContent!, /Limit 10 kWh\s+12[.,]5 kWh - over its limit, as its meter signed/);
+        assert.equal(limits[1]!.className, 'kept');
+        assert.match(limits[1]!.textContent!, /Limit 30 min 00 s\s+10 min 00 s, as reported so far, signed by nobody/);
+
+    });
+
     it("shows a session the provider reports with the operator's figures, and no power, target or time it is full at", async () => {
 
         current = reportedSession();

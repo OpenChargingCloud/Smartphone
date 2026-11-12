@@ -99,7 +99,7 @@ namespace cloud.charging.open.Smartphone
     public partial class Smartphone
     {
 
-        #region StartChargingAsync(LocationId, EVSEUid, Who, CancellationToken = default)
+        #region StartChargingAsync(LocationId, EVSEUid, Who, Limits = null, CancellationToken = default)
 
         /// <summary>
         /// Start charging at an EVSE of a station of the map. At a station of a
@@ -114,12 +114,20 @@ namespace cloud.charging.open.Smartphone
         /// <param name="LocationId">The station, by the id the map gave it.</param>
         /// <param name="EVSEUid">Its EVSE, by the uid the map gave it.</param>
         /// <param name="Who">Who asked, for the log and the session.</param>
+        /// <param name="Limits">The limits the driver chose for this start: those of its charging ticket, and so of a start through a provider alone.</param>
         /// <param name="CancellationToken">To stop asking the provider.</param>
         public async Task<ChargingStart> StartChargingAsync(String             LocationId,
                                                             String             EVSEUid,
                                                             String             Who,
-                                                            CancellationToken  CancellationToken = default)
+                                                            TicketLimits?      Limits             = null,
+                                                            CancellationToken  CancellationToken  = default)
         {
+
+            // A limit is one of a charging ticket: without a provider there is
+            // none, and nobody who would keep to it.
+            if (Limits is not null && ProviderAccount is null)
+                return ChargingStart.Refused(ChargingRefusal.Conflict,
+                                             "A limit is one of a charging ticket, and this phone has no account at an e-mobility provider to ask for one.");
 
             var network   = RoamingNetwork;
             var anchor    = network.TrustAnchor;
@@ -179,7 +187,7 @@ namespace cloud.charging.open.Smartphone
                 if (statusOf(evse, now) is var status && status != EVSEStatus.Available && status != EVSEStatus.Unknown)
                     return ChargingStart.Refused(ChargingRefusal.Conflict, $"{evse.EVSEId} at {location.Name} is {EVSEStatus.InWords(status)}, not available.");
 
-                (ticket, var problem) = await TicketForStartAsync(evse.EVSEId, CancellationToken);
+                (ticket, var problem) = await TicketForStartAsync(evse.EVSEId, Limits, CancellationToken);
 
                 if (ticket is null)
                 {
@@ -220,7 +228,7 @@ namespace cloud.charging.open.Smartphone
             Log.Notice($"'{Who}' started charging at {location.Name}, {evse.EVSEId}, with {session.PowerKW:0.#} kW until {session.TargetEnergyKWh:0.#} kWh" +
                        (anchor is not null ? $" for {session.PricePerKWh:0.00##} {session.Currency} per kWh, as its checked proof says" : "") +
                        (ticket is not null && start is not null
-                            ? $", through {ticket.Party} with the charging ticket {ticket.Id} and the token {start.Token} - as {ticket.Party} reports it, simulated until it does"
+                            ? $", through {ticket.Party} with the charging ticket {ticket.Id}{(Limits is not null ? $", limited to {Limits.InWords}," : "")} and the token {start.Token} - as {ticket.Party} reports it, simulated until it does"
                             :  " - simulated: no e-mobility provider was asked") +
                        $". The session is {session.Id}.",
                        "charging", "web");

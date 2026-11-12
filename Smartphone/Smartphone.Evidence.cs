@@ -24,6 +24,7 @@ using Newtonsoft.Json.Linq;
 
 using cloud.charging.open.Smartphone.Charging;
 using cloud.charging.open.Smartphone.Map;
+using cloud.charging.open.Smartphone.Provider;
 using cloud.charging.open.Smartphone.Roaming;
 
 #endregion
@@ -67,10 +68,33 @@ namespace cloud.charging.open.Smartphone
                                    DateTimeOffset   Now)
         {
 
-            var json = Session.ToJSON(Now);
+            var json   = Session.ToJSON(Now);
+            var check  = CheckOf(Session, Now);
 
-            if (CheckOf(Session, Now) is SessionCheck check)
+            if (check is not null)
                 json.Add(new JProperty("check", check.ToJSON()));
+
+            // The limits of its charging ticket against what was charged: what
+            // its meter signed, once its charge detail record came and its
+            // values hold - until then what the provider reports, or what this
+            // phone counts.
+            if (Session.Ticket?.Limits is TicketLimits limits)
+            {
+
+                var signed   = check is { MeterValuesVerified: true, SignedEnergyKWh: not null }
+                                   ? check
+                                   : null;
+
+                var seconds  = signed is not null
+                                   ? (Decimal) Math.Round((signed.EndReading!.MeasuredAt - signed.StartReading!.MeasuredAt).TotalSeconds)
+                                   : (Decimal) Math.Round(((Session.EndedAt(Now) ?? Now) - Session.StartedAt).TotalSeconds);
+
+                json.Add(new JProperty("ticketLimits",
+                                       new JArray(limits.Compared(signed?.SignedEnergyKWh ?? Session.EnergyAt(Now), signed is not null,
+                                                                  Math.Max(0m, seconds),                              signed is not null).
+                                                         Select(limit => limit.ToJSON()))));
+
+            }
 
             return json;
 

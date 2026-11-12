@@ -260,9 +260,10 @@ namespace cloud.charging.open.Smartphone.Tests
         /// administrator, the driver, the session and the token of its start -
         /// started in a second after the one its price was stated in, where
         /// asked to: the provider countersigns to the second, and a price
-        /// agreement names that second as its start.
+        /// agreement names that second as its start - and with the limits of
+        /// its charging ticket, where given.
         /// </summary>
-        private async Task<(HttpClient Admin, HttpClient Driver, JObject Session, String Token)> ChargingThroughTheProvider(Boolean ASecondAfterItsPrice = false)
+        private async Task<(HttpClient Admin, HttpClient Driver, JObject Session, String Token)> ChargingThroughTheProvider(Boolean ASecondAfterItsPrice = false, Object? Limit = null)
         {
 
             emsp = await TestEMSP.Start();
@@ -284,7 +285,7 @@ namespace cloud.charging.open.Smartphone.Tests
 
             Assert.That(check["verified"]!.Value<Boolean>(), Is.True, check.ToString());
 
-            (status, var session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE });
+            (status, var session) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions", new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, limit = Limit });
 
             Assert.That(status, Is.EqualTo(HttpStatusCode.Created), session.ToString());
 
@@ -2317,8 +2318,8 @@ namespace cloud.charging.open.Smartphone.Tests
         /// values of the record as a whole are not.
         /// </summary>
         [TestCase("status",     1, "The meter says its end value is not good: its status is \"M\"")]
-        [TestCase("backwards",  1, "The meter counts backwards: 990 kWh at ")]
         [TestCase("errorFlags", 1, "The meter flags an error of its end value: \"E\"")]
+        [TestCase("backwards",  1, "The meter counts backwards: 990 kWh at ")]
         [TestCase("afterEnd",   2, ", after the end of the transaction at ")]
         [TestCase("beginTwice", 1, "It says the transaction began with 1001 kWh at ")]
         public async Task AMeterValueOfAChargeDetailRecordThatDoesNotFitDoesNotHold(String What, Int32 Wrong, String Error)
@@ -2349,10 +2350,10 @@ namespace cloud.charging.open.Smartphone.Tests
                 "status"     => SignedValues(start,
                                              ("End",          TestRoamingNetwork.OCMFOfStatus(meter, serial, token, "M", (end, "E", 1012.500m)))),
 
-                "backwards"  => SignedValues(start,
                 "errorFlags" => SignedValues(start,
                                              ("End",          TestRoamingNetwork.OCMFOfErrorFlags(meter, serial, token, "E", (end, "E", 1012.500m)))),
 
+                "backwards"  => SignedValues(start,
                                              ("End",          TestRoamingNetwork.OCMF(meter, serial, token, (end, "E",  990.000m)))),
 
                 "afterEnd"   => SignedValues(start,
@@ -2393,6 +2394,173 @@ namespace cloud.charging.open.Smartphone.Tests
                 Assert.That(each?.Count,                                          Is.GreaterThan(Wrong));
 
             }
+
+        }
+
+        #endregion
+
+        #region TheLimitsOfAChargingTicketArePartOfItAndComparedWithWhatTheMeterSigned()
+
+        /// <summary>
+        /// The limits the driver chose for a start through the provider - at
+        /// most so much energy, at most so long - are part of the charging
+        /// ticket both the phone and the provider sign, kept with the
+        /// session, and compared with what was charged: with what the phone
+        /// counts until the charge detail record came, then with what its
+        /// meter signed - 12.5 kWh are over a limit of 10 kWh, a second is
+        /// within one of 30 minutes.
+        /// </summary>
+        [Test]
+        public async Task TheLimitsOfAChargingTicketArePartOfItAndComparedWithWhatTheMeterSigned()
+        {
+
+            var (admin, driver, session, token) = await ChargingThroughTheProvider(Limit: new { kWh = 10, minutes = 30 });
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            var id       = session["id"]!.Value<String>()!;
+            var issued   = COSESign.TryParse(emsp!.Tickets[^1].Issued, out var ticket, out _) ? CBORValue.Parse(ticket!.Payload ?? []) : default;
+            var written  = issued.TryGetValue(CBORValue.FromText("limits"), out var limits) ? limits : default;
+
+            using (Assert.EnterMultipleScope())
+            {
+
+                Assert.That(session["ticket"]?["limits"]?["kWh"].AsDecimalOrNull(),     Is.EqualTo(10m), session.ToString());
+                Assert.That(session["ticket"]?["limits"]?["minutes"]?.Value<Int32>(),   Is.EqualTo(30));
+
+                Assert.That(written.TryGetValue(CBORValue.FromText("kWh"),     out var kWh)     ? kWh.AsInt64()     : -1, Is.EqualTo(10), "the ticket the provider signed says another limit of energy, or none");
+                Assert.That(written.TryGetValue(CBORValue.FromText("minutes"), out var minutes) ? minutes.AsInt64() : -1, Is.EqualTo(30), "the ticket the provider signed says another limit of time, or none");
+
+                Assert.That(session["ticketLimits"]?.Count(),                           Is.EqualTo(2));
+                Assert.That(session["ticketLimits"]?[0]?["kind"]?.Value<String>(),      Is.EqualTo("energy"));
+                Assert.That(session["ticketLimits"]?[0]?["signed"]?.Value<Boolean>(),   Is.False, "no meter signed anything yet");
+                Assert.That(session["ticketLimits"]?[0]?["kept"]?.Value<Boolean>(),     Is.True);
+
+            }
+
+            var (status, stopped) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{id}/stop");
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), stopped.ToString());
+
+            // Nothing of a time to come: a key is attested for what was measured.
+            await Task.Delay(TimeSpan.FromSeconds(2));
+
+            var begin  = StartedAt(session);
+            var end    = begin.AddSeconds(1);
+
+            emsp.OperatorCDR(token, 12.5m, 8.13m, end, SignedValues(
+                ("Start",  TestRoamingNetwork.OCMF(network!.DCMeter, TestRoamingNetwork.DCMeterSerial, token, (begin, "B", 1000.000m))),
+                ("End",    TestRoamingNetwork.OCMF(network.DCMeter,  TestRoamingNetwork.DCMeterSerial, token, (end,   "E", 1012.500m)))
+            ));
+
+            (status, var finished) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+            var energy  = finished["ticketLimits"]?[0];
+            var time    = finished["ticketLimits"]?[1];
+            var kept    = JArray.Parse(File.ReadAllText(Path.Combine(directory, ChargingSessions.DefaultFileName))).Single();
+
+            using (Assert.EnterMultipleScope())
+            {
+
+                Assert.That(finished["check"]?["meterValues"]?["verified"]?.Value<Boolean>(), Is.True, finished.ToString());
+
+                Assert.That(energy?["limit"].AsDecimalOrNull(),     Is.EqualTo(10m));
+                Assert.That(energy?["unit"]?.Value<String>(),       Is.EqualTo("kWh"));
+                Assert.That(energy?["value"].AsDecimalOrNull(),     Is.EqualTo(12.5m), "what the meter signed");
+                Assert.That(energy?["signed"]?.Value<Boolean>(),    Is.True);
+                Assert.That(energy?["kept"]?.Value<Boolean>(),      Is.False, "12.5 kWh are over a limit of 10 kWh");
+
+                Assert.That(time?["kind"]?.Value<String>(),         Is.EqualTo("time"));
+                Assert.That(time?["limit"].AsDecimalOrNull(),       Is.EqualTo(1800m));
+                Assert.That(time?["value"].AsDecimalOrNull(),       Is.EqualTo(1m), "from the begin to the end the meter signed");
+                Assert.That(time?["signed"]?.Value<Boolean>(),      Is.True);
+                Assert.That(time?["kept"]?.Value<Boolean>(),        Is.True);
+
+                Assert.That(kept["ticket"]?["limits"]?["kWh"].AsDecimalOrNull(), Is.EqualTo(10m), "the limits are not kept with the session");
+
+            }
+
+        }
+
+        #endregion
+
+        #region ALimitOfItsOwnIsRefused(Limit, Error)
+
+        /// <summary>
+        /// A limit is one of the few values everybody chooses among: a ticket
+        /// with a limit of its own would tell its driver apart. Another
+        /// value, another thing limited, or nothing limited is refused, and
+        /// no ticket is asked for.
+        /// </summary>
+        [TestCase("""{ "kWh": 15 }""",                  "'limit.kWh' is one of 10, 20, 40, 60")]
+        [TestCase("""{ "minutes": 45 }""",              "'limit.minutes' is one of 30, 60, 120, 240")]
+        [TestCase("""{ "minutes": 30.5 }""",            "'limit.minutes' is one of 30, 60, 120, 240")]
+        [TestCase("""{ "kW": 22 }""",                   "'limit' says 'kW'")]
+        [TestCase("""{ }""",                            "'limit' names no limit")]
+        [TestCase(""" "20 kWh" """,                     "'limit' is the limits of the charging ticket of this start")]
+        public async Task ALimitOfItsOwnIsRefused(String Limit, String Error)
+        {
+
+            emsp = await TestEMSP.Start();
+
+            using var admin   = await WithTheRoamingNetwork();
+            using var driver  = await SignedInAs("driver1", "driver");
+
+            var (status, signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp.URL, username = "phone1", email = "phone1@example.org" });
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), signedUp.ToString());
+
+            (status, var check) = await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            Assert.That(check["verified"]!.Value<Boolean>(), Is.True, check.ToString());
+
+            (status, var refused) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                               new JObject(new JProperty("locationId",  TestRoamingNetwork.PoolId),
+                                                           new JProperty("evseUid",     TestRoamingNetwork.DCEVSE),
+                                                           new JProperty("limit",       JToken.Parse(Limit))));
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                               Is.EqualTo(HttpStatusCode.BadRequest), refused.ToString());
+                Assert.That(refused["error"]?.Value<String>(),    Does.Contain(Error));
+                Assert.That(emsp.Tickets,                         Is.Empty, "a ticket was asked for all the same");
+            }
+
+        }
+
+        #endregion
+
+        #region ALimitWithoutAProviderIsRefused()
+
+        /// <summary>
+        /// A limit is one of a charging ticket: a phone without an account at
+        /// an e-mobility provider starts nothing with one, rather than a
+        /// simulated session that keeps to none.
+        /// </summary>
+        [Test]
+        public async Task ALimitWithoutAProviderIsRefused()
+        {
+
+            using var admin   = await WithTheRoamingNetwork();
+            using var driver  = await SignedInAs("driver1", "driver");
+
+            var (status, check) = await Send(driver, HttpMethod.Get, $"api/v1/map/locations/{TestRoamingNetwork.PoolId}/check");
+
+            Assert.That(check["verified"]!.Value<Boolean>(), Is.True, check.ToString());
+
+            (status, var refused) = await Send(driver, HttpMethod.Post, "api/v1/charging/sessions",
+                                               new { locationId = TestRoamingNetwork.PoolId, evseUid = TestRoamingNetwork.DCEVSE, limit = new { kWh = 20 } });
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(status,                               Is.EqualTo(HttpStatusCode.Conflict), refused.ToString());
+                Assert.That(refused["error"]?.Value<String>(),    Does.Contain("no account at an e-mobility provider"));
+            }
+
+            (status, var sessions) = await Send(driver, HttpMethod.Get, "api/v1/charging/sessions");
+
+            Assert.That(sessions["sessions"]?.Count(), Is.Zero, "a session was started all the same");
 
         }
 

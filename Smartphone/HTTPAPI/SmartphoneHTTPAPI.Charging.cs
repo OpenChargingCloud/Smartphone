@@ -26,6 +26,7 @@ using org.GraphDefined.Vanaheimr.Hermod.HTTP;
 using cloud.charging.open.protocols.WWCP.Node.Web;
 
 using cloud.charging.open.Smartphone.Charging;
+using cloud.charging.open.Smartphone.Provider;
 
 #endregion
 
@@ -292,7 +293,10 @@ namespace cloud.charging.open.Smartphone
         /// with a charging ticket of its own where the phone has one. 201 with
         /// the session; 404 where the station or its EVSE is not on the map;
         /// 409 where the EVSE is not available; 502 where the provider issued
-        /// no ticket or started nothing. With a "liveLink" as well - the https
+        /// no ticket or started nothing. Through the provider with a "limit",
+        /// { "kWh", "minutes" }, the limits of its charging ticket, of the few
+        /// values everybody chooses among: 400 for any other, 409 where the
+        /// phone has no provider. With a "liveLink" as well - the https
         /// URL of the live link the web payment page of the operator gave, or
         /// its document - the session that page started there, followed over
         /// its live link: 400 where it is none, 409 where it is of another EVSE
@@ -381,7 +385,12 @@ namespace cloud.charging.open.Smartphone
 
             }
 
-            var start = await Smartphone.StartChargingAsync(locationId, evseUid, user.Id.ToString());
+            // The limits of the charging ticket of this start, of the few
+            // values everybody chooses among.
+            if (!TicketLimits.TryParse(json["limit"], out var limits, out var limitsError))
+                return ErrorJSON(Request, HTTPStatusCode.BadRequest, limitsError);
+
+            var start = await Smartphone.StartChargingAsync(locationId, evseUid, user.Id.ToString(), limits);
 
             if (start.Session is null)
                 return Refused(Request, start.Refusal, start.Error ?? "Nothing was started.");

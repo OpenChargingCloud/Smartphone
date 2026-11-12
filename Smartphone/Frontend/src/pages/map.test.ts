@@ -23,10 +23,19 @@ after(() => leave());
 
 let startAnswer: unknown = undefined;
 
+/** Whether the stand-in phone has an account at an e-mobility provider. */
+let withProvider = false;
+
 function smartphone({ method, path }: Asked): unknown {
 
     if (method === 'GET' && path === '/map')
         return mapData();
+
+    if (method === 'GET' && path === '/provider' && withProvider)
+        return { set: true, ticketValidity: 60, directory: '',
+                 account: { url: 'https://emsp.example', username: 'phone1', email: 'phone1@example.org', madeUp: true, party: 'DE*GDF', since: '2026-10-10T08:00:00Z',
+                            accountKey:   { id: 'a1', subject: 'CN=phone1', issuer: 'CN=Accounts', notBefore: '2026-10-10T08:00:00Z', notAfter: '2027-10-10T08:00:00Z' },
+                            ticketIssuer: { subject: 'CN=Tickets', fingerprint: '0f1e', notAfter: '2027-10-10T08:00:00Z' } } };
 
     if (method === 'POST' && path === '/charging/sessions')
         return startAnswer ?? new Response(JSON.stringify(session()), { status: 201, headers: { 'Content-Type': 'application/json' } });
@@ -109,6 +118,48 @@ describe('the map', () => {
         await until(() => asked.some(one => one.method === 'POST' && one.path === '/charging/sessions'), '"Charge now!" did not ask the smartphone');
 
         assert.deepEqual(asked.find(one => one.method === 'POST')!.body, { locationId: holzmarkt().id, evseUid: '1' });
+        assert.equal(popup.querySelector('.ticket-limits'), null, 'limits of a charging ticket are offered without an e-mobility provider');
+
+    });
+
+    it('starts through the provider with the limits chosen for its charging ticket, of the few everybody chooses among', async () => {
+
+        startAnswer  = undefined;
+        withProvider = true;
+
+        try
+        {
+
+            const root = await open(mapPage, '/map', [ 'map:read', 'charging:read', 'charging:run', 'provider:read' ],
+                                    smartphone, root => pins(root).length === 2);
+
+            typeInto(root.querySelector<HTMLInputElement>('#map-search')!, 'holzmarkt');
+            await until(() => root.querySelector('.map-result') !== null, 'the search did not find the Holzmarkt');
+            root.querySelector<HTMLButtonElement>('.map-result')!.click();
+
+            await until(() => root.querySelector('.station-popup .ticket-limit-energy') !== null, 'no limits are offered, with an account at a provider');
+
+            const popup   = root.querySelector<HTMLElement>('.station-popup')!;
+            const energy  = popup.querySelector<HTMLSelectElement>('.ticket-limit-energy')!;
+            const time    = popup.querySelector<HTMLSelectElement>('.ticket-limit-time')!;
+
+            assert.deepEqual([ ...energy.options ].map(option => option.value), [ '', '10', '20', '40', '60' ]);
+            assert.deepEqual([ ...time.options   ].map(option => option.value), [ '', '30', '60', '120', '240' ]);
+
+            energy.value = '20';
+            energy.dispatchEvent(new Event('change', { bubbles: true }));
+
+            popup.querySelector<HTMLButtonElement>('.charge-now')!.click();
+
+            await until(() => asked.some(one => one.method === 'POST' && one.path === '/charging/sessions'), '"Charge now!" did not ask the smartphone');
+
+            assert.deepEqual(asked.find(one => one.method === 'POST')!.body, { locationId: holzmarkt().id, evseUid: '1', limit: { kWh: 20 } });
+
+        }
+        finally
+        {
+            withProvider = false;
+        }
 
     });
 

@@ -48,7 +48,7 @@ The account key never reaches the CPO. The ticket key never leaves the phone.
 | what the CPO learns of the driver | what the payment tells it | the EMP, a ticket, and a token used for this start alone |
 | signed meter values reach the app | while it charges, over the live link | after it ended, in the CDR - **Open:** while it charges |
 | what the meter signs as `ID` | the payment reference | the token of the start, or the ticket's id |
-| a limit | chosen at the page, `transactionLimit` | the ticket's limits - **Open:** none chosen yet |
+| a limit | chosen at the page, `transactionLimit` | the ticket's limits, chosen in the app of a few values - **Open:** no CPO keeps to them yet |
 | stopping | the stop link of the page | a stop request, signed by the ticket key and countersigned by the EMP |
 | disputing | the dispute link of the page | **Open** |
 | the price checked | the price of the proof at the start × the signed energy | the price statement in force at the start, against the CDR's `total_cost` |
@@ -174,8 +174,10 @@ point, with the search above the map, and goes on as in Path A.
 Right before the start, **one ticket per start**:
 
 1. **[App]** makes a ticket key for this start alone, and writes the ticket in
-   deterministic CBOR: its id, the EMP, that key, good from now for an hour,
-   no limits.
+   deterministic CBOR: its id, the EMP, that key, good from now for an hour -
+   and the **limits** the driver chose for this start, where any: at most so
+   much energy (`kWh`: 10, 20, 40 or 60) and at most so long (`minutes`: 30,
+   60, 120 or 240).
 2. **[App]** signs it twice, as a COSE_Sign with ES256: by the ticket key
    (kid `"ticket"`) and by the account key (kid the SHA-256 of its
    certificate), and sends it (`POST /api/v1/tickets`).
@@ -189,9 +191,24 @@ A ticket used twice would link two sessions at the CPO, and unusual limits or
 validity would be a fingerprint of their own: so every start has a new one,
 with the same validity and limits as everybody else's.
 
-**Open:** no limit can be chosen yet. A ticket's limits (`kW`, `minutes`,
-`kWh`) are meant to become the station's, but they would have to be the same
-few values for everybody, and the app compares nothing with them.
+The limits are those few values and no others - the app refuses any other,
+and asks for no ticket then -, the same for everybody: one of the driver's own
+would tell its sessions apart. No limit of the power (`kW`): no driver chooses
+one. A phone without an account at an EMP takes no limit at all.
+
+Once it charges, the app **compares** each limit with what was charged: with
+what the EMP reports, or what the phone counts, until the CDR came - shown as
+signed by nobody - and then with what the meter signed, from its begin to its
+end ([Step 8](#step-8---app-the-cdr-and-its-signed-meter-values)). A limit is
+kept where what was charged is not over it by more than a hundredth, as the
+station counts from its own start and with its own rounding; one that is not
+is shown as exceeded.
+
+**Open:** nobody keeps to the limits yet. They are meant to become the
+station's ([Step 5](#step-5---cpo-checks-and-the-start-at-the-station)), and
+no CSMS reads a ticket: the app sees that a limit was exceeded, and can only
+show it - through the EMP there is no dispute. Nor is a limit of cost there:
+the ticket has none, and the EMP's own price is not known to the app.
 
 
 ## Step 3 - [App ↔ EMP] The start request, countersigned
@@ -430,7 +447,7 @@ account the token was made for, and bills it. The CPO's CDR names no account.
 | | Where |
 |---|---|
 | The dynamic QR code: read by the app, the EVSE taken out of it, its one-time password carried to the CSMS | [Path B](#path-b---scanning-the-dynamic-qr-code) |
-| A limit chosen by the driver, and the ticket's limits compared at the end | [Step 2](#step-2---app--emp-a-charging-ticket-for-this-start) |
+| The ticket's limits kept by the station, and a limit of cost | [Step 2](#step-2---app--emp-a-charging-ticket-for-this-start) |
 | `charging_ticket` and `start_request` in OCPI, and passed on by a roaming hub | [Step 4](#step-4---emp--cpo-ocpi-start_session) |
 | A CSMS that starts and stops on `START_SESSION` / `STOP_SESSION`, checks tickets, and has the token signed as OCMF `ID` | [Step 5](#step-5---cpo-checks-and-the-start-at-the-station) |
 | How a CPO trusts the EMP's ticket issuer | [Step 5](#step-5---cpo-checks-and-the-start-at-the-station) |

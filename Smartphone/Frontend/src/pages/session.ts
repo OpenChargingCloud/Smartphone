@@ -1,4 +1,4 @@
-import { api, type ChargingSession, type LiveLinkEndCheck, type LiveLinkEnding, type LiveLinkFollow, type LiveLinkPayment, type LiveLinkStartCheck, type LiveLinkValueCheck, type LiveLinkWrongValue, type MeterValueCheck, type SessionCheck, type SessionCost } from '../api/client';
+import { api, type ChargingSession, type LiveLinkEndCheck, type LiveLinkEnding, type LiveLinkFollow, type LiveLinkPayment, type LiveLinkStartCheck, type LiveLinkValueCheck, type LiveLinkWrongValue, type MeterValueCheck, type SessionCheck, type SessionCost, type TicketLimitValue } from '../api/client';
 import { auth } from '../auth';
 import { dayAndTime, disputeInWords, duration, isRunning, limitFigure, money, reportedInWords, sessionStatusClass, sessionStatusWord, stationStopInWords, withUnit } from '../charging/words';
 import { standardWord } from '../map/stations';
@@ -7,6 +7,14 @@ import type { Page } from '@node/router';
 import { reloadButton, shell } from '@node/shell';
 import { errorMessage } from '@node/ui';
 import { html, nothing, render, type TemplateResult } from '@node/view';
+
+
+/** A limit of a charging ticket, or what was charged against it, in words: "20 kWh", "1 h 30 min". */
+function ticketLimitFigure(Limit: TicketLimitValue, Figure: number): string {
+    return Limit.kind === 'energy'
+               ? `${Figure.toLocaleString(undefined, { maximumFractionDigits: 3 })} kWh`
+               : duration(Figure);
+}
 
 /**
  * One charging session, with everything there is to know about it: where,
@@ -617,7 +625,36 @@ export const sessionPage: Page = {
                                 ${kv('Good',          `${dayAndTime(session.ticket.notBefore)} until ${dayAndTime(session.ticket.notAfter)}`)}
                                 ${kv('Its key',       html`<span class="commit">${session.ticket.keyThumbprint}</span>`)}
                                 ${kv('Signed by',     html`<span class="commit">${session.ticket.issuerFingerprint}</span>`)}
+                                ${session.ticket.limits !== undefined
+                                      ? kv('Limited to', [ session.ticket.limits.kWh     !== undefined ? `${session.ticket.limits.kWh} kWh`             : null,
+                                                           session.ticket.limits.minutes !== undefined ? duration(session.ticket.limits.minutes * 60)  : null ].
+                                                             filter(part => part !== null).join(', '))
+                                      : nothing}
                             </div>
+
+                            ${session.ticketLimits !== undefined && session.ticketLimits.length > 0 ? html`
+                                <ul class="live-limits ticket-limits">
+                                    ${session.ticketLimits.map(limit => html`
+                                        <li class="${limit.kept === true ? 'kept' : limit.kept === false ? 'exceeded' : 'unknown'}">
+                                            ${limit.kept === true
+                                                  ? html`<i class="fa-solid fa-check" title="kept"></i>`
+                                                  : limit.kept === false
+                                                        ? html`<i class="fa-solid fa-triangle-exclamation" title="exceeded"></i>`
+                                                        : html`<i class="fa-solid fa-question" title="nothing says what was charged"></i>`}
+                                            <span>Limit ${ticketLimitFigure(limit, limit.limit)}</span>
+                                            <span class="${limit.kept === false ? 'form-error' : 'muted'}">
+                                                ${limit.value !== null
+                                                      ? `${ticketLimitFigure(limit, limit.value)}${limit.kept === false ? ' - over its limit' : ''}, ${limit.signed ? 'as its meter signed' : 'as reported so far, signed by nobody'}`
+                                                      : 'nothing says what was charged'}
+                                            </span>
+                                        </li>
+                                    `)}
+                                </ul>
+                                <p class="small muted">
+                                    The limits are part of the ticket, which the provider signed. Whether the station keeps to
+                                    them is up to its operator: this phone compares what was charged with them.
+                                </p>
+                            ` : nothing}
 
                             <p class="small muted">
                                 A ticket of this start alone, with a key of its own, signed by the provider's ticket issuer

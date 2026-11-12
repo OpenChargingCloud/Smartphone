@@ -630,3 +630,19 @@ table.records.session-table {
     }
 
 }
+
+
+// The limits of a charging ticket: chosen at the start, in the station's
+// popup, and compared with what was charged, in its session.
+.station-popup .ticket-limits {
+
+    display:    flex;
+    flex-wrap:  wrap;
+    gap:        0.4rem;
+    font-size:  0.8rem;
+
+    select {
+        font-size:  0.8rem;
+    }
+
+}
