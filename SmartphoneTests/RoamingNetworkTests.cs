@@ -2305,6 +2305,95 @@ namespace cloud.charging.open.Smartphone.Tests
 
         #endregion
 
+        #region AMeterValueOfAChargeDetailRecordThatDoesNotFitDoesNotHold(What, Wrong, Error)
+
+        /// <summary>
+        /// A signed meter value of a charge detail record its meter did sign
+        /// holds no more than one of a live link where the meter says it is
+        /// not good, or where it does not fit the others: a status other than
+        /// "G", the meter counting backwards, a value measured after the end
+        /// of the transaction, a begin of the transaction said twice. That
+        /// value is not verified, and says why; the others are, and the
+        /// values of the record as a whole are not.
+        /// </summary>
+        [TestCase("status",     1, "The meter says its end value is not good: its status is \"M\"")]
+        [TestCase("backwards",  1, "The meter counts backwards: 990 kWh at ")]
+        [TestCase("afterEnd",   2, ", after the end of the transaction at ")]
+        [TestCase("beginTwice", 1, "It says the transaction began with 1001 kWh at ")]
+        public async Task AMeterValueOfAChargeDetailRecordThatDoesNotFitDoesNotHold(String What, Int32 Wrong, String Error)
+        {
+
+            var (admin, driver, session, token) = await ChargingThroughTheProvider();
+
+            using var _admin   = admin;
+            using var _driver  = driver;
+
+            var id = session["id"]!.Value<String>()!;
+
+            var (status, stopped) = await Send(driver, HttpMethod.Post, $"api/v1/charging/sessions/{id}/stop");
+
+            Assert.That(status, Is.EqualTo(HttpStatusCode.OK), stopped.ToString());
+
+            // Nothing of a time to come: a key is attested for what was measured.
+            await Task.Delay(TimeSpan.FromSeconds(2));
+
+            var begin   = StartedAt(session);
+            var end     = begin.AddSeconds(1);
+            var meter   = network!.DCMeter;
+            var serial  = TestRoamingNetwork.DCMeterSerial;
+            var start   = ("Start", TestRoamingNetwork.OCMF(meter, serial, token, (begin, "B", 1000.000m)));
+
+            emsp!.OperatorCDR(token, 12.5m, 8.13m, end, What switch {
+
+                "status"     => SignedValues(start,
+                                             ("End",          TestRoamingNetwork.OCMFOfStatus(meter, serial, token, "M", (end, "E", 1012.500m)))),
+
+                "backwards"  => SignedValues(start,
+                                             ("End",          TestRoamingNetwork.OCMF(meter, serial, token, (end, "E",  990.000m)))),
+
+                "afterEnd"   => SignedValues(start,
+                                             ("End",          TestRoamingNetwork.OCMF(meter, serial, token, (end,                "E", 1012.500m))),
+                                             ("Intermediate", TestRoamingNetwork.OCMF(meter, serial, token, (end.AddSeconds(0.5), "T", 1012.500m)))),
+
+                "beginTwice" => SignedValues(start,
+                                             ("End",          TestRoamingNetwork.OCMF(meter, serial, token, (begin.AddSeconds(0.5), "B", 1001.000m),
+                                                                                                             (end,                   "E", 1012.500m)))),
+
+                _            => throw new ArgumentException(What)
+
+            });
+
+            (status, var finished) = await Send(driver, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
+
+            var values  = finished["check"]?["meterValues"];
+            var each    = values?["values"] as JArray;
+
+            using (Assert.EnterMultipleScope())
+            {
+
+                Assert.That(values?["verified"]?.Value<Boolean>(),                Is.False, values?.ToString());
+                Assert.That(values?["error"]?.Type,                               Is.EqualTo(JTokenType.Null), "the record's values were checked, each of them");
+
+                for (var i = 0; i < (each?.Count ?? 0); i++)
+                {
+
+                    Assert.That(each![i]["result"]?.Value<String>(),              Is.EqualTo("ValidSignature"), $"value {i}: its meter signed it");
+
+                    if (i == Wrong)
+                        Assert.That(each[i]["error"]?.Value<String>(),            Does.Contain(Error), $"value {i}");
+
+                    Assert.That(each[i]["verified"]?.Value<Boolean>(),            Is.EqualTo(i != Wrong), $"value {i}: {each[i]["error"]}");
+
+                }
+
+                Assert.That(each?.Count,                                          Is.GreaterThan(Wrong));
+
+            }
+
+        }
+
+        #endregion
+
         #region APriceAgreementThroughTheProviderBindsThePriceTheOperatorChargesIt()
 
         /// <summary>

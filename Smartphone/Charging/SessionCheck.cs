@@ -494,9 +494,6 @@ namespace cloud.charging.open.Smartphone.Charging
             LiveLinkValueCheck Checked(Boolean? Holds, String? Error)
                 => new (Now, Holds, Error, value.MeterSerialNumber, value.MeterId, value.KeyId, value.Result, value.Identification, value.SignedBy, value.OperatorId);
 
-            static Boolean Ends(MeterReading Reading)
-                => Reading.Transaction is String transaction && LiveLinkDocument.EndingTransactions.Contains(transaction);
-
             if (!value.Verified)
                 return value.MeterSerialNumber is String named && Evidence.MeterSerialNumber is String expected && named != expected
                            ? Checked(false, $"It is of the meter {named}, and the proof of {Evidence.StationId} names the meter {expected} for {Evidence.EVSEId}.")
@@ -510,7 +507,44 @@ namespace cloud.charging.open.Smartphone.Charging
                                           : $"It is of another session: it names \"{value.Identification}\" as the identification of the charging (\"ID\"), and the web payment page took the payment \"{Reference}\" for this session.");
 
             // The meter's: what the meter says of it itself.
-            foreach (var reading in Document.Readings)
+            if (NotGood(Document.Readings, IsStart) is String notGood)
+                return Checked(false, notGood);
+
+            // Its operator signs no begin: one it says again is compared with
+            // the start value the meter signed, once that held.
+            if (value.SignedBy == MeterValueCheck.ByOperator && Document.Begin is not null && Begin is null)
+                return Checked(null, $"Its operator {value.OperatorId} signed the begin of the transaction again, and no start value the meter signed held yet to compare it with.");
+
+            // How it fits the begin of the transaction, what held before it,
+            // its readings each other, and its end.
+            return DoesNotFit(Document.Readings, Begin, Held) is String doesNotFit
+                       ? Checked(false, doesNotFit)
+                       : Checked(true,  null);
+
+        }
+
+        #endregion
+
+        #region (private static) NotGood(Readings, IsStart) / DoesNotFit(Readings, Begin, Held)
+
+        /// <summary>
+        /// Whether the given reading ends its transaction.
+        /// </summary>
+        private static Boolean Ends(MeterReading Reading)
+            => Reading.Transaction is String transaction && LiveLinkDocument.EndingTransactions.Contains(transaction);
+
+        /// <summary>
+        /// Why the readings of a signed value are not good, as the meter says
+        /// it of them itself - a status other than "G", an error flagged, or
+        /// no energy register - or null.
+        /// </summary>
+        /// <param name="Readings">The readings of the value.</param>
+        /// <param name="IsStart">Whether the value is the start value of its session.</param>
+        private static String? NotGood(IReadOnlyList<MeterReading>  Readings,
+                                       Boolean                      IsStart)
+        {
+
+            foreach (var reading in Readings)
             {
 
                 var which = IsStart && reading.Transaction == "B"
@@ -520,36 +554,48 @@ namespace cloud.charging.open.Smartphone.Charging
                                       : $"its value of {reading.MeasuredAt:o}";
 
                 if (reading.Status is String status && status != "G")
-                    return Checked(false, $"The meter says {which} is not good: its status is \"{status}\"{StatusInWords(status)}.");
+                    return $"The meter says {which} is not good: its status is \"{status}\"{StatusInWords(status)}.";
 
                 if (reading.ErrorFlags is { Length: > 0 } flags)
-                    return Checked(false, $"The meter flags an error of {which}: \"{flags}\"{ErrorFlagsInWords(flags)}.");
+                    return $"The meter flags an error of {which}: \"{flags}\"{ErrorFlagsInWords(flags)}.";
 
                 if (reading.EnergyKWh is null)
-                    return Checked(false, $"{Capital(which)} is no energy register in kWh or Wh.");
+                    return $"{Capital(which)} is no energy register in kWh or Wh.";
 
             }
 
-            // Its operator signs no begin: one it says again is compared with
-            // the start value the meter signed, once that held.
-            if (value.SignedBy == MeterValueCheck.ByOperator && Document.Begin is not null && Begin is null)
-                return Checked(null, $"Its operator {value.OperatorId} signed the begin of the transaction again, and no start value the meter signed held yet to compare it with.");
+            return null;
+
+        }
+
+        /// <summary>
+        /// Why the readings of a signed value do not fit - the begin of the
+        /// transaction that held, the readings that held before, each other,
+        /// or the end of the transaction - or null.
+        /// </summary>
+        /// <param name="Readings">The readings of the value, each of an energy register.</param>
+        /// <param name="Begin">The begin of the transaction, as the start value that held says it.</param>
+        /// <param name="Held">The readings of the values that held before it.</param>
+        private static String? DoesNotFit(IReadOnlyList<MeterReading>  Readings,
+                                          MeterReading?                Begin,
+                                          IReadOnlyList<MeterReading>  Held)
+        {
 
             // A transaction begins once: a begin it says again - the whole
             // transaction, at its end - is the start value that held.
-            if (Begin is MeterReading began && Document.Begin is MeterReading again &&
+            if (Begin is MeterReading began && Readings.FirstOrDefault(reading => reading.Transaction == "B") is MeterReading again &&
                 (again.MeasuredAt != began.MeasuredAt || again.EnergyKWh != began.EnergyKWh))
-                return Checked(false, $"It says the transaction began with {Figure(again.EnergyKWh!.Value)} kWh at {again.MeasuredAt:o}, " +
-                                      $"and the start value that held says {Figure(began.EnergyKWh!.Value)} kWh at {began.MeasuredAt:o}.");
+                return $"It says the transaction began with {Figure(again.EnergyKWh!.Value)} kWh at {again.MeasuredAt:o}, " +
+                       $"and the start value that held says {Figure(began.EnergyKWh!.Value)} kWh at {began.MeasuredAt:o}.";
 
             // How it fits what held before it, and its readings each other.
-            foreach (var reading in Document.Readings)
+            foreach (var reading in Readings)
             {
 
                 if (Begin is MeterReading begin && reading.MeasuredAt < begin.MeasuredAt)
-                    return Checked(false, $"It was measured at {reading.MeasuredAt:o}, before the start value of {begin.MeasuredAt:o}.");
+                    return $"It was measured at {reading.MeasuredAt:o}, before the start value of {begin.MeasuredAt:o}.";
 
-                foreach (var before in Held.Concat(Document.Readings.Where(other => !ReferenceEquals(other, reading))))
+                foreach (var before in Held.Concat(Readings.Where(other => !ReferenceEquals(other, reading))))
                 {
 
                     if (before.EnergyKWh is not Decimal was)
@@ -557,30 +603,30 @@ namespace cloud.charging.open.Smartphone.Charging
 
                     if ((before.MeasuredAt < reading.MeasuredAt && was > reading.EnergyKWh) ||
                         (before.MeasuredAt > reading.MeasuredAt && was < reading.EnergyKWh))
-                        return Checked(false, $"The meter counts backwards: {Figure(reading.EnergyKWh!.Value)} kWh at {reading.MeasuredAt:o}, and {Figure(was)} kWh at {before.MeasuredAt:o}.");
+                        return $"The meter counts backwards: {Figure(reading.EnergyKWh!.Value)} kWh at {reading.MeasuredAt:o}, and {Figure(was)} kWh at {before.MeasuredAt:o}.";
 
                     if (before.MeasuredAt == reading.MeasuredAt && was != reading.EnergyKWh)
-                        return Checked(false, $"It says {Figure(reading.EnergyKWh!.Value)} kWh at {reading.MeasuredAt:o}, where a value before says {Figure(was)} kWh at that time.");
+                        return $"It says {Figure(reading.EnergyKWh!.Value)} kWh at {reading.MeasuredAt:o}, where a value before says {Figure(was)} kWh at that time.";
 
                 }
 
             }
 
             // Nothing of the transaction is measured after its end.
-            var all = Held.Concat(Document.Readings).ToArray();
+            var all = Held.Concat(Readings).ToArray();
 
-            foreach (var reading in Document.Readings)
+            foreach (var reading in Readings)
             {
 
                 if (Ends(reading) && all.Where(other => other.MeasuredAt > reading.MeasuredAt).MaxBy(other => other.MeasuredAt) is MeterReading later)
-                    return Checked(false, $"It ends the transaction at {reading.MeasuredAt:o}, and a value of it was measured after its end, at {later.MeasuredAt:o}.");
+                    return $"It ends the transaction at {reading.MeasuredAt:o}, and a value of it was measured after its end, at {later.MeasuredAt:o}.";
 
                 if (all.Where(Ends).Where(other => other.MeasuredAt < reading.MeasuredAt).MinBy(other => other.MeasuredAt) is MeterReading ended)
-                    return Checked(false, $"It was measured at {reading.MeasuredAt:o}, after the end of the transaction at {ended.MeasuredAt:o}.");
+                    return $"It was measured at {reading.MeasuredAt:o}, after the end of the transaction at {ended.MeasuredAt:o}.";
 
             }
 
-            return Checked(true, null);
+            return null;
 
         }
 
@@ -877,7 +923,71 @@ namespace cloud.charging.open.Smartphone.Charging
 
             var meterEvidence = Evidence.MeterEvidence;
 
-            return ([ .. values.Select(value => Check(Authority, Evidence, meterEvidence, value, Session)) ], null);
+            return (Fitted([ .. values.Select(value => Check(Authority, Evidence, meterEvidence, value, Session)) ]), null);
+
+        }
+
+        #endregion
+
+        #region (private static) Fitted(Values)
+
+        /// <summary>
+        /// The signed values of a charge detail record whose signatures held,
+        /// checked as the values of a live link are: what the meter says of
+        /// each reading itself - its status "G", no error flagged, an energy
+        /// register - and how they fit each other - the meter's start first,
+        /// a begin of the transaction said once, the meter not counting
+        /// backwards, nothing measured after the end. One that does not is
+        /// not verified, and says why; the others are judged without it.
+        /// </summary>
+        /// <remarks>
+        /// The start value - the first the meter signed with the begin of the
+        /// transaction ("B"), or of the nature "Start" - is judged first,
+        /// wherever the record puts it, then the others in the order of the
+        /// record: what a value is compared with are those that held before.
+        /// </remarks>
+        private static IReadOnlyList<MeterValueCheck> Fitted(MeterValueCheck[] Values)
+        {
+
+            var start   = Values.FirstOrDefault(value => value.Verified && value.SignedBy == MeterValueCheck.ByMeter &&
+                                                         value.Readings.Any(reading => reading.Transaction == "B")) ??
+                          Values.FirstOrDefault(value => value.Verified && value.SignedBy == MeterValueCheck.ByMeter &&
+                                                         String.Equals(value.Nature, "Start", StringComparison.OrdinalIgnoreCase));
+
+            var held    = new List<MeterReading>();
+            var begin   = (MeterReading?) null;
+            var fitted  = Values.ToArray();
+
+            foreach (var index in Enumerable.Range(0, Values.Length).OrderBy(index => ReferenceEquals(Values[index], start) ? 0 : 1))
+            {
+
+                var value = Values[index];
+
+                if (!value.Verified)
+                    continue;
+
+                var isStart  = ReferenceEquals(value, start);
+
+                var error    = NotGood(value.Readings, isStart) ??
+                               (value.SignedBy == MeterValueCheck.ByOperator && begin is null && value.Readings.Any(reading => reading.Transaction == "B")
+                                    ? $"Its operator {value.OperatorId} signed the begin of the transaction, and no start value the meter signed held to compare it with."
+                                    : null) ??
+                               DoesNotFit(value.Readings, isStart ? null : begin, held);
+
+                if (error is not null)
+                {
+                    fitted[index] = value with { Verified = false, Error = error };
+                    continue;
+                }
+
+                held.AddRange(value.Readings);
+
+                if (isStart)
+                    begin = value.Readings.FirstOrDefault(reading => reading.Transaction == "B");
+
+            }
+
+            return fitted;
 
         }
 

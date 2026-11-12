@@ -385,7 +385,16 @@ checked:
   (`public_key`) is not taken;
 - **the signature,** with that key, by ChargyCore;
 - **whose it is:** its `ID` the token of the start or the ticket's id, as
-  section 6 has it.
+  section 6 has it;
+- **what the meter says of it:** the status of each of its readings `G`
+  (`ST`), no error flagged (`EF`), and an energy register;
+- **how it fits the others:** the start value the meter signed first, then
+  the others in the order of the CDR - the begin of the transaction said once,
+  the meter not counting backwards, nothing measured before the start value or
+  after the end. A value that does not is not verified, and says why.
+
+A CDR with a wrong value is shown as such, and disputed nowhere: the EMSP's
+API has no place for a dispute yet.
 
 Of the readings verified, the begin (`TX` `B`) and the end (`E`) give the
 energy the meter signed, compared with the CDR's `total_energy`.
