@@ -125,7 +125,7 @@ namespace cloud.charging.open.Smartphone.Tests
             File.WriteAllText(file, NoTimeServers);
 
             smartphone  = new Smartphone(
-                              HTTPPort:          IPPort.Parse(port),
+                              HTTPPort:          port,
                               AccountsPath:      Path.Combine(directory, "accounts"),
                               ConfigFile:        new WWCPConfigFile(file),
                               CertificatesPath:  Path.Combine(directory, "certificates"),
@@ -139,7 +139,7 @@ namespace cloud.charging.open.Smartphone.Tests
 
         }
 
-        private async Task<HttpClient> SignedInAs(String Name, String Role)
+        private async Task<HttpClient> SignedInAs(User_Id Name, String Role)
         {
 
             var password = "correct-horse-battery-" + Guid.NewGuid().ToString("N")[..8];
@@ -147,8 +147,8 @@ namespace cloud.charging.open.Smartphone.Tests
             Assert.That(smartphone!.ExtAPI.TryGetOrganization(Organization_Id.Parse("Smartphone"), out var organization) &&
                         organization is Organization, Is.True, "the smartphone's organization is not there");
 
-            await smartphone.ExtAPI.CreateUser(User_Id.Parse(Name),
-                                               I18NString.Create(Languages.en, Name),
+            await smartphone.ExtAPI.CreateUser(Name,
+                                               I18NString.Create(Languages.en, Name.ToString()),
                                                SimpleEMailAddress.Parse($"{Name}@localhost"),
                                                User2OrganizationEdgeLabel.IsMember,
                                                (Organization) organization!,
@@ -159,7 +159,7 @@ namespace cloud.charging.open.Smartphone.Tests
                                                AcceptedEULA:              DateTimeOffset.UtcNow.AddSeconds(-1),
                                                IsAuthenticated:           true);
 
-            Assert.That(smartphone.ExtAPI.TryGetUser(User_Id.Parse(Name), out var stored), Is.True);
+            Assert.That(smartphone.ExtAPI.TryGetUser(Name, out var stored), Is.True);
             Assert.That(smartphone.ExtAPI.TryGetUserGroup(UserGroup_Id.Parse(Role), out var group), Is.True, $"the smartphone has no group '{Role}'");
             Assert.That((await smartphone.ExtAPI.AddUserToUserGroup((User) stored!, User2UserGroupEdgeLabel.IsMember, (UserGroup) group!)).IsSuccess, Is.True);
 
@@ -219,8 +219,8 @@ namespace cloud.charging.open.Smartphone.Tests
         private async Task<(HttpClient Admin, HttpClient Driver)> WithAnAccount()
         {
 
-            var admin   = await SignedInAs("admin1",  "systemadmin");
-            var driver  = await SignedInAs("driver1", "driver");
+            var admin   = await SignedInAs(User_Id.Parse("admin1"),  "systemadmin");
+            var driver  = await SignedInAs(User_Id.Parse("driver1"), "driver");
 
             var (status, signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp!.URL, username = "phone1", email = "phone1@example.org" });
 
@@ -250,8 +250,8 @@ namespace cloud.charging.open.Smartphone.Tests
         public async Task AnAdministratorMakesTheAccountAndADriverOnlyLooks()
         {
 
-            using var admin   = await SignedInAs("admin1",  "systemadmin");
-            using var driver  = await SignedInAs("driver1", "driver");
+            using var admin   = await SignedInAs(User_Id.Parse("admin1"),  "systemadmin");
+            using var driver  = await SignedInAs(User_Id.Parse("driver1"), "driver");
 
             var (status, refused) = await Send(driver, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp!.URL, username = "phone1", email = "phone1@example.org" });
 
@@ -309,8 +309,8 @@ namespace cloud.charging.open.Smartphone.Tests
         public async Task EveryStartHasATicketOfItsOwn()
         {
 
-            using var admin   = await SignedInAs("admin1",  "systemadmin");
-            using var driver  = await SignedInAs("driver1", "driver");
+            using var admin   = await SignedInAs(User_Id.Parse("admin1"),  "systemadmin");
+            using var driver  = await SignedInAs(User_Id.Parse("driver1"), "driver");
 
             var (status, signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp!.URL, username = "phone1", email = "phone1@example.org" });
 
@@ -390,8 +390,8 @@ namespace cloud.charging.open.Smartphone.Tests
         public async Task ATicketThatNamesTheAccountIsRefused(String How, String Said)
         {
 
-            using var admin   = await SignedInAs("admin1",  "systemadmin");
-            using var driver  = await SignedInAs("driver1", "driver");
+            using var admin   = await SignedInAs(User_Id.Parse("admin1"),  "systemadmin");
+            using var driver  = await SignedInAs(User_Id.Parse("driver1"), "driver");
 
             var (status, signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp!.URL, username = "phone1", email = "phone1@example.org" });
 
@@ -498,7 +498,7 @@ namespace cloud.charging.open.Smartphone.Tests
 
             await TestPorts.StartedOnFreshPorts(SmartphoneFrom);
 
-            using var again = await SignedInAs("driver2", "driver");
+            using var again = await SignedInAs(User_Id.Parse("driver2"), "driver");
 
             (status, var read) = await Send(again, HttpMethod.Get, $"api/v1/charging/sessions/{session["id"]}");
 
@@ -681,7 +681,7 @@ namespace cloud.charging.open.Smartphone.Tests
 
             smartphone!.ProviderReportInterval = TimeSpan.Zero;
 
-            using var again = await SignedInAs("driver2", "driver");
+            using var again = await SignedInAs(User_Id.Parse("driver2"), "driver");
 
             (_, var read) = await Send(again, HttpMethod.Get, $"api/v1/charging/sessions/{id}");
 
@@ -888,7 +888,7 @@ namespace cloud.charging.open.Smartphone.Tests
 
             emsp!.SignedUp("alice", "correct horse battery staple");
 
-            using var admin = await SignedInAs("admin1", "systemadmin");
+            using var admin = await SignedInAs(User_Id.Parse("admin1"), "systemadmin");
 
             var (status, wrong) = await Send(admin, HttpMethod.Post, "api/v1/provider/signin", new { url = emsp.URL, username = "alice", password = "Tr0ub4dor&3" });
 
@@ -934,7 +934,7 @@ namespace cloud.charging.open.Smartphone.Tests
         public async Task TheAccountIsThereAfterARestart()
         {
 
-            using (var admin = await SignedInAs("admin1", "systemadmin"))
+            using (var admin = await SignedInAs(User_Id.Parse("admin1"), "systemadmin"))
             {
                 var (status, signedUp) = await Send(admin, HttpMethod.Post, "api/v1/provider/signup", new { url = emsp!.URL, username = "phone1", email = "phone1@example.org" });
                 Assert.That(status, Is.EqualTo(HttpStatusCode.OK), signedUp.ToString());

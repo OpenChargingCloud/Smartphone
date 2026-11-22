@@ -106,7 +106,7 @@ namespace cloud.charging.open.Smartphone.Tests
             File.WriteAllText(file, NoTimeServers);
 
             smartphone  = new Smartphone(
-                              HTTPPort:          IPPort.Parse(port),
+                              HTTPPort:          port,
                               AccountsPath:      Path.Combine(directory, "accounts"),
                               ConfigFile:        new WWCPConfigFile(file),
                               CertificatesPath:  Path.Combine(directory, "certificates"),
@@ -124,7 +124,7 @@ namespace cloud.charging.open.Smartphone.Tests
         /// A client signed in with a password as an account made for the
         /// purpose, in the group of the given role.
         /// </summary>
-        private async Task<HttpClient> SignedInAs(String Name, String Role)
+        private async Task<HttpClient> SignedInAs(User_Id Name, String Role)
         {
 
             var password = "correct-horse-battery-" + Guid.NewGuid().ToString("N")[..8];
@@ -133,8 +133,8 @@ namespace cloud.charging.open.Smartphone.Tests
                         organization is Organization, Is.True, "the smartphone's organization is not there");
 
             var account = await smartphone.ExtAPI.CreateUser(
-                                    User_Id.Parse(Name),
-                                    I18NString.Create(Languages.en, Name),
+                                    Name,
+                                    I18NString.Create(Languages.en, Name.ToString()),
                                     SimpleEMailAddress.Parse($"{Name}@localhost"),
                                     User2OrganizationEdgeLabel.IsMember,
                                     (Organization) organization!,
@@ -147,7 +147,7 @@ namespace cloud.charging.open.Smartphone.Tests
                                 );
 
             Assert.That(account, Is.Not.Null);
-            Assert.That(smartphone.ExtAPI.TryGetUser(User_Id.Parse(Name), out var stored), Is.True);
+            Assert.That(smartphone.ExtAPI.TryGetUser(Name, out var stored), Is.True);
             Assert.That(smartphone.ExtAPI.TryGetUserGroup(UserGroup_Id.Parse(Role), out var group), Is.True, $"the smartphone has no group '{Role}'");
             Assert.That((await smartphone.ExtAPI.AddUserToUserGroup((User) stored!, User2UserGroupEdgeLabel.IsMember, (UserGroup) group!)).IsSuccess, Is.True);
 
@@ -212,8 +212,8 @@ namespace cloud.charging.open.Smartphone.Tests
 
             await TestPorts.StartedOnFreshPorts(SmartphoneFrom);
 
-            using var driver  = await SignedInAs("driver1", "driver");
-            using var viewer  = await SignedInAs("viewer1", "viewer");
+            using var driver  = await SignedInAs(User_Id.Parse("driver1"), "driver");
+            using var viewer  = await SignedInAs(User_Id.Parse("viewer1"), "viewer");
 
             var (location, evse) = AFreePoint();
 
@@ -338,8 +338,8 @@ namespace cloud.charging.open.Smartphone.Tests
 
             await TestPorts.StartedOnFreshPorts(SmartphoneFrom);
 
-            using var admin   = await SignedInAs("admin1",  "systemadmin");
-            using var driver  = await SignedInAs("driver1", "driver");
+            using var admin   = await SignedInAs(User_Id.Parse("admin1"),  "systemadmin");
+            using var driver  = await SignedInAs(User_Id.Parse("driver1"), "driver");
 
             var (status, settings) = await Send(driver, HttpMethod.Get, "api/v1/configuration/map");
 

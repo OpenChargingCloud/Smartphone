@@ -198,7 +198,7 @@ namespace cloud.charging.open.Smartphone
         /// <param name="Web">What the program says of HTTPS and of the reverse proxies in front - from --https, --https-cert, --redirect-port and --trusted-proxy - over the "web" section of the configuration file; nothing by default, and then only the file says it.</param>
         /// <param name="ChargingSessionsPath">The file the charging sessions are kept in; "charging-sessions.json" beside the configuration file by default.</param>
         /// <param name="ProviderPath">The directory the account at the e-mobility provider and its charging tickets are kept in; "provider/" beside the configuration file by default.</param>
-        public Smartphone(IIPAddress?            HTTPHostname       = null,
+        public Smartphone(IPAddress?            HTTPHostname       = null,
                           IPPort?                HTTPPort           = null,
                           HTTPServer?            HTTPServer         = null,
                           HTTPPath?              BasePath           = null,

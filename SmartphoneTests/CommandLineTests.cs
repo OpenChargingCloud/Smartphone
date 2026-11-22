@@ -73,7 +73,7 @@ namespace cloud.charging.open.Smartphone.Tests
             File.WriteAllText(file, NoTimeServers);
 
             smartphone = new Smartphone(
-                             HTTPPort:          IPPort.Parse(TestPorts.Free()),
+                             HTTPPort:          TestPorts.Free(),
                              AccountsPath:      Path.Combine(directory, "accounts"),
                              ConfigFile:        new WWCPConfigFile(file),
                              CertificatesPath:  Path.Combine(directory, "certificates"),
