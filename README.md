@@ -1,5 +1,7 @@
 # Smartphone
 
+![The EV charging test environment, the smartphone (SP) highlighted](docs/EVChargingTestEnvironment.svg)
+
 The smartphone of an EV driver in the OpenChargingCloud: a
 [WWCP_Node](https://github.com/OpenChargingCloud/WWCP_Node) that stands in for
 the apps on Android and iOS, with a JSON API below `/api` and a web interface
